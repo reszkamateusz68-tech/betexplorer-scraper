@@ -358,21 +358,66 @@ else:
 
 client = gspread.authorize(creds)
 
-sheet = client.open("BetExplorer").sheet1
+spreadsheet = client.open("BetExplorer")
 
-print("Czyszczenie arkusza...")
-sheet.clear()
+# ==========================================
+# PODZIAŁ DANYCH
+# ==========================================
 
-print("Wysyłanie danych do Google Sheets...")
+fixtures_df = df[df["Type"] == "Fixture"].copy()
+results_df = df[df["Type"] == "Result"].copy()
 
-sheet.update(
-    [df.columns.tolist()] +
-    df.astype(str).values.tolist()
+# ==========================================
+# TWORZENIE / POBIERANIE ARKUSZY
+# ==========================================
+
+try:
+    fixtures_sheet = spreadsheet.worksheet("Fixtures")
+except:
+    fixtures_sheet = spreadsheet.add_worksheet(
+        title="Fixtures",
+        rows=1000,
+        cols=20
+    )
+
+try:
+    results_sheet = spreadsheet.worksheet("Results")
+except:
+    results_sheet = spreadsheet.add_worksheet(
+        title="Results",
+        rows=5000,
+        cols=20
+    )
+
+# ==========================================
+# FIXTURES
+# ==========================================
+
+print("Aktualizacja Fixtures...")
+
+fixtures_sheet.clear()
+
+fixtures_sheet.update(
+    [fixtures_df.columns.tolist()] +
+    fixtures_df.astype(str).values.tolist()
+)
+
+# ==========================================
+# RESULTS
+# ==========================================
+
+print("Aktualizacja Results...")
+
+results_sheet.clear()
+
+results_sheet.update(
+    [results_df.columns.tolist()] +
+    results_df.astype(str).values.tolist()
 )
 
 print()
 print("=" * 60)
 print("GOTOWE")
-print("Wysłano rekordów:", len(df))
-print("Arkusz Google Sheets zaktualizowany")
+print("Fixtures:", len(fixtures_df))
+print("Results:", len(results_df))
 print("=" * 60)
