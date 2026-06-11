@@ -360,12 +360,30 @@ client = gspread.authorize(creds)
 
 spreadsheet = client.open("BetExplorer")
 
+try:
+    summary_sheet = spreadsheet.worksheet("Summary")
+except:
+    summary_sheet = spreadsheet.add_worksheet(
+        title="Summary",
+        rows=100,
+        cols=10
+    )
 # ==========================================
 # PODZIAŁ DANYCH
 # ==========================================
 
 fixtures_df = df[df["Type"] == "Fixture"].copy()
 results_df = df[df["Type"] == "Result"].copy()
+
+fixtures_df = fixtures_df.sort_values(
+    by=["Date", "Time"],
+    ascending=True
+)
+
+results_df = results_df.sort_values(
+    by=["Date"],
+    ascending=False
+)
 
 # ==========================================
 # TWORZENIE / POBIERANIE ARKUSZY
@@ -414,7 +432,20 @@ results_sheet.update(
     [results_df.columns.tolist()] +
     results_df.astype(str).values.tolist()
 )
+from datetime import datetime
 
+summary_sheet.clear()
+
+summary_sheet.update(
+    [
+        ["Metric", "Value"],
+        ["Last Update", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
+        ["Fixtures", len(fixtures_df)],
+        ["Results", len(results_df)],
+        ["Leagues", df["League"].nunique()],
+        ["Total Rows", len(df)]
+    ]
+)
 print()
 print("=" * 60)
 print("GOTOWE")
