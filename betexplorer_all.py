@@ -170,7 +170,11 @@ for i, url in enumerate(urls, start=1):
 
                     if odd:
                         odds.append(odd)
-
+                        
+if len(odds) == 0:
+    print("BRAK KURSÓW:")
+    print(row)
+    print("-" * 80)
                 odd1 = "-"
                 oddx = "-"
                 odd2 = "-"
