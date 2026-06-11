@@ -427,9 +427,9 @@ print("Aktualizacja Fixtures...")
 
 for col in ["Odd1", "OddX", "Odd2"]:
 
-    df[col] = df[col].apply(
+    fixtures_df[col] = fixtures_df[col].apply(
         lambda x: str(x).replace(".", ",")
-        if x != "-"
+        if str(x) != "-"
         else "-"
     )
 
@@ -448,9 +448,9 @@ print("Aktualizacja Results...")
 
 for col in ["Odd1", "OddX", "Odd2"]:
 
-    df[col] = df[col].apply(
+    results_df[col] = results_df[col].apply(
         lambda x: str(x).replace(".", ",")
-        if x != "-"
+        if str(x) != "-"
         else "-"
     )
 
