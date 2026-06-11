@@ -1,3 +1,9 @@
+import os
+import json
+import gspread
+
+from google.oauth2.service_account import Credentials
+
 import requests
 import pandas as pd
 from bs4 import BeautifulSoup
@@ -327,17 +333,28 @@ df.insert(3, "Time", times)
 # ==========================================
 
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-
 scope = [
-    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
 ]
 
-creds = ServiceAccountCredentials.from_json_keyfile_name(
-    "credentials.json",
-    scope
-)
+if os.path.exists("credentials.json"):
+
+    creds = Credentials.from_service_account_file(
+        "credentials.json",
+        scopes=scope
+    )
+
+else:
+
+    credentials_dict = json.loads(
+        os.environ["GOOGLE_CREDENTIALS"]
+    )
+
+    creds = Credentials.from_service_account_info(
+        credentials_dict,
+        scopes=scope
+    )
 
 client = gspread.authorize(creds)
 
