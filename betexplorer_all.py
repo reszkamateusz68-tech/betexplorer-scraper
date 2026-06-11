@@ -425,6 +425,14 @@ except:
 
 print("Aktualizacja Fixtures...")
 
+for col in ["Odd1", "OddX", "Odd2"]:
+
+    df[col] = df[col].apply(
+        lambda x: str(x).replace(".", ",")
+        if x != "-"
+        else "-"
+    )
+
 fixtures_sheet.clear()
 
 fixtures_sheet.update(
@@ -437,6 +445,14 @@ fixtures_sheet.update(
 # ==========================================
 
 print("Aktualizacja Results...")
+
+for col in ["Odd1", "OddX", "Odd2"]:
+
+    df[col] = df[col].apply(
+        lambda x: str(x).replace(".", ",")
+        if x != "-"
+        else "-"
+    )
 
 results_sheet.clear()
 
