@@ -171,12 +171,24 @@ for i, url in enumerate(urls, start=1):
 
                 odds = []
 
-                for b in row.find_all("button"):
+                odds_cells = row.select("td.table-main__odds")
 
-                    odd = b.get("data-odd")
+                for cell in odds_cells:
 
-                    if odd:
-                        odds.append(odd)
+                    odd = cell.get("data-odd")
+
+                    if not odd:
+
+                        span = cell.find(
+                            attrs={"data-odd": True}
+                        )
+
+                        if span:
+                            odd = span.get("data-odd")
+
+                    odds.append(
+                        odd if odd else "-"
+                    )
                         
                 if len(odds) == 0:
                     print("BRAK KURSÓW:")
