@@ -312,6 +312,17 @@ for i, url in enumerate(urls, start=1):
                 if home == "Mikkeli" and away == "Jippo":
                     print("DEBUG MIKKELI-JIPPO")
                     print("URL:", match.get("href"))
+
+                match_url = "https://www.betexplorer.com" + match.get("href")
+                
+                match_html = requests.get(
+                    match_url,
+                    headers=headers,
+                    timeout=30
+                ).text
+                
+                print("ODDS FOUND:", "table-main__odds" in match_html)
+                    
                     print(row)
                 
                 date = ""
