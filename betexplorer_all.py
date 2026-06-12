@@ -314,8 +314,15 @@ for i, url in enumerate(urls, start=1):
                     odd2 = odds[2]
 
                 if home == "Mikkeli" and away == "Jippo":
+                
                     print("DEBUG MIKKELI-JIPPO")
                     print("URL:", match.get("href"))
+                
+                    print("ODDS CELLS COUNT:", len(odds_cells))
+                
+                    for i, cell in enumerate(odds_cells):
+                        print("CELL", i)
+                        print(str(cell))
                 
                 date = ""
 
