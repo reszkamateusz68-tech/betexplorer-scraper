@@ -1,0 +1,6 @@
+requests
+pandas
+beautifulsoup4
+openpyxl
+gspread
+oauth2client
