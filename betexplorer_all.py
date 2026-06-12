@@ -264,20 +264,31 @@ for i, url in enumerate(urls, start=1):
                 odds = []
 
                 for cell in odds_cells:
-
+                
+                    odd = None
+                
+                    # wariant 1
                     odd = cell.get("data-odd")
-
+                
+                    # wariant 2
                     if not odd:
-
-                        span = cell.find(
-                            attrs={"data-odd": True}
-                        )
-
+                        span = cell.find(attrs={"data-odd": True})
                         if span:
                             odd = span.get("data-odd")
-
-                    odds.append(
-                        odd if odd else "-"
+                
+                    # wariant 3
+                    if not odd:
+                        button = cell.find("button")
+                        if button:
+                            odd = button.get_text(strip=True)
+                
+                    # wariant 4
+                    if not odd:
+                        text = cell.get_text(" ", strip=True)
+                        if text:
+                            odd = text
+                
+                    odds.append(odd if odd else "-")
                     )
 
                 odd1 = "-"
