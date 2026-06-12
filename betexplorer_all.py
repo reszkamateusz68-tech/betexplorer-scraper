@@ -261,34 +261,34 @@ for i, url in enumerate(urls, start=1):
                     "td.table-main__odds"
                 )
 
-                odds = []
+               odds = []
 
                 for cell in odds_cells:
 
-                odd = cell.get("data-odd")
+                    odd = cell.get("data-odd")
 
-                if not odd:
+                    if not odd:
 
-                    span = cell.find(
-                        attrs={"data-odd": True}
-                    )
+                        span = cell.find(
+                            attrs={"data-odd": True}
+                        )
 
-                    if span:
-                        odd = span.get("data-odd")
+                        if span:
+                            odd = span.get("data-odd")
 
-                if not odd:
+                    if not odd:
 
-                    button = cell.find("button")
+                        button = cell.find("button")
 
-                    if button:
-                        odd = button.get_text(strip=True)
+                        if button:
+                            odd = button.get_text(strip=True)
 
-                if not odd:
+                    if not odd:
 
-                    text = cell.get_text(strip=True)
+                        text = cell.get_text(strip=True)
 
-                    if text:
-                        odd = text
+                        if text:
+                            odd = text
 
                     odds.append(
                         odd if odd else "-"
