@@ -316,7 +316,16 @@ for i, url in enumerate(urls, start=1):
 
                 if date_cell:
                     date = date_cell.get_text(strip=True)
-
+                    
+                if home == "Mikkeli" and away == "Jippo":
+                    print(row)
+                
+                if home == "Mikkeli" and away == "Jippo":
+                    print("DEBUG")
+                    print("HOME:", home)
+                    print("AWAY:", away)
+                    print("ODDS:", odds)
+                
                 all_data.append([
                     "Result",
                     league,
