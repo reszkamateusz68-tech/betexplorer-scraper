@@ -287,14 +287,15 @@ for i, url in enumerate(urls, start=1):
                         text = cell.get_text(" ", strip=True)
                         if text:
                             odd = text
-                
+
+                    if odd == "-" or odd is None:
+                        print("BRAK KURSU W RESULTS")
+                        print(cell)
+                        print("-" * 80)
+                    
                     odds.append(odd if odd else "-"
                     )
 
-                if odd == "-" or odd is None:
-                    print("BRAK KURSU W RESULTS")
-                    print(cell)
-                    print("-" * 80)
                 
                 odd1 = "-"
                 oddx = "-"
@@ -321,9 +322,8 @@ for i, url in enumerate(urls, start=1):
                     timeout=30
                 ).text
                 
-                print("ODDS FOUND:", "table-main__odds" in match_html)
-                    
-                    print(row)
+                print("ODDS FOUND:", "table-main__odds" in match_html)              
+                print(row)
                 
                 date = ""
 
