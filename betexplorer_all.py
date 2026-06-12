@@ -311,8 +311,7 @@ for i, url in enumerate(urls, start=1):
 
                 if home == "Mikkeli" and away == "Jippo":
                     print("DEBUG MIKKELI-JIPPO")
-                if "mikkelin-jippo" in str(row):
-                    print("DEBUG MIKKELI-JIPPO")
+                    print("URL:", match.get("href"))
                     print(row)
                 
                 date = ""
