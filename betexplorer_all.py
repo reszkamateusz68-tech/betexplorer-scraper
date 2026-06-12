@@ -135,6 +135,13 @@ for i, url in enumerate(urls, start=1):
             timeout=30
         ).text
 
+if "finland/ykkosliiga/results" in url:
+
+    with open("debug_ykkosliiga.html", "w", encoding="utf-8") as f:
+        f.write(html)
+
+    print("HTML zapisany")
+        
         soup = BeautifulSoup(
             html,
             "html.parser"
