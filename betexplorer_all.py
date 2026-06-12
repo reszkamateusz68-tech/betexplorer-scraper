@@ -309,6 +309,10 @@ for i, url in enumerate(urls, start=1):
                 if len(odds) >= 3:
                     odd2 = odds[2]
 
+                if home == "Mikkeli" and away == "Jippo":
+                    print("DEBUG MIKKELI-JIPPO")
+                    print("ODDS:", odds)
+                
                 date = ""
 
                 date_cell = row.find(
