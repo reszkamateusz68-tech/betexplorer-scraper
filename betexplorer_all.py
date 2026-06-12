@@ -175,32 +175,24 @@ for i, url in enumerate(urls, start=1):
 
                 for cell in odds_cells:
 
+                    odd = None
+
+                    # wariant 1
                     odd = cell.get("data-odd")
 
+                    # wariant 2
                     if not odd:
-
-                        span = cell.find(
-                            attrs={"data-odd": True}
-                        )
-
+                        span = cell.find(attrs={"data-odd": True})
                         if span:
                             odd = span.get("data-odd")
 
-                    # NOWY WARIANT
+                    # wariant 3
                     if not odd:
-
                         button = cell.find("button")
-
                         if button:
+                            odd = button.get_text(strip=True)
 
-                            txt = button.get_text(strip=True)
-
-                            if txt:
-                                odd = txt
-
-                    odds.append(
-                        odd if odd else "-"
-                    )
+                    odds.append(odd if odd else "-")
                         
                 if len(odds) == 0:
                     print("BRAK KURSÓW:")
