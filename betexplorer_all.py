@@ -186,6 +186,18 @@ for i, url in enumerate(urls, start=1):
                         if span:
                             odd = span.get("data-odd")
 
+                    # NOWY WARIANT
+                    if not odd:
+
+                        button = cell.find("button")
+
+                        if button:
+
+                            txt = button.get_text(strip=True)
+
+                            if txt:
+                                odd = txt
+
                     odds.append(
                         odd if odd else "-"
                     )
