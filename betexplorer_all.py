@@ -457,6 +457,52 @@ fixtures_sheet.update(
 )
 
 # ==========================================
+# ARKUSZE PER LIGA
+# ==========================================
+
+print("Aktualizacja arkuszy ligowych...")
+
+for league in sorted(df["League"].dropna().unique()):
+
+    league_name = (
+        league.replace("/", "_")
+        .replace("-", "_")
+        .replace(" ", "_")
+    )[:100]
+
+    league_df = df[df["League"] == league].copy()
+
+    for col in ["Odd1", "OddX", "Odd2"]:
+
+        league_df[col] = league_df[col].apply(
+            lambda x: str(x).replace(".", ",")
+            if str(x) != "-"
+            else "-"
+        )
+
+    try:
+        league_sheet = spreadsheet.worksheet(
+            league_name
+        )
+
+    except:
+
+        league_sheet = spreadsheet.add_worksheet(
+            title=league_name,
+            rows=max(len(league_df) + 100, 1000),
+            cols=20
+        )
+
+    league_sheet.clear()
+
+    league_sheet.update(
+        [league_df.columns.tolist()] +
+        league_df.astype(str).values.tolist()
+    )
+
+    print("Liga:", league_name)
+
+# ==========================================
 # RESULTS
 # ==========================================
 
