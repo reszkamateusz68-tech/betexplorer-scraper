@@ -291,6 +291,11 @@ for i, url in enumerate(urls, start=1):
                     odds.append(odd if odd else "-"
                     )
 
+                if odd == "-" or odd is None:
+                    print("BRAK KURSU W RESULTS")
+                    print(cell)
+                    print("-" * 80)
+                
                 odd1 = "-"
                 oddx = "-"
                 odd2 = "-"
