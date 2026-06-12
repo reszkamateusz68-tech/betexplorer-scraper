@@ -288,7 +288,7 @@ for i, url in enumerate(urls, start=1):
                         if text:
                             odd = text
                 
-                    odds.append(odd if odd else "-")
+                    odds.append(odd if odd else "-"
                     )
 
                 odd1 = "-"
