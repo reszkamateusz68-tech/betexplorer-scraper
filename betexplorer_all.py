@@ -311,7 +311,9 @@ for i, url in enumerate(urls, start=1):
 
                 if home == "Mikkeli" and away == "Jippo":
                     print("DEBUG MIKKELI-JIPPO")
-                    print("ODDS:", odds)
+                if "mikkelin-jippo" in str(row):
+                    print("DEBUG MIKKELI-JIPPO")
+                    print(row)
                 
                 date = ""
 
