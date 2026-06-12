@@ -260,36 +260,36 @@ for i, url in enumerate(urls, start=1):
                 odds_cells = row.select(
                     "td.table-main__odds"
                 )
-
-               odds = []
-
+                
+                odds = []
+                
                 for cell in odds_cells:
-
+                
                     odd = cell.get("data-odd")
-
+                
                     if not odd:
-
+                
                         span = cell.find(
                             attrs={"data-odd": True}
                         )
-
+                
                         if span:
                             odd = span.get("data-odd")
-
+                
                     if not odd:
-
+                
                         button = cell.find("button")
-
+                
                         if button:
                             odd = button.get_text(strip=True)
-
+                
                     if not odd:
-
+                
                         text = cell.get_text(strip=True)
-
+                
                         if text:
                             odd = text
-
+                
                     odds.append(
                         odd if odd else "-"
                     )
