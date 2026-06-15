@@ -309,36 +309,55 @@ results_df = results_df.sort_values(
     ascending=False
 )
 
-# ==========================================
-# POBIERANIE ZAWÓD TYPER
-# ==========================================
-print("Pobieram dodatkowe statystyki z Zawód Typer...")
-zt_df = pd.DataFrame()
-try:
-    scraper = cloudscraper.create_scraper()
-    url_zt = "https://zawodtyper.pl/statystyki-pilkarskie-over-under/"
-    html_zt = scraper.get(url_zt, headers={"User-Agent": headers["User-Agent"]}, timeout=30).text
-    soup_zt = BeautifulSoup(html_zt, "html.parser")
-    tabela = soup_zt.find("table")
-    
-    dane_tabeli = []
-    if tabela:
-        wiersze = tabela.find_all("tr")
-        for wiersz in wiersze:
-            komorki = wiersz.find_all(["th", "td"])
-            tekst_komorek = [komorka.get_text(strip=True) for komorka in komorki]
-            if tekst_komorek:
-                dane_tabeli.append(tekst_komorek)
-                
-    if dane_tabeli:
-        naglowki = dane_tabeli[0]
-        zawartosc = dane_tabeli[1:]
-        zt_df = pd.DataFrame(zawartosc, columns=naglowki)
-        print(f"Sukces! Pobrano {len(zt_df)} wierszy z Zawód Typer.")
-    else:
-        print("Nie znaleziono tabeli na stronie Zawód Typer.")
-except Exception as e:
-    print("Błąd podczas pobierania z Zawód Typer:", e)
+# ==========================================================
+# MULTI-POBIERANIE ZAWÓD TYPER (NOWE PODEJŚCIE MULTI-URL)
+# ==========================================================
+strony_zt = {
+    "ZT_OverUnder": "https://zawodtyper.pl/statystyki-pilkarskie-over-under/",
+    "ZT_1X2": "https://zawodtyper.pl/rezultat-1x2/",
+    "ZT_Rozne": "https://zawodtyper.pl/statystyki-rzutow-roznych/",
+    "ZT_Strzaly": "https://zawodtyper.pl/statystyki-strzaly-na-bramke/",
+    "ZT_Polowy": "https://zawodtyper.pl/statystyki-1-polowa-i-2-polowa-meczu/"
+}
+
+slownik_dataframes_zt = {}
+scraper = cloudscraper.create_scraper()
+
+for nazwa_arkusza, url_zt in strony_zt.items():
+    print(f"Pobieram dodatkowe statystyki z Zawód Typer ({nazwa_arkusza})...")
+    try:
+        html_zt = scraper.get(url_zt, headers={"User-Agent": headers["User-Agent"]}, timeout=30).text
+        soup_zt = BeautifulSoup(html_zt, "html.parser")
+        tabela = soup_zt.find("table")
+        
+        dane_tabeli = []
+        if tabela:
+            wiersze = tabela.find_all("tr")
+            for wiersz in wiersze:
+                komorki = wiersz.find_all(["th", "td"])
+                tekst_komorek = [komorka.get_text(strip=True) for komorka in komorki]
+                if tekst_komorek:
+                    dane_tabeli.append(tekst_komorek)
+                    
+        if dane_tabeli:
+            naglowki = dane_tabeli[0]
+            zawartosc = dane_tabeli[1:]
+            
+            # Zapobieganie błędom powtarzających się lub pustych nagłówków kolumn
+            naglowki_czyste = []
+            for idx, n in enumerate(naglowki):
+                if n == "" or n is None:
+                    naglowki_czyste.append(f"Kolumna_{idx}")
+                else:
+                    naglowki_czyste.append(n)
+            
+            temp_df = pd.DataFrame(zawartosc, columns=naglowki_czyste)
+            slownik_dataframes_zt[nazwa_arkusza] = temp_df
+            print(f"Sukces! Pobrano {len(temp_df)} wierszy z podstrony ZT.")
+        else:
+            print(f"Nie znaleziono tabeli na stronie: {url_zt}")
+    except Exception as e:
+        print(f"Błąd podczas pobierania z {url_zt}:", e)
 
 # ==========================================
 # GOOGLE SHEETS AUTORYZACJA
@@ -421,26 +440,29 @@ results_sheet.update(
     results_df.astype(str).values.tolist()
 )
 
-# 4. Zawód Typer (NOWOŚĆ)
-if not zt_df.empty:
-    print("Aktualizacja zakładki ZawodTyper...")
-    try:
-        arkusz_zt = spreadsheet.worksheet("ZawodTyper")
-    except:
-        arkusz_zt = spreadsheet.add_worksheet(title="ZawodTyper", rows=1000, cols=15)
-    
-    arkusz_zt.clear()
-    arkusz_zt.update(
-        [zt_df.columns.tolist()] + 
-        zt_df.astype(str).values.tolist()
-    )
-    print("Zakładka ZawodTyper zaktualizowana pomyślnie!")
+# 4. ZAWÓD TYPER - AKTUALIZACJA KAŻDEJ ZAKŁADKI Z OSOBNA
+for nazwa_arkusza, zt_df in slownik_dataframes_zt.items():
+    if not zt_df.empty:
+        print(f"Wysyłam {nazwa_arkusza} do Google Sheets...")
+        try:
+            try:
+                arkusz_zt = spreadsheet.worksheet(nazwa_arkusza)
+            except:
+                arkusz_zt = spreadsheet.add_worksheet(title=nazwa_arkusza, rows=1000, cols=20)
+            
+            arkusz_zt.clear()
+            arkusz_zt.update(
+                [zt_df.columns.tolist()] + 
+                zt_df.astype(str).values.tolist()
+            )
+            print(f"Zakładka {nazwa_arkusza} gotowa!")
+        except Exception as e:
+            print(f"Problem z zapisem zakładki {nazwa_arkusza}:", e)
 
 print()
 print("=" * 60)
 print("GOTOWE")
 print("Fixtures:", len(fixtures_df))
 print("Results:", len(results_df))
-if not zt_df.empty:
-    print("Zawód Typer:", len(zt_df))
+print("Pobrane tabele Zawód Typer:", len(slownik_dataframes_zt))
 print("=" * 60)
