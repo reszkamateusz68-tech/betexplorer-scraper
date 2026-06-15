@@ -356,6 +356,49 @@ for value in df["Date"]:
 df["Date"] = dates
 df.insert(3, "Time", times)
 
+# === POBIERANIE DANYCH Z ZAWÓD TYPER ===
+import cloudscraper
+
+print("Pobieram dodatkowe statystyki z Zawód Typer...")
+try:
+    # Tworzymy bezpieczne połączenie, które omija blokady anty-botowe
+    bezpieczny_skaner = cloudscraper.create_scraper()
+    
+    url_zt = "https://zawodtyper.pl/statystyki-pilkarskie-over-under/"
+    headers_zt = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
+    }
+    
+    # Pobieramy stronę internetową w formie surowego kodu tekstowego
+    kod_html = bezpieczny_skaner.get(url_zt, headers=headers_zt, timeout=30).text
+    soup_zt = BeautifulSoup(kod_html, "html.parser")
+    
+    # Szukamy na stronie tabeli ze statystykami
+    tabela = soup_zt.find("table")
+    
+    dane_tabeli = []
+    if tabela:
+        wiersze = tabela.find_all("tr")
+        for wiersz in wiersze:
+            komorki = wiersz.find_all(["th", "td"])
+            tekst_komorek = [komorka.get_text(strip=True) for komorka in komorki]
+            if tekst_komorek:
+                dane_tabeli.append(tekst_komorek)
+                
+    if dane_tabeli:
+        # Przerabiamy dane na format czytelny dla bazy danych (DataFrame)
+        naglowki = dane_tabeli[0]
+        zawartosc = dane_tabeli[1:]
+        zt_df = pd.DataFrame(zawartosc, columns=naglowki)
+        print(f"Sukces! Pobrano {len(zt_df)} wierszy z Zawód Typer.")
+    else:
+        print("Nie znalazłem tabeli na stronie Zawód Typer.")
+        zt_df = pd.DataFrame()
+
+except Exception as e:
+    print("Coś poszło nie tak przy pobieraniu z Zawód Typer:", e)
+    zt_df = pd.DataFrame()
+# =======================================
 # ==========================================
 # GOOGLE SHEETS
 # ==========================================
@@ -496,3 +539,23 @@ print("GOTOWE")
 print("Fixtures:", len(fixtures_df))
 print("Results:", len(results_df))
 print("=" * 60)
+
+# === ZAPISYWANIE ZAWÓD TYPER DO GOOGLE SHEETS ===
+if not zt_df.empty:
+    print("Wysyłam dane z Zawód Typer do Google Sheets...")
+    try:
+        # Sprawdzamy czy zakładka istnieje, jak nie - tworzymy ją
+        try:
+            arkusz_zt = spreadsheet.worksheet("ZawodTyper")
+        except:
+            arkusz_zt = spreadsheet.add_worksheet(title="ZawodTyper", rows=500, cols=15)
+            
+        # Czyścimy starą zawartość i wklejamy świeże dane
+        arkusz_zt.clear()
+        arkusz_zt.update(
+            [zt_df.columns.tolist()] + 
+            zt_df.astype(str).values.tolist()
+        )
+        print("Zakładka ZawodTyper została zaktualizowana!")
+    except Exception as e:
+        print("Błąd podczas zapisywania zakładki ZawodTyper:", e)
