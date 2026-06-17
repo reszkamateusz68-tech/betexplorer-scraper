@@ -1,70 +1,26 @@
-import requests
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 import os
 import json
-import time
-import re
 
-def get_sofascore_mobile_headers():
-    """Generuje nagłówki czysto mobilne (Android App), które Sofascore wpuszcza bez żadnych blokad chmurowych."""
-    return {
-        "User-Agent": "Mozilla/5.0 (Linux; Android 13; SM-G998B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache"
-    }
-
-def load_sofascore_ids():
-    """Czyta plik tekstowy i wyciąga wyłącznie czyste, numeryczne ID meczów z linków Sofascore."""
-    file_path = "sofascore_matches.txt"
+def load_local_sofascore_data():
+    """Wczytuje surowe dane statystyk bezpośrednio z pliku w repozytorium, omijając błąd 403."""
+    file_path = "sofascore_raw.txt"
     if not os.path.exists(file_path):
-        print(f"BŁĄD: Nie znaleziono pliku {file_path}")
-        return []
+        print(f"BŁĄD: Nie znaleziono pliku {file_path} w repozytorium!")
+        return None
         
-    match_ids = []
-    with open(file_path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            
-            # Ekstrakcja ciągu cyfr o długości 7-9 znaków
-            found_ids = re.findall(r'\d{7,9}', line)
-            if found_ids:
-                match_ids.append(found_ids[-1])
-                
-    print(f"Znaleziono {len(match_ids)} meczów do przetworzenia.")
-    return match_ids
-
-def get_match_data(match_id):
-    """Pobiera podstawowe informacje o meczu przez stabilne API mobilne."""
-    # Przełączenie na endpoint mobilny, wolny od restrykcji i blokad 403/Cloudflare
-    url = f"https://api.sofascore.com/mobile/v1/event/{match_id}"
     try:
-        response = requests.get(url, headers=get_sofascore_mobile_headers(), timeout=15)
-        if response.status_code == 200:
-            return response.json().get('event', {})
-        else:
-            print(f"API Event Status: {response.status_code} dla ID {match_id}")
+        with open(file_path, "r", encoding="utf-8") as f:
+            raw_text = f.read().strip()
+        
+        # Ładujemy tekst jako czysty słownik JSON
+        data = json.loads(raw_text)
+        return data.get('statistics', data) # Obsługuje czysty wyciąg lub pełny obiekt
     except Exception as e:
-        print(f"Błąd pobierania danych meczu {match_id}: {e}")
-    return {}
-
-def get_match_statistics(match_id):
-    """Pobiera głębokie statystyki techniczne przez mobilny endpoint statystyk."""
-    url = f"https://api.sofascore.com/mobile/v1/event/{match_id}/statistics"
-    try:
-        response = requests.get(url, headers=get_sofascore_mobile_headers(), timeout=15)
-        if response.status_code == 200:
-            return response.json().get('statistics', [])
-        else:
-            print(f"API Stats Status: {response.status_code} dla ID {match_id}")
-    except Exception as e:
-        print(f"Błąd pobierania statystyk meczu {match_id}: {e}")
-    return []
+        print(f"Błąd przetwarzania pliku sofascore_raw.txt: {e}")
+        return None
 
 def extract_stat_value(stat_groups, stat_name, team_side):
     """Wyciąga konkretną statystykę z zagnieżdżonej struktury Sofascore."""
@@ -74,88 +30,56 @@ def extract_stat_value(stat_groups, stat_name, team_side):
                 return item.get(team_side, "-")
     return "-"
 
-def process_sofascore_scraper():
-    """Główny silnik analizujący mecze i mapujący dane pod arkusz."""
-    match_ids = load_sofascore_ids()
-    all_rows = []
+def process_local_scraper():
+    """Przetwarza lokalny plik z danymi i przygotowuje wiersz do arkusza."""
+    stats_data = load_local_sofascore_data()
+    if not stats_data:
+        return []
+        
+    # Filtrujemy blok statystyk dla całego meczu ('ALL')
+    all_stats_group = next((s.get('groups', []) for s in stats_data if s.get('period') == 'ALL'), [])
     
-    for match_id in match_ids:
-        print(f"Analiza meczu ID: {match_id}...")
-        
-        event_data = get_match_data(match_id)
-        stats_data = get_match_statistics(match_id)
-        
-        if not event_data:
-            print(f"Brak danych z API dla ID: {match_id}")
-            continue
+    if not all_stats_group:
+        print("Nie znaleziono sekcji statystyk 'ALL' w pliku.")
+        return []
 
-        # Pobieranie podstawowych informacji
-        tournament = event_data.get('tournament', {}).get('name', 'Nieznana liga')
-        home_team = event_data.get('homeTeam', {}).get('name', 'Gospodarz')
-        away_team = event_data.get('awayTeam', {}).get('name', 'Gość')
-        
-        # Wyniki z podziałem na końcowy i do przerwy (HT)
-        score_ft_home = event_data.get('homeScore', {}).get('current', 0)
-        score_ft_away = event_data.get('awayScore', {}).get('current', 0)
-        score_ht_home = event_data.get('homeScore', {}).get('period1', 0)
-        score_ht_away = event_data.get('awayScore', {}).get('period1', 0)
-        
-        # Domyślne wartości statystyk
-        possession_h, possession_a = "-", "-"
-        corners_h, corners_a = "-", "-"
-        shots_on_target_h, shots_on_target_a = "-", "-"
-        fouls_h, fouls_a = "-", "-"
-        yellow_cards_h, yellow_cards_a = "-", "-"
-        xg_h, xg_a = "-", "-"
-        
-        # Filtrujemy blok statystyk dla całego meczu ('ALL')
-        all_stats_group = next((s.get('groups', []) for s in stats_data if s.get('period') == 'ALL'), [])
-        
-        if all_stats_group:
-            possession_h = extract_stat_value(all_stats_group, 'Ball possession', 'home')
-            possession_a = extract_stat_value(all_stats_group, 'Ball possession', 'away')
-            
-            corners_h = extract_stat_value(all_stats_group, 'Corner kicks', 'home')
-            corners_a = extract_stat_value(all_stats_group, 'Corner kicks', 'away')
-            
-            shots_on_target_h = extract_stat_value(all_stats_group, 'Shots on target', 'home')
-            shots_on_target_a = extract_stat_value(all_stats_group, 'Shots on target', 'away')
-            
-            fouls_h = extract_stat_value(all_stats_group, 'Fouls', 'home')
-            fouls_a = extract_stat_value(all_stats_group, 'Fouls', 'away')
-            
-            yellow_cards_h = extract_stat_value(all_stats_group, 'Yellow cards', 'home')
-            yellow_cards_a = extract_stat_value(all_stats_group, 'Yellow cards', 'away')
-            
-            xg_h = extract_stat_value(all_stats_group, 'Expected goals', 'home')
-            xg_a = extract_stat_value(all_stats_group, 'Expected goals', 'away')
+    # Wyciąganie parametrów
+    possession_h = extract_stat_value(all_stats_group, 'Ball possession', 'home')
+    possession_a = extract_stat_value(all_stats_group, 'Ball possession', 'away')
+    
+    corners_h = extract_stat_value(all_stats_group, 'Corner kicks', 'home')
+    corners_a = extract_stat_value(all_stats_group, 'Corner kicks', 'away')
+    
+    shots_on_target_h = extract_stat_value(all_stats_group, 'Shots on target', 'home')
+    shots_on_target_a = extract_stat_value(all_stats_group, 'Shots on target', 'away')
+    
+    fouls_h = extract_stat_value(all_stats_group, 'Fouls', 'home')
+    fouls_a = extract_stat_value(all_stats_group, 'Fouls', 'away')
+    
+    yellow_cards_h = extract_stat_value(all_stats_group, 'Yellow cards', 'home')
+    yellow_cards_a = extract_stat_value(all_stats_group, 'Yellow cards', 'away')
+    
+    xg_h = extract_stat_value(all_stats_group, 'Expected goals', 'home')
+    xg_a = extract_stat_value(all_stats_value, 'Expected goals', 'away')
 
-        parsed_row = {
-            "ID_Meczu": match_id,
-            "Liga": tournament,
-            "Gospodarz": home_team,
-            "Gosc": away_team,
-            "Gole_Gosp": score_ft_home,
-            "Gole_Gosc": score_ft_away,
-            "HT_Gosp": score_ht_home,
-            "HT_Gosc": score_ht_away,
-            "Posiadanie_Gosp": possession_h,
-            "Posiadanie_Gosc": possession_a,
-            "Rozne_Gosp": corners_h,
-            "Rozne_Gosc": corners_a,
-            "Celne_Gosp": shots_on_target_h,
-            "Celne_Gosc": shots_on_target_a,
-            "Faule_Gosp": fouls_h,
-            "Faule_Gosc": fouls_a,
-            "Zolte_Gosp": yellow_cards_h,
-            "Zolte_Gosc": yellow_cards_a,
-            "xG_Gosp": xg_h,
-            "xG_Gosc": xg_a
-        }
-        all_rows.append(parsed_row)
-        time.sleep(1.5)
-        
-    return all_rows
+    # Tworzymy wiersz danych (W tej opcji nazwy drużyn i wyniki dopiszesz w arkuszu lub pobierzesz z ID)
+    parsed_row = {
+        "ID_Meczu": "Zrzut Lokalny",
+        "Posiadanie_Gosp": possession_h,
+        "Posiadanie_Gosc": possession_a,
+        "Rozne_Gosp": corners_h,
+        "Rozne_Gosc": corners_a,
+        "Celne_Gosp": shots_on_target_h,
+        "Celne_Gosc": shots_on_target_a,
+        "Faule_Gosp": fouls_h,
+        "Faule_Gosc": fouls_a,
+        "Zolte_Gosp": yellow_cards_h,
+        "Zolte_Gosc": yellow_cards_a,
+        "xG_Gosp": xg_h,
+        "xG_Gosc": xg_a
+    }
+    
+    return [parsed_row]
 
 def save_to_google_sheets(parsed_data):
     """Eksportuje wygenerowaną tabelę do Google Sheets."""
@@ -181,9 +105,9 @@ def save_to_google_sheets(parsed_data):
         
     sheet.clear()
     sheet.update(([df.columns.tolist()] + df.values.tolist()), "A1")
-    print(f"SUKCES: Zaawansowane statystyki Sofascore dla {len(df)} meczów zostały zapisane w arkuszu!")
+    print(f"SUKCES: Statystyki Sofascore zostały pomyślnie przeniesione z pliku do arkusza Google Sheets!")
 
 if __name__ == "__main__":
-    print("Uruchamiam zautomatyzowany system pobierania statystyk Sofascore...")
-    data = process_sofascore_scraper()
+    print("Uruchamiam lokalny dekoder danych Sofascore...")
+    data = process_local_scraper()
     save_to_google_sheets(data)
