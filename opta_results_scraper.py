@@ -8,52 +8,49 @@ import json
 # Konfiguracja API Opta na podstawie oficjalnego widgetu ligowego
 OPTA_UUID = "ft1tiv1inq7v1sk3y9tv12yh5"
 SEASON_ID = "51r6ph2woavlbbpk8f29nynf8"
+CALLBACK_KEY = "W3754ce3eb8ab7e2434613a6cb279a2fa7c2a72eb7"
 
 def fetch_all_opta_results():
-    """Pobiera pełną bazę meczów sezonu z API Opta, omijając filtry live."""
-    # Czyszczenie linków: usunięto parametr live=yes, aby pobrać całą historię meczów
-    url_jsonp = f"https://api.performfeeds.com/soccerdata/match/{OPTA_UUID}?_rt=c&_lcl=en&_fmt=jsonp&sps=widgets&tournamentCalendarId={SEASON_ID}&_clbk=W3754ce3eb8ab7e2434613a6cb279a2fa7c2a72eb7"
-    url_json = f"https://api.performfeeds.com/soccerdata/match/{OPTA_UUID}?_rt=c&_lcl=en&_fmt=json&sps=widgets&tournamentCalendarId={SEASON_ID}"
+    """Pobiera pełną bazę meczów przy użyciu autoryzowanego klucza callbacku sesji."""
+    # Budujemy dokładny link żądania, identyczny z Twoim działającym plikiem tekstowym
+    url = f"https://api.performfeeds.com/soccerdata/match/{OPTA_UUID}?_rt=c&live=yes&_lcl=en&_fmt=jsonp&sps=widgets&tournamentCalendarId={SEASON_ID}&_clbk={CALLBACK_KEY}"
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
+        "Accept": "*/*",
         "Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
         "Origin": "https://optaplayerstats.statsperform.com",
         "Referer": "https://optaplayerstats.statsperform.com/"
     }
     
-    # Próba 1: Pobranie formatu bazowego JSONP
     try:
-        print("Pobieranie danych przez kanał główny (JSONP)...")
-        response = requests.get(url_jsonp, headers=headers, timeout=30)
-        if response.status_code == 200 and "(" in response.text:
-            raw_text = response.text.strip()
-            start_idx = raw_text.find("(")
-            end_idx = raw_text.rfind(")")
-            if start_idx != -1 and end_idx != -1:
-                json_string = raw_text[start_idx + 1:end_idx]
-                data = json.loads(json_string)
-                if 'match' in data and len(data['match']) > 0:
-                    return data
-    except Exception as e:
-        print(f"Błąd kanału JSONP: {e}")
-
-    # Próba 2: Pobranie czystego JSON (Fallback)
-    try:
-        print("Uruchamianie alternatywnego pobierania (Czysty JSON)...")
-        response = requests.get(url_json, headers=headers, timeout=30)
+        response = requests.get(url, headers=headers, timeout=30)
         if response.status_code == 200:
-            data = response.json()
-            if 'match' in data and len(data['match']) > 0:
-                return data
+            raw_text = response.text.strip()
+            
+            # Precyzyjne obcinanie: szukamy nazwy klucza i wycinamy tylko wnętrze nawiasów
+            start_str = f"{CALLBACK_KEY}("
+            if raw_text.startswith(start_str) and raw_text.endswith(")"):
+                json_string = raw_text[len(start_str):-1]
+                data = json.loads(json_string)
+                if 'match' in data:
+                    return data
+            else:
+                # Fallback, gdyby nawiasy przesunęły się o spację
+                start_idx = raw_text.find("(")
+                end_idx = raw_text.rfind(")")
+                if start_idx != -1 and end_idx != -1:
+                    json_string = raw_text[start_idx + 1:end_idx]
+                    return json.loads(json_string)
+        else:
+            print(f"Błąd sieciowy Opta: Status {response.status_code}")
     except Exception as e:
-        print(f"Błąd kanału alternatywnego: {e}")
+        print(f"Błąd krytyczny pobierania: {e}")
         
     return None
 
 def parse_all_matches(json_data):
-    """Przetwarza strukturę danych i wyciąga statystyki pod system analityczny."""
+    """Przetwarza całą strukturę JSON i wyciąga statystyki mecz po meczu."""
     if not json_data or 'match' not in json_data:
         print("Brak danych meczowych w strukturze JSON.")
         return []
@@ -65,7 +62,7 @@ def parse_all_matches(json_data):
         live_data = match_node.get('liveData', {})
         match_details = live_data.get('matchDetails', {})
         
-        # Interesują nas wyłącznie mecze, które już zostały rozegrane
+        # Interesują nas wyłącznie mecze zakończone
         if match_details.get('matchStatus') != 'Played':
             continue
             
@@ -73,7 +70,7 @@ def parse_all_matches(json_data):
         date = match_info.get('localDate', '')
         week = match_info.get('week', '')
         
-        # Wyciąganie nazw drużyn oraz ich unikalnych ID
+        # Identyfikacja drużyn i ich ID
         home_team, home_id = "", ""
         away_team, away_id = "", ""
         for contestant in match_info.get('contestant', []):
@@ -84,14 +81,14 @@ def parse_all_matches(json_data):
                 away_team = contestant.get('name')
                 away_id = contestant.get('id')
                 
-        # Wyniki meczu (FT - koniec meczu, HT - do przerwy)
+        # Gole i wyniki (Do przerwy i Koncowe)
         scores = match_details.get('scores', {})
         home_score_ft = scores.get('ft', {}).get('home', 0)
         away_score_ft = scores.get('ft', {}).get('away', 0)
         home_score_ht = scores.get('ht', {}).get('home', 0)
         away_score_ht = scores.get('ht', {}).get('away', 0)
         
-        # Dane dodatkowe: frekwencja i sędzia główny
+        # Frekwencja i Sędzia Główny
         extra = live_data.get('matchDetailsExtra', {})
         attendance = extra.get('attendance', '0')
         
@@ -100,19 +97,19 @@ def parse_all_matches(json_data):
             if official.get('type') == 'Main':
                 referee = f"{official.get('firstName', '')} {official.get('lastName', '')}".strip()
                 
-        # Agregacja statystyk kartek
+        # Agregacja kartek z podziałem na drużyny
         cards = live_data.get('card', [])
         home_yellows = sum(1 for c in cards if c.get('type') == 'YC' and c.get('contestantId') == home_id)
         away_yellows = sum(1 for c in cards if c.get('type') == 'YC' and c.get('contestantId') == away_id)
         home_reds = sum(1 for c in cards if c.get('type') in ['RC', 'Y2C'] and c.get('contestantId') == home_id)
         away_reds = sum(1 for c in cards if c.get('type') in ['RC', 'Y2C'] and c.get('contestantId') == away_id)
         
-        # Zliczanie zmian zawodników
+        # Zliczanie zmian (Substitutions)
         subs = live_data.get('substitute', [])
         home_subs = sum(1 for s in subs if s.get('contestantId') == home_id)
         away_subs = sum(1 for s in subs if s.get('contestantId') == away_id)
         
-        # Statystyka interwencji weryfikacji wideo VAR
+        # Interwencje VAR
         var_events = len(live_data.get('VAR', []))
         
         parsed_row = {
@@ -125,7 +122,7 @@ def parse_all_matches(json_data):
             "Gole_Gosc": away_score_ft,
             "Gole_Gosp_HT": home_score_ht,
             "Gole_Gosc_HT": away_score_ht,
-            "Zolte_GCorner": home_yellows,
+            "Zolte_Gospodarz": home_yellows,
             "Zolte_Gosc": away_yellows,
             "Czerwone_Gospodarz": home_reds,
             "Czerwone_Gosc": away_reds,
@@ -140,9 +137,9 @@ def parse_all_matches(json_data):
     return all_parsed_matches
 
 def save_to_google_sheets(parsed_data):
-    """Wstrzykuje wyczyszczoną tabelę danych do pliku Google Sheets."""
+    """Zapisuje przefiltrowane dane do Google Sheets do arkusza Opta_Results."""
     if not parsed_data:
-        print("Brak wygenerowanych danych do zapisania.")
+        print("Brak nowych danych do zapisania.")
         return
         
     df = pd.DataFrame(parsed_data)
@@ -155,7 +152,7 @@ def save_to_google_sheets(parsed_data):
         
     client = gspread.authorize(creds)
     
-    # Połączenie bezpośrednio przez link URL (rozwiązuje błąd folderów dysków wspólnych)
+    # Otwieranie pliku bezpośrednio przez URL
     spreadsheet = client.open_by_url("https://docs.google.com/spreadsheets/d/11yc_BrZA649aZgeJhLedETqg6NI1k1_QFje7WNEjIHk/edit")
     
     try:
@@ -164,9 +161,8 @@ def save_to_google_sheets(parsed_data):
         sheet = spreadsheet.add_worksheet(title="Opta_Results", rows=2000, cols=20)
         
     sheet.clear()
-    # Zapis od komórki A1 dostosowany do gspread v6+
     sheet.update(([df.columns.tolist()] + df.values.tolist()), "A1")
-    print(f"SUKCES: Pomyślnie zapisano {len(df)} rozegranych meczów Premier League do zakładki 'Opta_Results'!")
+    print(f"SUKCES: Pomyślnie zsynchronizowano {len(df)} rozegranych meczów z Opta Stats do Google Sheets!")
 
 if __name__ == "__main__":
     print("Pobieranie bazy danych Opta...")
