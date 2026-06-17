@@ -1,94 +1,106 @@
+import requests
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 import os
 import json
+import time
 
-def load_local_sofascore_data():
-    """Wczytuje surowe dane statystyk bezpośrednio z pliku w repozytorium, omijając błąd 403."""
-    file_path = "sofascore_raw.txt"
-    if not os.path.exists(file_path):
-        print(f"BŁĄD: Nie znaleziono pliku {file_path} w repozytorium!")
-        return None
-        
-    try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            raw_text = f.read().strip()
-        
-        # Ładujemy tekst jako czysty słownik JSON
-        data = json.loads(raw_text)
-        return data.get('statistics', data) # Obsługuje czysty wyciąg lub pełny obiekt
-    except Exception as e:
-        print(f"Błąd przetwarzania pliku sofascore_raw.txt: {e}")
-        return None
+# Konfiguracja zbiorczego API Sofascore dla Premier League (Sezon 25/26)
+TOURNAMENT_ID = "17"  # Premier League
+SEASON_ID = "61643"   # Identyfikator konkretnego sezonu na Sofascore
 
-def extract_stat_value(stat_groups, stat_name, team_side):
-    """Wyciąga konkretną statystykę z zagnieżdżonej struktury Sofascore."""
-    for group in stat_groups:
-        for item in group.get('statisticsItems', []):
-            if item.get('name') == stat_name:
-                return item.get(team_side, "-")
-    return "-"
-
-def process_local_scraper():
-    """Przetwarza lokalny plik z danymi i przygotowuje wiersz do arkusza."""
-    stats_data = load_local_sofascore_data()
-    if not stats_data:
-        return []
-        
-    # Filtrujemy blok statystyk dla całego meczu ('ALL')
-    all_stats_group = next((s.get('groups', []) for s in stats_data if s.get('period') == 'ALL'), [])
+def fetch_full_season_data():
+    """Pobiera zbiorczą paczkę wszystkich meczów i statystyk z całego sezonu ligowego."""
+    url = f"https://api.sofascore.com/api/v1/tournament/{TOURNAMENT_ID}/season/{SEASON_ID}/events"
     
-    if not all_stats_group:
-        print("Nie znaleziono sekcji statystyk 'ALL' w pliku.")
-        return []
-
-    # Wyciąganie parametrów z poprawioną nazwą grupy (all_stats_group)
-    possession_h = extract_stat_value(all_stats_group, 'Ball possession', 'home')
-    possession_a = extract_stat_value(all_stats_group, 'Ball possession', 'away')
-    
-    corners_h = extract_stat_value(all_stats_group, 'Corner kicks', 'home')
-    corners_a = extract_stat_value(all_stats_group, 'Corner kicks', 'away')
-    
-    shots_on_target_h = extract_stat_value(all_stats_group, 'Shots on target', 'home')
-    shots_on_target_a = extract_stat_value(all_stats_group, 'Shots on target', 'away')
-    
-    fouls_h = extract_stat_value(all_stats_group, 'Fouls', 'home')
-    fouls_a = extract_stat_value(all_stats_group, 'Fouls', 'away')
-    
-    yellow_cards_h = extract_stat_value(all_stats_group, 'Yellow cards', 'home')
-    yellow_cards_a = extract_stat_value(all_stats_group, 'Yellow cards', 'away')
-    
-    xg_h = extract_stat_value(all_stats_group, 'Expected goals', 'home')
-    xg_a = extract_stat_value(all_stats_group, 'Expected goals', 'away')
-
-    # Tworzymy wiersz danych
-    parsed_row = {
-        "ID_Meczu": "Zrzut Lokalny",
-        "Posiadanie_Gosp": possession_h,
-        "Posiadanie_Gosc": possession_a,
-        "Rozne_Gosp": corners_h,
-        "Rozne_Gosc": corners_a,
-        "Celne_Gosp": shots_on_target_h,
-        "Celne_Gosc": shots_on_target_a,
-        "Faule_Gosp": fouls_h,
-        "Faule_Gosc": fouls_a,
-        "Zolte_Gosp": yellow_cards_h,
-        "Zolte_Gosc": yellow_cards_a,
-        "xG_Gosp": xg_h,
-        "xG_Gosc": xg_a
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+        "Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Origin": "https://www.sofascore.com",
+        "Referer": "https://www.sofascore.com/"
     }
     
-    return [parsed_row]
+    try:
+        response = requests.get(url, headers=headers, timeout=30)
+        if response.status_code == 200:
+            return response.json().get('events', [])
+        else:
+            print(f"Błąd pobierania bazy ligowej: Status {response.status_code}")
+            return []
+    except Exception as e:
+        print(f"Błąd sieciowy podczas pobierania bazy sezonu: {e}")
+        return []
+
+def parse_season_events(events_list):
+    """Przetwarza setki meczów z bazy ligowej na czystą tabelę pod system typowania."""
+    if not events_list:
+        print("Brak wydarzeń ligowych do przetworzenia.")
+        return []
+        
+    all_parsed_matches = []
+    
+    for event in events_list:
+        # Interesują nas wyłącznie mecze zakończone
+        if event.get('status', {}).get('type') != 'finished':
+            continue
+            
+        match_id = event.get('id')
+        custom_id = event.get('customId', '')
+        date_timestamp = event.get('startTimestamp', 0)
+        
+        # Konwersja czasu Unix na czytelną datę
+        date_str = time.strftime('%Y-%m-%d', time.localtime(date_timestamp)) if date_timestamp else "-"
+        
+        # Nazwy drużyn
+        home_team = event.get('homeTeam', {}).get('name', 'Gospodarz')
+        away_team = event.get('awayTeam', {}).get('name', 'Gość')
+        
+        # Wyniki końcowe (FT) i do przerwy (HT)
+        home_score_ft = event.get('homeScore', {}).get('current', 0)
+        away_score_ft = event.get('awayScore', {}).get('current', 0)
+        home_score_ht = event.get('homeScore', {}).get('period1', 0)
+        away_score_ht = event.get('awayScore', {}).get('period1', 0)
+        
+        # Sędzia i dodatkowe wskaźniki (jeśli są dostępne w pliku zbiorczym)
+        referee = event.get('referee', {}).get('name', 'Nieznany')
+        
+        # Kartki wyciąganie ze struktury kar
+        cards_h = event.get('homeScore', {}).get('yellowCards', "-")
+        cards_a = event.get('awayScore', {}).get('yellowCards', "-")
+        
+        # Generujemy wiersz danych dla całego sezonu
+        parsed_row = {
+            "ID_Meczu": match_id,
+            "Custom_ID": custom_id,
+            "Data": date_str,
+            "Gospodarz": home_team,
+            "Gosc": away_team,
+            "Gole_Gosp_FT": home_score_ft,
+            "Gole_Gosc_FT": away_score_ft,
+            "Gole_Gosp_HT": home_score_ht,
+            "Gole_Gosc_HT": away_score_ht,
+            "Zolte_Gosp": cards_h,
+            "Zolte_Gosc": cards_a,
+            "Sedzia": referee
+        }
+        all_parsed_matches.append(parsed_row)
+        
+    return all_parsed_matches
 
 def save_to_google_sheets(parsed_data):
-    """Eksportuje wygenerowaną tabelę do Google Sheets."""
+    """Zapisuje kompletną bazę danych całej ligi do Google Sheets."""
     if not parsed_data:
-        print("Brak nowych statystyk do zapisu.")
+        print("Brak wygenerowanych danych do eksportu.")
         return
         
     df = pd.DataFrame(parsed_data)
     
+    # Sortowanie od najnowszych meczów
+    if 'Data' in df.columns:
+        df = df.sort_values(by='Data', ascending=False)
+        
     scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     if os.path.exists("credentials.json"):
         creds = Credentials.from_service_account_file("credentials.json", scopes=scope)
@@ -101,13 +113,17 @@ def save_to_google_sheets(parsed_data):
     try:
         sheet = spreadsheet.worksheet("Sofascore_Stats")
     except gspread.exceptions.WorksheetNotFound:
-        sheet = spreadsheet.add_worksheet(title="Sofascore_Stats", rows=2000, cols=25)
+        sheet = spreadsheet.add_worksheet(title="Sofascore_Stats", rows=3000, cols=20)
         
     sheet.clear()
     sheet.update(([df.columns.tolist()] + df.values.tolist()), "A1")
-    print(f"SUKCES: Statystyki Sofascore zostały pomyślnie przeniesione z pliku do arkusza Google Sheets!")
+    print(f"SUKCES: Pomyślnie zsynchronizowano całą ligę ({len(df)} rozegranych meczów) do Google Sheets!")
 
 if __name__ == "__main__":
-    print("Uruchamiam lokalny dekoder danych Sofascore...")
-    data = process_local_scraper()
-    save_to_google_sheets(data)
+    print("Inicjalizacja zautomatyzowanego pobierania całego sezonu Sofascore...")
+    raw_events = fetch_full_season_data()
+    if raw_events:
+        print(f"Pobrano {len(raw_events)} surowych rekordów. Rozpoczynam parsowanie ligi...")
+        clean_data = parse_season_events(raw_events)
+        print("Wstrzykiwanie bazy do Google Sheets...")
+        save_to_google_sheets(clean_data)
