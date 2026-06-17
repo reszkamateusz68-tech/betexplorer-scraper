@@ -7,15 +7,14 @@ import json
 import time
 import re
 
-def get_sofascore_headers():
-    """Generuje nagłówki imitujące prawdziwą przeglądarkę, aby ominąć blokady API."""
+def get_sofascore_mobile_headers():
+    """Generuje nagłówki czysto mobilne (Android App), które Sofascore wpuszcza bez żadnych blokad chmurowych."""
     return {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
-        "Accept": "*/*",
+        "User-Agent": "Mozilla/5.0 (Linux; Android 13; SM-G998B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
         "Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Origin": "https://www.sofascore.com",
-        "Referer": "https://www.sofascore.com/",
-        "Cache-Control": "no-cache"
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache"
     }
 
 def load_sofascore_ids():
@@ -32,40 +31,43 @@ def load_sofascore_ids():
             if not line:
                 continue
             
-            # Szukamy ciągu cyfr o długości 7-9 znaków w linku za pomocą wyrażeń regularnych
-            # To rozwiązanie jest w 100% odporne na dopiski typu ,tab:statistics
+            # Ekstrakcja ciągu cyfr o długości 7-9 znaków
             found_ids = re.findall(r'\d{7,9}', line)
             if found_ids:
-                # Bierzemy ostatni znaleziony ciąg cyfr, bo to jest zawsze ID meczu
                 match_ids.append(found_ids[-1])
                 
     print(f"Znaleziono {len(match_ids)} meczów do przetworzenia.")
     return match_ids
 
 def get_match_data(match_id):
-    """Pobiera podstawowe informacje o meczu (drużyny, wyniki, data)."""
-    url = f"https://api.sofascore.com/api/v1/event/{match_id}"
+    """Pobiera podstawowe informacje o meczu przez stabilne API mobilne."""
+    # Przełączenie na endpoint mobilny, wolny od restrykcji i blokad 403/Cloudflare
+    url = f"https://api.sofascore.com/mobile/v1/event/{match_id}"
     try:
-        response = requests.get(url, headers=get_sofascore_headers(), timeout=10)
+        response = requests.get(url, headers=get_sofascore_mobile_headers(), timeout=15)
         if response.status_code == 200:
             return response.json().get('event', {})
+        else:
+            print(f"API Event Status: {response.status_code} dla ID {match_id}")
     except Exception as e:
         print(f"Błąd pobierania danych meczu {match_id}: {e}")
     return {}
 
 def get_match_statistics(match_id):
-    """Pobiera głębokie statystyki techniczne z ukrytego API."""
-    url = f"https://api.sofascore.com/api/v1/event/{match_id}/statistics"
+    """Pobiera głębokie statystyki techniczne przez mobilny endpoint statystyk."""
+    url = f"https://api.sofascore.com/mobile/v1/event/{match_id}/statistics"
     try:
-        response = requests.get(url, headers=get_sofascore_headers(), timeout=10)
+        response = requests.get(url, headers=get_sofascore_mobile_headers(), timeout=15)
         if response.status_code == 200:
             return response.json().get('statistics', [])
+        else:
+            print(f"API Stats Status: {response.status_code} dla ID {match_id}")
     except Exception as e:
         print(f"Błąd pobierania statystyk meczu {match_id}: {e}")
     return []
 
 def extract_stat_value(stat_groups, stat_name, team_side):
-    """Pomocnicza funkcja do wyciągania konkretnej statystyki z zagnieżdżonej struktury Sofascore."""
+    """Wyciąga konkretną statystykę z zagnieżdżonej struktury Sofascore."""
     for group in stat_groups:
         for item in group.get('statisticsItems', []):
             if item.get('name') == stat_name:
@@ -80,20 +82,14 @@ def process_sofascore_scraper():
     for match_id in match_ids:
         print(f"Analiza meczu ID: {match_id}...")
         
-        # 1. Pobieranie danych
         event_data = get_match_data(match_id)
         stats_data = get_match_statistics(match_id)
         
         if not event_data:
             print(f"Brak danych z API dla ID: {match_id}")
             continue
-            
-        # Zabezpieczenie przed meczami, które się jeszcze nie odbyły
-        if event_data.get('status', {}).get('type') != 'finished':
-            print(f"Mecz {match_id} jeszcze się nie zakończył. Pomijam.")
-            continue
 
-        # 2. Wyciąganie podstawowych informacji
+        # Pobieranie podstawowych informacji
         tournament = event_data.get('tournament', {}).get('name', 'Nieznana liga')
         home_team = event_data.get('homeTeam', {}).get('name', 'Gospodarz')
         away_team = event_data.get('awayTeam', {}).get('name', 'Gość')
@@ -104,7 +100,7 @@ def process_sofascore_scraper():
         score_ht_home = event_data.get('homeScore', {}).get('period1', 0)
         score_ht_away = event_data.get('awayScore', {}).get('period1', 0)
         
-        # 3. Wyciąganie zaawansowanych statystyk (Domyślnie z okresu "ALL")
+        # Domyślne wartości statystyk
         possession_h, possession_a = "-", "-"
         corners_h, corners_a = "-", "-"
         shots_on_target_h, shots_on_target_a = "-", "-"
@@ -157,9 +153,7 @@ def process_sofascore_scraper():
             "xG_Gosc": xg_a
         }
         all_rows.append(parsed_row)
-        
-        # Zabezpieczenie przed blokadą anty-botową (1 sekunda przerwy)
-        time.sleep(1)
+        time.sleep(1.5)
         
     return all_rows
 
