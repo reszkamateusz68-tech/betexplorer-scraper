@@ -10,22 +10,36 @@ OPTA_UUID = "ft1tiv1inq7v1sk3y9tv12yh5"
 SEASON_ID = "51r6ph2woavlbbpk8f29nynf8"
 
 def fetch_all_opta_results():
-    """Pobiera pełną bazę meczów w stabilnym, czystym formacie JSON bez użycia callbacków JS."""
-    # Nowy, uproszczony adres URL API Opta, z którego korzystają najnowsze systemy raportowe
-    url = f"https://api.performfeeds.com/soccerdata/match/{OPTA_UUID}?_rt=c&_lcl=en&_fmt=json&tournamentCalendarId={SEASON_ID}"
+    """Pobiera pełną bazę meczów w formacie JSONP akceptowanym przez serwer i oczyszcza go do JSON."""
+    # Używamy uniwersalnego formatu żądania skryptowego (jsonp), który serwer Opta zawsze wpuszcza
+    url = f"https://api.performfeeds.com/soccerdata/match/{OPTA_UUID}?_rt=c&live=yes&_lcl=en&_fmt=jsonp&sps=widgets&tournamentCalendarId={SEASON_ID}"
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
+        "Accept": "*/*",
         "Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
         "Origin": "https://optaplayerstats.statsperform.com",
-        "Referer": "https://optaplayerstats.statsperform.com/"
+        "Referer": "https://optaplayerstats.statsperform.com/",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache"
     }
     
     try:
         response = requests.get(url, headers=headers, timeout=45)
         if response.status_code == 200:
-            return response.json()
+            raw_text = response.text.strip()
+            
+            # Lokalizujemy pierwszy nawias otwierający '(' oraz ostatni zamykający ')'
+            # Pozwala to bezbłędnie wyciąć czysty JSON niezależnie od tego, jaki callback wygenerował serwer
+            start_idx = raw_text.find("(")
+            end_idx = raw_text.rfind(")")
+            
+            if start_idx != -1 and end_idx != -1:
+                json_string = raw_text[start_idx + 1:end_idx]
+                return json.loads(json_string)
+            else:
+                # Na wypadek, gdyby serwer wyjątkowo odpowiedział czystym JSON-em
+                return response.json()
         else:
             print(f"Błąd pobierania danych z Opta API: Status {response.status_code}")
             return None
