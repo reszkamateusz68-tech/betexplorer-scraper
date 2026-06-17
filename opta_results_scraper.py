@@ -10,13 +10,19 @@ OPTA_UUID = "ft1tiv1inq7v1sk3y9tv12yh5"
 SEASON_ID = "51r6ph2woavlbbpk8f29nynf8"
 
 def fetch_all_opta_results():
-    """Pobiera pełną bazę meczów w formacie JSONP akceptowanym przez serwer i oczyszcza go do JSON."""
-    # Używamy uniwersalnego formatu żądania skryptowego (jsonp), który serwer Opta zawsze wpuszcza
-    url = f"https://api.performfeeds.com/soccerdata/match/{OPTA_UUID}?_rt=c&live=yes&_lcl=en&_fmt=jsonp&sps=widgets&tournamentCalendarId={SEASON_ID}"
+    """
+    Pobiera pełną bazę meczów. Sprawdza dwa alternatywne adresy URL (JSON oraz JSONP),
+    aby wyeliminować błędy 400 i błędy pustej struktury danych.
+    """
+    # Wariant 1: Oficjalne żądanie JSONP z kompletnym identyfikatorem widżetu strony głównej
+    url_jsonp = f"https://api.performfeeds.com/soccerdata/match/{OPTA_UUID}?_rt=c&live=yes&_lcl=en&_fmt=jsonp&sps=widgets&tournamentCalendarId={SEASON_ID}&_clbk=W3754ce3eb8ab7e2434613a6cb279a2fa7c2a72eb7"
+    
+    # Wariant 2: Żądanie czystego formatu JSON używane jako fallback
+    url_json = f"https://api.performfeeds.com/soccerdata/match/{OPTA_UUID}?_rt=c&live=yes&_lcl=en&_fmt=json&sps=widgets&tournamentCalendarId={SEASON_ID}"
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
-        "Accept": "*/*",
+        "Accept": "application/json, text/plain, */*",
         "Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
         "Origin": "https://optaplayerstats.statsperform.com",
         "Referer": "https://optaplayerstats.statsperform.com/",
@@ -24,28 +30,34 @@ def fetch_all_opta_results():
         "Pragma": "no-cache"
     }
     
+    # Najpierw próbujemy pobrać oficjalny format ze strony (JSONP)
     try:
-        response = requests.get(url, headers=headers, timeout=45)
-        if response.status_code == 200:
+        print("Próba pobrania danych przez główny kanał JSONP...")
+        response = requests.get(url_jsonp, headers=headers, timeout=30)
+        if response.status_code == 200 and "(" in response.text:
             raw_text = response.text.strip()
-            
-            # Lokalizujemy pierwszy nawias otwierający '(' oraz ostatni zamykający ')'
-            # Pozwala to bezbłędnie wyciąć czysty JSON niezależnie od tego, jaki callback wygenerował serwer
             start_idx = raw_text.find("(")
             end_idx = raw_text.rfind(")")
-            
             if start_idx != -1 and end_idx != -1:
                 json_string = raw_text[start_idx + 1:end_idx]
-                return json.loads(json_string)
-            else:
-                # Na wypadek, gdyby serwer wyjątkowo odpowiedział czystym JSON-em
-                return response.json()
-        else:
-            print(f"Błąd pobierania danych z Opta API: Status {response.status_code}")
-            return None
+                data = json.loads(json_string)
+                if 'match' in data:
+                    return data
     except Exception as e:
-        print(f"Błąd sieciowy podczas połączenia z Opta API: {e}")
-        return None
+        print(f"Główny kanał niedostępny: {e}")
+
+    # Jeśli JSONP zawiedzie lub struktura będzie pusta, automatycznie odpala się Fallback (Czysty JSON)
+    try:
+        print("Kanał główny pusty. Uruchamianie alternatywnego pobierania JSON...")
+        response = requests.get(url_json, headers=headers, timeout=30)
+        if response.status_code == 200:
+            data = response.json()
+            if 'match' in data:
+                return data
+    except Exception as e:
+        print(f"Błąd alternatywnego pobierania: {e}")
+        
+    return None
 
 def parse_all_matches(json_data):
     """Przetwarza całą strukturę JSON i wyciąga statystyki mecz po meczu."""
@@ -135,9 +147,9 @@ def parse_all_matches(json_data):
     return all_parsed_matches
 
 def save_to_google_sheets(parsed_data):
-    """Zapisuje przefiltrowane dane do Google Sheets do arkusza Opta_Results."""
+    """Zapisuje przefiltrowane dane do Google Sheets przy użyciu bezpośredniego adresu URL."""
     if not parsed_data:
-        print("Brak nowych danych do zapisania.")
+        print("Brak nowych danych do wykonania zapisu.")
         return
         
     df = pd.DataFrame(parsed_data)
@@ -150,23 +162,5 @@ def save_to_google_sheets(parsed_data):
         
     client = gspread.authorize(creds)
     
-    # Otwieranie pliku bezpośrednio przez URL
-    spreadsheet = client.open_by_url("https://docs.google.com/spreadsheets/d/11yc_BrZA649aZgeJhLedETqg6NI1k1_QFje7WNEjIHk/edit")
-    
-    try:
-        sheet = spreadsheet.worksheet("Opta_Results")
-    except gspread.exceptions.WorksheetNotFound:
-        sheet = spreadsheet.add_worksheet(title="Opta_Results", rows=2000, cols=20)
-        
-    sheet.clear()
-    sheet.update(([df.columns.tolist()] + df.values.tolist()), "A1")
-    print(f"Pomyślnie zsynchronizowano {len(df)} rozegranych meczów z Opta Stats do Google Sheets!")
-
-if __name__ == "__main__":
-    print("Pobieranie bazy danych Opta...")
-    raw_json = fetch_all_opta_results()
-    if raw_json:
-        print("Przetwarzanie danych...")
-        clean_data = parse_all_matches(raw_json)
-        print("Zapis do Google Sheets...")
-        save_to_google_sheets(clean_data)
+    # Otwieranie pliku bezpośrednio przez URL - omija restrykcje Dysków Wspólnych (Błąd 400 bad request)
+    spreadsheet = client.open_by_url("
