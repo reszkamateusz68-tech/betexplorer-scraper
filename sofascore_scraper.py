@@ -5,6 +5,7 @@ from google.oauth2.service_account import Credentials
 import os
 import json
 import time
+import re
 
 def get_sofascore_headers():
     """Generuje nagłówki imitujące prawdziwą przeglądarkę, aby ominąć blokady API."""
@@ -18,7 +19,7 @@ def get_sofascore_headers():
     }
 
 def load_sofascore_ids():
-    """Czyta plik tekstowy i wyciąga unikalne ID meczów z linków Sofascore."""
+    """Czyta plik tekstowy i wyciąga wyłącznie czyste, numeryczne ID meczów z linków Sofascore."""
     file_path = "sofascore_matches.txt"
     if not os.path.exists(file_path):
         print(f"BŁĄD: Nie znaleziono pliku {file_path}")
@@ -28,10 +29,15 @@ def load_sofascore_ids():
     with open(file_path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            if "id:" in line:
-                # Wyciągamy sam numer ID po "id:"
-                m_id = line.split("id:")[-1]
-                match_ids.append(m_id)
+            if not line:
+                continue
+            
+            # Szukamy ciągu cyfr o długości 7-9 znaków w linku za pomocą wyrażeń regularnych
+            # To rozwiązanie jest w 100% odporne na dopiski typu ,tab:statistics
+            found_ids = re.findall(r'\d{7,9}', line)
+            if found_ids:
+                # Bierzemy ostatni znaleziony ciąg cyfr, bo to jest zawsze ID meczu
+                match_ids.append(found_ids[-1])
                 
     print(f"Znaleziono {len(match_ids)} meczów do przetworzenia.")
     return match_ids
@@ -79,6 +85,7 @@ def process_sofascore_scraper():
         stats_data = get_match_statistics(match_id)
         
         if not event_data:
+            print(f"Brak danych z API dla ID: {match_id}")
             continue
             
         # Zabezpieczenie przed meczami, które się jeszcze nie odbyły
