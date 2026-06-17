@@ -163,4 +163,23 @@ def save_to_google_sheets(parsed_data):
     client = gspread.authorize(creds)
     
     # Otwieranie pliku bezpośrednio przez URL - omija restrykcje Dysków Wspólnych (Błąd 400 bad request)
-    spreadsheet = client.open_by_url("
+    spreadsheet = client.open_by_url("https://docs.google.com/spreadsheets/d/11yc_BrZA649aZgeJhLedETqg6NI1k1_QFje7WNEjIHk/edit")
+    
+    try:
+        sheet = spreadsheet.worksheet("Opta_Results")
+    except gspread.exceptions.WorksheetNotFound:
+        sheet = spreadsheet.add_worksheet(title="Opta_Results", rows=2000, cols=20)
+        
+    sheet.clear()
+    # Nowa, zaktualizowana składnia dla biblioteki gspread v6+ z jawnym podaniem komórki startowej A1
+    sheet.update(([df.columns.tolist()] + df.values.tolist()), "A1")
+    print(f"Pomyślnie zsynchronizowano {len(df)} rozegranych meczów z Opta Stats do Google Sheets!")
+
+if __name__ == "__main__":
+    print("Pobieranie bazy danych Opta...")
+    raw_json = fetch_all_opta_results()
+    if raw_json:
+        print("Przetwarzanie danych...")
+        clean_data = parse_all_matches(raw_json)
+        print("Zapis do Google Sheets...")
+        save_to_google_sheets(clean_data)
