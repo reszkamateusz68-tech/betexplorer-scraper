@@ -43,7 +43,7 @@ def process_local_scraper():
         print("Nie znaleziono sekcji statystyk 'ALL' w pliku.")
         return []
 
-    # Wyciąganie parametrów
+    # Wyciąganie parametrów z poprawioną nazwą grupy (all_stats_group)
     possession_h = extract_stat_value(all_stats_group, 'Ball possession', 'home')
     possession_a = extract_stat_value(all_stats_group, 'Ball possession', 'away')
     
@@ -60,9 +60,9 @@ def process_local_scraper():
     yellow_cards_a = extract_stat_value(all_stats_group, 'Yellow cards', 'away')
     
     xg_h = extract_stat_value(all_stats_group, 'Expected goals', 'home')
-    xg_a = extract_stat_value(all_stats_value, 'Expected goals', 'away')
+    xg_a = extract_stat_value(all_stats_group, 'Expected goals', 'away')
 
-    # Tworzymy wiersz danych (W tej opcji nazwy drużyn i wyniki dopiszesz w arkuszu lub pobierzesz z ID)
+    # Tworzymy wiersz danych
     parsed_row = {
         "ID_Meczu": "Zrzut Lokalny",
         "Posiadanie_Gosp": possession_h,
