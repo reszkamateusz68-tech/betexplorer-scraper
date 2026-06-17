@@ -15,7 +15,6 @@ def fetch_all_opta_results():
         with open(file_path, "r", encoding="utf-8") as f:
             raw_text = f.read().strip()
             
-        # Wycinamy nawiasy JSONP, aby uzyskać czysty słownik dla Pythona
         start_idx = raw_text.find("(")
         end_idx = raw_text.rfind(")")
         
@@ -29,7 +28,7 @@ def fetch_all_opta_results():
         return None
 
 def parse_all_matches(json_data):
-    """Przetwarza całą strukturę i wyciąga statystyki mecz po meczu."""
+    """Przetwarza całą strukturę i wyciąga statystyki meczowe oraz zaawansowane parametry drużyn."""
     if not json_data or 'match' not in json_data:
         print("Brak danych meczowych w strukturze JSON.")
         return []
@@ -72,6 +71,7 @@ def parse_all_matches(json_data):
             if official.get('type') == 'Main':
                 referee = f"{official.get('firstName', '')} {official.get('lastName', '')}".strip()
                 
+        # Podstawowe statystyki kartek i zmian
         cards = live_data.get('card', [])
         home_yellows = sum(1 for c in cards if c.get('type') == 'YC' and c.get('contestantId') == home_id)
         away_yellows = sum(1 for c in cards if c.get('type') == 'YC' and c.get('contestantId') == away_id)
@@ -84,6 +84,46 @@ def parse_all_matches(json_data):
         
         var_events = len(live_data.get('VAR', []))
         
+        # ==============================================================================
+        # EKSTRAKCJA ZAAWANSOWANYCH STATYSTYK DRUŻYNOWYCH (Strzały, rożne, posiadanie, faule)
+        # ==============================================================================
+        # Inicjalizacja domyślnych wartości na wypadek braku danych w pliku surowym
+        possession_h, possession_a = "-", "-"
+        shots_h, shots_a = "-", "-"
+        sot_h, sot_a = "-", "-"
+        corners_h, corners_a = "-", "-"
+        fouls_h, fouls_a = "-", "-"
+        xg_h, xg_a = "-", "-"
+        
+        # Szukamy sekcji 'lineUp' lub 'teamStats', w której Opta zapisuje podsumowania statystyczne
+        lineups = live_data.get('lineUp', [])
+        for lineup in lineups:
+            c_id = lineup.get('contestantId')
+            stats = lineup.get('teamStats', {})
+            
+            # Pobieramy parametry słownikowe statystyk
+            possession = stats.get('possessionPercentage', "-")
+            total_shots = stats.get('totalShots', "-")
+            shots_on_target = stats.get('shotsOnTarget', "-")
+            corners = stats.get('cornerKicks', "-")
+            fouls = stats.get('foulsCommited', stats.get('fouls', "-"))
+            expected_goals = stats.get('expectedGoals', stats.get('xg', "-"))
+            
+            if c_id == home_id:
+                possession_h = possession
+                shots_h = total_shots
+                sot_h = shots_on_target
+                corners_h = corners
+                fouls_h = fouls
+                xg_h = expected_goals
+            elif c_id == away_id:
+                possession_a = possession
+                shots_a = total_shots
+                sot_a = shots_on_target
+                corners_a = corners
+                fouls_a = fouls
+                xg_a = expected_goals
+
         parsed_row = {
             "Match_ID": match_id,
             "Kolejka": week,
@@ -102,7 +142,20 @@ def parse_all_matches(json_data):
             "Zmiany_Gosc": away_subs,
             "Interwencje_VAR": var_events,
             "Widzow": attendance,
-            "Sedzia": referee
+            "Sedzia": referee,
+            # Nowe zaawansowane kolumny:
+            "Posiadanie_Gosp_%": possession_h,
+            "Posiadanie_Gosc_%": possession_a,
+            "Strzaly_Gospodarz": shots_h,
+            "Strzaly_Gosc": shots_a,
+            "Celne_Gospodarz": sot_h,
+            "Celne_Gosc": sot_a,
+            "Rozne_Gospodarz": corners_h,
+            "Rozne_Gosc": corners_a,
+            "Faule_Gospodarz": fouls_h,
+            "Faule_Gosc": fouls_a,
+            "xG_Gospodarz": xg_h,
+            "xG_Gosc": xg_a
         }
         all_parsed_matches.append(parsed_row)
         
@@ -128,11 +181,11 @@ def save_to_google_sheets(parsed_data):
     try:
         sheet = spreadsheet.worksheet("Opta_Results")
     except gspread.exceptions.WorksheetNotFound:
-        sheet = spreadsheet.add_worksheet(title="Opta_Results", rows=2000, cols=20)
+        sheet = spreadsheet.add_worksheet(title="Opta_Results", rows=2000, cols=35)
         
     sheet.clear()
     sheet.update(([df.columns.tolist()] + df.values.tolist()), "A1")
-    print(f"SUKCES: Pomyślnie zsynchronizowano {len(df)} rozegranych meczów Premier League z pliku tekstowego do Google Sheets!")
+    print(f"SUKCES: Pomyślnie zsynchronizowano {len(df)} rozegranych meczów wraz Z ZAAWANSOWANYMI STATYSTYKAMI do Google Sheets!")
 
 if __name__ == "__main__":
     print("Wczytywanie lokalnej bazy danych Opta...")
