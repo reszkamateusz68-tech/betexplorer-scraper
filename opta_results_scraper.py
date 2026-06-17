@@ -14,10 +14,19 @@ def fetch_all_opta_results():
     # Zmieniamy parametry na czysty JSON (_fmt=json) i usuwamy callback JavaScript
     url = f"https://api.performfeeds.com/soccerdata/match/{OPTA_UUID}?_rt=c&live=yes&_lcl=en&_fmt=json&sps=widgets&tournamentCalendarId={SEASON_ID}"
     
+def fetch_all_opta_results():
+    """Pobiera pełny plik ze wszystkimi meczami sezonu w czystym formacie JSON."""
+    url = f"https://api.performfeeds.com/soccerdata/match/{OPTA_UUID}?_rt=c&live=yes&_lcl=en&_fmt=json&sps=widgets&tournamentCalendarId={SEASON_ID}"
+    
+    # Rozbudowane nagłówki imitujące autentyczne zapytanie z przeglądarki do API Performfeeds
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
         "Origin": "https://optaplayerstats.statsperform.com",
-        "Referer": "https://optaplayerstats.statsperform.com/"
+        "Referer": "https://optaplayerstats.statsperform.com/",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache"
     }
     
     try:
