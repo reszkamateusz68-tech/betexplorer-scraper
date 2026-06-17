@@ -11,11 +11,10 @@ OPTA_UUID = "ft1tiv1inq7v1sk3y9tv12yh5"
 SEASON_ID = "51r6ph2woavlbbpk8f29nynf8"
 
 def fetch_all_opta_results():
-    """Pobiera plik ze wszystkimi meczami w oryginalnym formacie JSONP i konwertuje do JSON."""
-    # Używamy dokładnie takich parametrów, jakie generuje strona (JSONP z callbackiem)
-    url = f"https://api.performfeeds.com/soccerdata/match/{OPTA_UUID}?_rt=c&live=yes&_lcl=en&_fmt=jsonp&sps=widgets&tournamentCalendarId={SEASON_ID}&_clbk=W3754ce3eb8ab7e2434613a6cb279a2fa7c2a72eb7"
+    """Pobiera plik ze wszystkimi meczami w oryginalnym formacie JSONP i inteligentnie konwertuje do JSON."""
+    # Uniwersalny link JSONP używany przez widgety na stronie Opta
+    url = f"https://api.performfeeds.com/soccerdata/match/{OPTA_UUID}?_rt=c&live=yes&_lcl=en&_fmt=jsonp&sps=widgets&tournamentCalendarId={SEASON_ID}"
     
-    # Maksymalnie rozbudowane nagłówki, żeby idealnie udawać zwykłego użytkownika Chrome
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
         "Accept": "*/*",
@@ -32,16 +31,19 @@ def fetch_all_opta_results():
     try:
         response = requests.get(url, headers=headers, timeout=45)
         if response.status_code == 200:
-            text_data = response.text
+            text_data = response.text.strip()
             
-            # Czyścimy format JSONP: usuwamy "W3754ce3eb8ab7e2434613a6cb279a2fa7c2a72eb7(" z początku i ")" z końca
-            # Dzięki temu uzyskamy czysty obiekt JSON/Słownik w Pythonie
-            match = re.search(r'^.*?\((.*)\)\s*$', text_data, re.DOTALL)
-            if match:
-                json_string = match.group(1)
+            # PANCERNE PARSOWANIE: Znajdujemy pozycję pierwszego '(' oraz ostatniego ')'
+            # Pozwala to odciąć KAŻDY losowy callback JavaScript (np. W3754ce... lub jQuery...)
+            start_idx = text_data.find('(')
+            end_idx = text_data.rfind(')')
+            
+            if start_idx != -1 and end_idx != -1:
+                # Wycinamy tylko to, co znajduje się wewnątrz nawiasów (czyli czysty JSON)
+                json_string = text_data[start_idx + 1:end_idx]
                 return json.loads(json_string)
             else:
-                print("Błąd parsowania formatu JSONP.")
+                print("Błąd struktury: Nie znaleziono nawiasów JSONP w odpowiedzi serwera.")
                 return None
         else:
             print(f"Błąd pobierania danych z Opta API: Status {response.status_code}")
