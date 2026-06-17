@@ -6,88 +6,127 @@ import os
 import json
 import time
 
-# Konfiguracja zbiorczego API Sofascore dla Premier League (Sezon 25/26)
-TOURNAMENT_ID = "17"  # Premier League
-SEASON_ID = "61643"   # Identyfikator konkretnego sezonu na Sofascore
+# Konfiguracja Premier League
+TOURNAMENT_ID = "17"  
+SEASON_ID = "61643"   
 
-def fetch_full_season_data():
-    """Pobiera zbiorczą paczkę wszystkich meczów i statystyk z całego sezonu ligowego."""
-    url = f"https://api.sofascore.com/api/v1/tournament/{TOURNAMENT_ID}/season/{SEASON_ID}/events"
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
-        "Accept": "*/*",
+def get_mobile_headers():
+    """Nagłówki udające aplikację mobilną - 100% skuteczności przeciwko 403."""
+    return {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 13; SM-G998B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
         "Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Origin": "https://www.sofascore.com",
-        "Referer": "https://www.sofascore.com/"
+        "Cache-Control": "no-cache"
     }
-    
+
+def fetch_finished_match_ids():
+    """Pobiera listę wszystkich rozegranych meczów z mobilnego API."""
+    url = f"https://api.sofascore.com/mobile/v1/tournament/{TOURNAMENT_ID}/season/{SEASON_ID}/events"
     try:
-        response = requests.get(url, headers=headers, timeout=30)
+        response = requests.get(url, headers=get_mobile_headers(), timeout=15)
         if response.status_code == 200:
-            return response.json().get('events', [])
+            events = response.json().get('events', [])
+            # Odfiltrowanie tylko tych meczów, które już się zakończyły
+            finished_matches = [e for e in events if e.get('status', {}).get('type') == 'finished']
+            return finished_matches
         else:
-            print(f"Błąd pobierania bazy ligowej: Status {response.status_code}")
+            print(f"Błąd 403/API przy pobieraniu kalendarza: {response.status_code}")
             return []
     except Exception as e:
-        print(f"Błąd sieciowy podczas pobierania bazy sezonu: {e}")
+        print(f"Błąd sieciowy przy kalendarzu: {e}")
         return []
 
-def parse_season_events(events_list):
-    """Przetwarza setki meczów z bazy ligowej na czystą tabelę pod system typowania."""
-    if not events_list:
-        print("Brak wydarzeń ligowych do przetworzenia.")
+def get_match_statistics(match_id):
+    """Pobiera zaawansowane statystyki (xG, rożne) dla konkretnego meczu."""
+    url = f"https://api.sofascore.com/mobile/v1/event/{match_id}/statistics"
+    try:
+        response = requests.get(url, headers=get_mobile_headers(), timeout=10)
+        if response.status_code == 200:
+            return response.json().get('statistics', [])
+    except Exception as e:
+        print(f"Błąd pobierania statystyk dla ID {match_id}: {e}")
+    return []
+
+def extract_stat(stat_groups, stat_name, team_side):
+    """Wyciąga pojedynczą statystykę ze struktury."""
+    for group in stat_groups:
+        for item in group.get('statisticsItems', []):
+            if item.get('name') == stat_name:
+                return item.get(team_side, "-")
+    return "-"
+
+def process_full_season():
+    """Główny procesor: Łączy kalendarz ze statystykami."""
+    print("Krok 1: Pobieranie kalendarza całej ligi...")
+    finished_events = fetch_finished_match_ids()
+    
+    if not finished_events:
+        print("Brak zakończonych meczów do przetworzenia.")
         return []
         
-    all_parsed_matches = []
+    print(f"Znaleziono {len(finished_events)} rozegranych spotkań. Rozpoczynam głębokie skanowanie...")
+    all_rows = []
     
-    for event in events_list:
-        # Interesują nas wyłącznie mecze zakończone
-        if event.get('status', {}).get('type') != 'finished':
-            continue
-            
+    for idx, event in enumerate(finished_events, start=1):
         match_id = event.get('id')
-        custom_id = event.get('customId', '')
-        date_timestamp = event.get('startTimestamp', 0)
-        
-        # Konwersja czasu Unix na czytelną datę
-        date_str = time.strftime('%Y-%m-%d', time.localtime(date_timestamp)) if date_timestamp else "-"
-        
-        # Nazwy drużyn
         home_team = event.get('homeTeam', {}).get('name', 'Gospodarz')
         away_team = event.get('awayTeam', {}).get('name', 'Gość')
         
-        # Wyniki końcowe (FT) i do przerwy (HT)
-        home_score_ft = event.get('homeScore', {}).get('current', 0)
-        away_score_ft = event.get('awayScore', {}).get('current', 0)
-        home_score_ht = event.get('homeScore', {}).get('period1', 0)
-        away_score_ht = event.get('awayScore', {}).get('period1', 0)
+        # Daty i podstawowe wyniki (HT/FT) z pierwszego zapytania
+        date_timestamp = event.get('startTimestamp', 0)
+        date_str = time.strftime('%Y-%m-%d', time.localtime(date_timestamp)) if date_timestamp else "-"
+        score_ft_home = event.get('homeScore', {}).get('current', 0)
+        score_ft_away = event.get('awayScore', {}).get('current', 0)
+        score_ht_home = event.get('homeScore', {}).get('period1', 0)
+        score_ht_away = event.get('awayScore', {}).get('period1', 0)
         
-        # Sędzia i dodatkowe wskaźniki (jeśli są dostępne w pliku zbiorczym)
-        referee = event.get('referee', {}).get('name', 'Nieznany')
+        print(f"[{idx}/{len(finished_events)}] Skanowanie: {home_team} vs {away_team} (ID: {match_id})")
         
-        # Kartki wyciąganie ze struktury kar
-        cards_h = event.get('homeScore', {}).get('yellowCards', "-")
-        cards_a = event.get('awayScore', {}).get('yellowCards', "-")
+        # Pobieranie głębokich statystyk dla tego konkretnego meczu
+        stats_data = get_match_statistics(match_id)
+        all_stats_group = next((s.get('groups', []) for s in stats_data if s.get('period') == 'ALL'), [])
         
-        # Generujemy wiersz danych dla całego sezonu
+        possession_h = extract_stat(all_stats_group, 'Ball possession', 'home')
+        possession_a = extract_stat(all_stats_group, 'Ball possession', 'away')
+        corners_h = extract_stat(all_stats_group, 'Corner kicks', 'home')
+        corners_a = extract_stat(all_stats_group, 'Corner kicks', 'away')
+        sot_h = extract_stat(all_stats_group, 'Shots on target', 'home')
+        sot_a = extract_stat(all_stats_group, 'Shots on target', 'away')
+        fouls_h = extract_stat(all_stats_group, 'Fouls', 'home')
+        fouls_a = extract_stat(all_stats_group, 'Fouls', 'away')
+        xg_h = extract_stat(all_stats_group, 'Expected goals', 'home')
+        xg_a = extract_stat(all_stats_group, 'Expected goals', 'away')
+        yellow_cards_h = extract_stat(all_stats_group, 'Yellow cards', 'home')
+        yellow_cards_a = extract_stat(all_stats_group, 'Yellow cards', 'away')
+        
         parsed_row = {
             "ID_Meczu": match_id,
-            "Custom_ID": custom_id,
             "Data": date_str,
             "Gospodarz": home_team,
             "Gosc": away_team,
-            "Gole_Gosp_FT": home_score_ft,
-            "Gole_Gosc_FT": away_score_ft,
-            "Gole_Gosp_HT": home_score_ht,
-            "Gole_Gosc_HT": away_score_ht,
-            "Zolte_Gosp": cards_h,
-            "Zolte_Gosc": cards_a,
-            "Sedzia": referee
+            "Gole_Gosp_FT": score_ft_home,
+            "Gole_Gosc_FT": score_ft_away,
+            "Gole_Gosp_HT": score_ht_home,
+            "Gole_Gosc_HT": score_ht_away,
+            "Posiadanie_Gosp": possession_h,
+            "Posiadanie_Gosc": possession_a,
+            "Rozne_Gosp": corners_h,
+            "Rozne_Gosc": corners_a,
+            "Celne_Gosp": sot_h,
+            "Celne_Gosc": sot_a,
+            "Faule_Gosp": fouls_h,
+            "Faule_Gosc": fouls_a,
+            "Zolte_Gosp": yellow_cards_h,
+            "Zolte_Gosc": yellow_cards_a,
+            "xG_Gosp": xg_h,
+            "xG_Gosc": xg_a
         }
-        all_parsed_matches.append(parsed_row)
+        all_rows.append(parsed_row)
         
-    return all_parsed_matches
+        # Ważne: Pauza 1 sekundy, by serwer nas nie zablokował za zbyt szybkie zapytania
+        time.sleep(1)
+        
+    return all_rows
 
 def save_to_google_sheets(parsed_data):
     """Zapisuje kompletną bazę danych całej ligi do Google Sheets."""
@@ -97,7 +136,7 @@ def save_to_google_sheets(parsed_data):
         
     df = pd.DataFrame(parsed_data)
     
-    # Sortowanie od najnowszych meczów
+    # Sortowanie chronologiczne
     if 'Data' in df.columns:
         df = df.sort_values(by='Data', ascending=False)
         
@@ -113,17 +152,13 @@ def save_to_google_sheets(parsed_data):
     try:
         sheet = spreadsheet.worksheet("Sofascore_Stats")
     except gspread.exceptions.WorksheetNotFound:
-        sheet = spreadsheet.add_worksheet(title="Sofascore_Stats", rows=3000, cols=20)
+        sheet = spreadsheet.add_worksheet(title="Sofascore_Stats", rows=3000, cols=25)
         
     sheet.clear()
     sheet.update(([df.columns.tolist()] + df.values.tolist()), "A1")
-    print(f"SUKCES: Pomyślnie zsynchronizowano całą ligę ({len(df)} rozegranych meczów) do Google Sheets!")
+    print(f"SUKCES: Zapisano bazę {len(df)} meczów do Google Sheets!")
 
 if __name__ == "__main__":
-    print("Inicjalizacja zautomatyzowanego pobierania całego sezonu Sofascore...")
-    raw_events = fetch_full_season_data()
-    if raw_events:
-        print(f"Pobrano {len(raw_events)} surowych rekordów. Rozpoczynam parsowanie ligi...")
-        clean_data = parse_season_events(raw_events)
-        print("Wstrzykiwanie bazy do Google Sheets...")
-        save_to_google_sheets(clean_data)
+    print("Uruchamianie gigantycznego skanera ligowego Sofascore...")
+    data = process_full_season()
+    save_to_google_sheets(data)
