@@ -136,7 +136,7 @@ def save_to_google_sheets(parsed_data):
         creds = Credentials.from_service_account_info(json.loads(os.environ["GOOGLE_CREDENTIALS"]), scopes=scope)
         
     client = gspread.authorize(creds)
-    spreadsheet = client.open_by_key("11yc_BrZA649aZgeJhLedETqg6NI1k1_QFje7WNEjIHk") # Otwieramy Twój główny plik bota
+    spreadsheet = client.open_by_url("https://docs.google.com/spreadsheets/d/11yc_BrZA649aZgeJhLedETqg6NI1k1_QFje7WNEjIHk/edit") # Otwieramy Twój główny plik bota
     
     try:
         sheet = spreadsheet.worksheet("Opta_Results")
