@@ -386,7 +386,7 @@ else:
 
 client = gspread.authorize(creds)
 
-spreadsheet = client.open_by_url("https://docs.google.com/spreadsheets/d/11yc_BrZA649aZgeJhLedETqg6NI1k1_QFje7WNEjIHk/edit")
+spreadsheet = client.open("BetExplorer")
 
 try:
     summary_sheet = spreadsheet.worksheet("Summary")
