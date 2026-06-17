@@ -4,47 +4,28 @@ import gspread
 from google.oauth2.service_account import Credentials
 import os
 import json
-import re
 
-# Konfiguracja API Opta na podstawie przesłanego tokenu i sezonu
+# Konfiguracja API Opta na podstawie oficjalnego widgetu ligowego
 OPTA_UUID = "ft1tiv1inq7v1sk3y9tv12yh5"
 SEASON_ID = "51r6ph2woavlbbpk8f29nynf8"
 
 def fetch_all_opta_results():
-    """Pobiera plik ze wszystkimi meczami w oryginalnym formacie JSONP i inteligentnie konwertuje do JSON."""
-    # Uniwersalny link JSONP używany przez widgety na stronie Opta
-    url = f"https://api.performfeeds.com/soccerdata/match/{OPTA_UUID}?_rt=c&live=yes&_lcl=en&_fmt=jsonp&sps=widgets&tournamentCalendarId={SEASON_ID}"
+    """Pobiera pełną bazę meczów w stabilnym, czystym formacie JSON bez użycia callbacków JS."""
+    # Nowy, uproszczony adres URL API Opta, z którego korzystają najnowsze systemy raportowe
+    url = f"https://api.performfeeds.com/soccerdata/match/{OPTA_UUID}?_rt=c&_lcl=en&_fmt=json&tournamentCalendarId={SEASON_ID}"
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
-        "Accept": "*/*",
+        "Accept": "application/json, text/plain, */*",
         "Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
         "Origin": "https://optaplayerstats.statsperform.com",
-        "Referer": "https://optaplayerstats.statsperform.com/",
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache",
-        "Sec-Fetch-Dest": "script",
-        "Sec-Fetch-Mode": "no-cors",
-        "Sec-Fetch-Site": "cross-site"
+        "Referer": "https://optaplayerstats.statsperform.com/"
     }
     
     try:
         response = requests.get(url, headers=headers, timeout=45)
         if response.status_code == 200:
-            text_data = response.text.strip()
-            
-            # PANCERNE PARSOWANIE: Znajdujemy pozycję pierwszego '(' oraz ostatniego ')'
-            # Pozwala to odciąć KAŻDY losowy callback JavaScript (np. W3754ce... lub jQuery...)
-            start_idx = text_data.find('(')
-            end_idx = text_data.rfind(')')
-            
-            if start_idx != -1 and end_idx != -1:
-                # Wycinamy tylko to, co znajduje się wewnątrz nawiasów (czyli czysty JSON)
-                json_string = text_data[start_idx + 1:end_idx]
-                return json.loads(json_string)
-            else:
-                print("Błąd struktury: Nie znaleziono nawiasów JSONP w odpowiedzi serwera.")
-                return None
+            return response.json()
         else:
             print(f"Błąd pobierania danych z Opta API: Status {response.status_code}")
             return None
@@ -65,7 +46,7 @@ def parse_all_matches(json_data):
         live_data = match_node.get('liveData', {})
         match_details = live_data.get('matchDetails', {})
         
-        # Ignorujemy mecze, które się jeszcze nie odbyły (brak statusu 'Played')
+        # Interesują nas wyłącznie mecze zakończone
         if match_details.get('matchStatus') != 'Played':
             continue
             
@@ -155,7 +136,7 @@ def save_to_google_sheets(parsed_data):
         
     client = gspread.authorize(creds)
     
-    # Otwieranie pliku bezpośrednio przez URL - najbardziej stabilna metoda
+    # Otwieranie pliku bezpośrednio przez URL
     spreadsheet = client.open_by_url("https://docs.google.com/spreadsheets/d/11yc_BrZA649aZgeJhLedETqg6NI1k1_QFje7WNEjIHk/edit")
     
     try:
