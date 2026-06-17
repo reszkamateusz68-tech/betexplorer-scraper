@@ -4,35 +4,45 @@ import gspread
 from google.oauth2.service_account import Credentials
 import os
 import json
+import re
 
 # Konfiguracja API Opta na podstawie przesłanego tokenu i sezonu
 OPTA_UUID = "ft1tiv1inq7v1sk3y9tv12yh5"
 SEASON_ID = "51r6ph2woavlbbpk8f29nynf8"
 
 def fetch_all_opta_results():
-    """Pobiera pełny plik ze wszystkimi meczami sezonu w czystym formacie JSON."""
-    # Zmieniamy parametry na czysty JSON (_fmt=json) i usuwamy callback JavaScript
-    url = f"https://api.performfeeds.com/soccerdata/match/{OPTA_UUID}?_rt=c&live=yes&_lcl=en&_fmt=json&sps=widgets&tournamentCalendarId={SEASON_ID}"
+    """Pobiera plik ze wszystkimi meczami w oryginalnym formacie JSONP i konwertuje do JSON."""
+    # Używamy dokładnie takich parametrów, jakie generuje strona (JSONP z callbackiem)
+    url = f"https://api.performfeeds.com/soccerdata/match/{OPTA_UUID}?_rt=c&live=yes&_lcl=en&_fmt=jsonp&sps=widgets&tournamentCalendarId={SEASON_ID}&_clbk=W3754ce3eb8ab7e2434613a6cb279a2fa7c2a72eb7"
     
-def fetch_all_opta_results():
-    """Pobiera pełny plik ze wszystkimi meczami sezonu w czystym formacie JSON."""
-    url = f"https://api.performfeeds.com/soccerdata/match/{OPTA_UUID}?_rt=c&live=yes&_lcl=en&_fmt=json&sps=widgets&tournamentCalendarId={SEASON_ID}"
-    
-    # Rozbudowane nagłówki imitujące autentyczne zapytanie z przeglądarki do API Performfeeds
+    # Maksymalnie rozbudowane nagłówki, żeby idealnie udawać zwykłego użytkownika Chrome
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
+        "Accept": "*/*",
         "Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
         "Origin": "https://optaplayerstats.statsperform.com",
         "Referer": "https://optaplayerstats.statsperform.com/",
         "Cache-Control": "no-cache",
-        "Pragma": "no-cache"
+        "Pragma": "no-cache",
+        "Sec-Fetch-Dest": "script",
+        "Sec-Fetch-Mode": "no-cors",
+        "Sec-Fetch-Site": "cross-site"
     }
     
     try:
         response = requests.get(url, headers=headers, timeout=45)
         if response.status_code == 200:
-            return response.json()
+            text_data = response.text
+            
+            # Czyścimy format JSONP: usuwamy "W3754ce3eb8ab7e2434613a6cb279a2fa7c2a72eb7(" z początku i ")" z końca
+            # Dzięki temu uzyskamy czysty obiekt JSON/Słownik w Pythonie
+            match = re.search(r'^.*?\((.*)\)\s*$', text_data, re.DOTALL)
+            if match:
+                json_string = match.group(1)
+                return json.loads(json_string)
+            else:
+                print("Błąd parsowania formatu JSONP.")
+                return None
         else:
             print(f"Błąd pobierania danych z Opta API: Status {response.status_code}")
             return None
@@ -95,12 +105,12 @@ def parse_all_matches(json_data):
         home_reds = sum(1 for c in cards if c.get('type') in ['RC', 'Y2C'] and c.get('contestantId') == home_id)
         away_reds = sum(1 for c in cards if c.get('type') in ['RC', 'Y2C'] and c.get('contestantId') == away_id)
         
-        # Zliczanie zmian (Substitutions) - przydatne do analizy intensywności meczu
+        # Zliczanie zmian (Substitutions)
         subs = live_data.get('substitute', [])
         home_subs = sum(1 for s in subs if s.get('contestantId') == home_id)
         away_subs = sum(1 for s in subs if s.get('contestantId') == away_id)
         
-        # Interwencje VAR (ile razy anulowano lub zmieniono decyzję na korzyść/niekorzyść)
+        # Interwencje VAR
         var_events = len(live_data.get('VAR', []))
         
         parsed_row = {
@@ -135,9 +145,6 @@ def save_to_google_sheets(parsed_data):
         
     df = pd.DataFrame(parsed_data)
     
-    # Zamiana kropek na przecinki w liczbach (pod polskie ustawienia arkusza, jeśli wymagane)
-    # Dla tych danych liczbowych zachowujemy czysty format int/str.
-    
     scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     if os.path.exists("credentials.json"):
         creds = Credentials.from_service_account_file("credentials.json", scopes=scope)
@@ -145,14 +152,15 @@ def save_to_google_sheets(parsed_data):
         creds = Credentials.from_service_account_info(json.loads(os.environ["GOOGLE_CREDENTIALS"]), scopes=scope)
         
     client = gspread.authorize(creds)
-    spreadsheet = client.open_by_url("https://docs.google.com/spreadsheets/d/11yc_BrZA649aZgeJhLedETqg6NI1k1_QFje7WNEjIHk/edit") # Otwieramy Twój główny plik bota
+    
+    # Otwieranie pliku bezpośrednio przez URL - najbardziej stabilna metoda
+    spreadsheet = client.open_by_url("https://docs.google.com/spreadsheets/d/11yc_BrZA649aZgeJhLedETqg6NI1k1_QFje7WNEjIHk/edit")
     
     try:
         sheet = spreadsheet.worksheet("Opta_Results")
     except gspread.exceptions.WorksheetNotFound:
         sheet = spreadsheet.add_worksheet(title="Opta_Results", rows=2000, cols=20)
         
-    # Nadpisujemy lub aktualizujemy arkusz nowym zestawem danych
     sheet.clear()
     sheet.update(([df.columns.tolist()] + df.values.tolist()), "A1")
     print(f"Pomyślnie zsynchronizowano {len(df)} rozegranych meczów z Opta Stats do Google Sheets!")
