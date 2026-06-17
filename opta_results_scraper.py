@@ -145,7 +145,7 @@ def save_to_google_sheets(parsed_data):
         
     # Nadpisujemy lub aktualizujemy arkusz nowym zestawem danych
     sheet.clear()
-    sheet.update([df.columns.tolist()] + df.values.tolist())
+    sheet.update(([df.columns.tolist()] + df.values.tolist()), "A1")
     print(f"Pomyślnie zsynchronizowano {len(df)} rozegranych meczów z Opta Stats do Google Sheets!")
 
 if __name__ == "__main__":
