@@ -313,7 +313,6 @@ try:
         for i_ss, url_ss in enumerate(urls_ss, start=1):
             url_ss = str(url_ss).strip()
             
-            # Pobieramy nazwę ligi z linku
             try:
                 nazwa_ligi = url_ss.split("league=")[1].split("&")[0]
             except:
@@ -324,75 +323,79 @@ try:
             html_ss = skaner_ss.get(url_ss, headers={"User-Agent": headers["User-Agent"]}, timeout=30).text
             soup_ss = BeautifulSoup(html_ss, "html.parser")
             
-            # Inteligentne szukanie tabeli po unikalnych nagłówkach tekstowych
+            # Szukamy tabeli, która zawiera unikalne dla meczów teksty nagłówkowe
             tabela_meczow = None
             wszystkie_tabele = soup_ss.find_all("table")
             for t in wszystkie_tabele:
                 tekst_tabeli = t.get_text()
-                # Szukamy tabeli, która zawiera kolumny statystyczne widoczne na ekranie
                 if "*HT*" in tekst_tabeli and "*BTS*" in tekst_tabeli:
                     tabela_meczow = t
                     break
             
             if tabela_meczow:
-                # Pobieramy WSZYSTKIE wiersze z tej tabeli
                 wiersze_ss = tabela_meczow.find_all("tr")
                 
                 for wiersz in wiersze_ss:
                     komorki = wiersz.find_all("td")
                     
-                    # Tabela wyników ma zazwyczaj 8-9 kolumn (w tym puste separatory)
+                    # Interesują nas tylko pełne wiersze z danymi (mają minimum 8-9 komórek)
                     if len(komorki) >= 8:
                         teksty = [k.get_text(strip=True) for k in komorki]
                         
-                        # Pomijamy wiersze nagłówkowe i podsumowania
-                        if "*HT*" in teksty or "Sat" in teksty[1] or "Sun" in teksty[1]:
+                        # Pomijamy nagłówki i wiersze informacyjne
+                        if "*HT*" in teksty or "*BTS*" in teksty or "Sat" in teksty[0] or "Sun" in teksty[0] or "Fri" in teksty[0]:
                             continue
                             
+                        # Pobieramy podstawowe dane według kolumn z IMPORTHTML
                         data = teksty[0]
                         gospodarz = teksty[1]
                         wynik = teksty[2]
                         gosc = teksty[3]
                         
-                        # SoccerStats dodaje pustą kolumnę na indeksie 4 (kolumna E w Excelu)
-                        # Mapujemy resztę kolonii sprawdzając bezpiecznie długość tablicy
+                        # SoccerStats w tabeli 10/11 tworzy pustą kolumnę (indeks 4) przed statystykami
+                        # Bezpiecznie sprawdzamy indeksy dla HT, 2.5+, TG, BTS
                         if len(teksty) >= 9:
-                            ht = teksty[5]   # Kolumna F (*HT*)
-                            o25 = teksty[6]  # Kolumna G (*2.5+*)
-                            tg = teksty[7]   # Kolumna H (*TG*)
-                            bts = teksty[8]  # Kolumna I (*BTS*)
+                            ht = teksty[5]
+                            o25 = teksty[6]
+                            tg = teksty[7]
+                            bts = teksty[8] if len(teksty) > 8 else "-"
                         else:
                             ht = teksty[4]
                             o25 = teksty[5]
                             tg = teksty[6]
-                            bts = teksty[7]
+                            bts = teksty[7] if len(teksty) > 7 else "-"
                         
-                        # Zapisujemy tylko prawdziwe mecze (gdzie gospodarz i gość nie są puści)
-                        if gospodarz and gosc and gosc != gospodarz:
-                            # Czyścimy asteriski (*), jeśli chcesz mieć czyste wyniki (np. "0:0" zami shortcuts "*0:0*")
-                            wynik = wynik.replace("*", "")
-                            ht = ht.replace("*", "")
-                            o25 = o25.replace("*", "")
-                            tg = tg.replace("*", "")
-                            bts = bts.replace("*", "")
+                        # Warunek: zapisujemy tylko jeśli to faktyczny mecz (mamy gospodarza, gościa i jakiś wynik)
+                        if gospodarz and gosc and wynik and gosc != gospodarz:
+                            # Czyścimy gwiazdki (*), aby dane były idealnie czyste do obliczeń
+                            wynik_czysty = wynik.replace("*", "").strip()
+                            ht_czysty = ht.replace("*", "").strip()
+                            o25_czysty = o25.replace("*", "").strip()
+                            tg_czysty = tg.replace("*", "").strip()
+                            bts_czysty = bts.replace("*", "").strip()
                             
+                            # Ignorujemy ewentualne wiersze nagłówkowe, które mogły się prześlizgnąć
+                            if "Gospodarz" in gospodarz or "Gosc" in gosc or "*HT*" in ht_czysty:
+                                continue
+                                
                             dane_soccerstats_baza.append([
-                                nazwa_ligi, data, gospodarz, wynik, gosc, ht, o25, tg, bts
+                                nazwa_ligi, data, gospodarz, wynik_czysty, gosc, ht_czysty, o25_czysty, tg_czysty, bts_czysty
                             ])
                         
         if dane_soccerstats_baza:
             ss_df = pd.DataFrame(dane_soccerstats_baza, columns=[
                 "Liga", "Data", "Gospodarz", "Wynik", "Gosc", "HT", "2.5+", "TG", "BTS"
             ])
+            # Usuwamy ewentualne zdublowane wiersze
+            ss_df = ss_df.drop_duplicates()
             print(f"Sukces! Pobrano łącznie {len(ss_df)} ustrukturyzowanych wierszy z SoccerStats.")
         else:
-            print("Znalazłem tabelę, ale nie udało się wyciągnąć z niej wierszy meczowych.")
+            print("Znalazłem tabelę, ale filtrowanie odrzuciło wszystkie wiersze. Sprawdź warunki.")
             ss_df = pd.DataFrame()
             
 except Exception as e:
     print("Wystąpił błąd podczas pracy z SoccerStats:", e)
     ss_df = pd.DataFrame()
-
 # ==========================================
 # GOOGLE SHEETS AUTORYZACJA
 # ==========================================
