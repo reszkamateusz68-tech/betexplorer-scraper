@@ -356,8 +356,10 @@ for value in df["Date"]:
 df["Date"] = dates
 df.insert(3, "Time", times)
 
+
+
 # ==========================================
-# GOOGLE SHEETS
+# GOOGLE SHEETS AUTORYZACJA
 # ==========================================
 
 import gspread
