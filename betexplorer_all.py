@@ -320,4 +320,109 @@ try:
                 
             print(f"[{i_ss}/{len(urls_ss)}] Pobieram SoccerStats dla: {nazwa_ligi}")
             
-            html_ss = skaner_ss.get(url_ss, headers={"User-Agent": headers
+            # --- POPRAWIONA LINIJKA NAGŁÓWKÓW ---
+            html_ss = skaner_ss.get(url_ss, headers=headers, timeout=30).text
+            soup_ss = BeautifulSoup(html_ss, "html.parser")
+            
+            tabela_meczow = None
+            wszystkie_tabele = soup_ss.find_all("table")
+            for t in wszystkie_tabele:
+                tekst_tabeli = t.get_text()
+                if "HT" in tekst_tabeli and "BTS" in tekst_tabeli:
+                    wiersze_test = t.find_all("tr")
+                    if len(wiersze_test) > 15:  
+                        tabela_meczow = t
+                        break
+            
+            if tabela_meczow:
+                wiersze_ss = tabela_meczow.find_all("tr")
+                ostatnia_data = ""
+                
+                for wiersz in wiersze_ss:
+                    komorki = wiersz.find_all(["td", "th"])
+                    
+                    if len(komorki) >= 6:
+                        teksty = [k.get_text(" ", strip=True) for k in komorki]
+                        
+                        wynik_index = -1
+                        for idx, val in enumerate(teksty):
+                            if ("-" in val or ":" in val) and any(c.isdigit() for c in val):
+                                if 1 <= idx <= 5: 
+                                    wynik_index = idx
+                                    break
+                                        
+                        if wynik_index != -1:
+                            wynik = teksty[wynik_index]
+                            gospodarz = teksty[wynik_index - 1]
+                            data = teksty[wynik_index - 2] if wynik_index >= 2 else teksty[0]
+                            gosc = teksty[wynik_index + 1] if wynik_index + 1 < len(teksty) else ""
+                            
+                            if "HOME" in gospodarz.upper() or "GOSPODARZ" in gospodarz.upper():
+                                continue
+                                
+                            if data and len(data) > 2:
+                                ostatnia_data = data
+                            else:
+                                data = ostatnia_data
+                                
+                            if gospodarz and gosc and gosc != gospodarz:
+                                ht, o25, tg, bts = "-", "-", "-", "-"
+                                pozostale_komorki = teksty[wynik_index + 2:]
+                                statystyki = [s for s in pozostale_komorki if s.strip()] 
+                                
+                                if len(statystyki) >= 4:
+                                    ht = statystyki[0]
+                                    o25 = statystyki[1]
+                                    tg = statystyki[2]
+                                    bts = statystyki[3]
+                                elif len(statystyki) > 0:
+                                    ht = statystyki[0]
+                                    if len(statystyki) > 1: o25 = statystyki[1]
+                                    if len(statystyki) > 2: tg = statystyki[2]
+                                    
+                                wynik_czysty = wynik.replace("*", "").strip().replace(" ", "").replace("-", ":")
+                                ht_czysty = ht.replace("*", "").strip().replace(" ", "").replace("-", ":").replace("(", "").replace(")", "")
+                                o25_czysty = o25.replace("*", "").strip()
+                                tg_czysty = tg.replace("*", "").strip()
+                                bts_czysty = bts.replace("*", "").strip()
+                                
+                                g_gosp_m, g_gosc_m, suma_m = "-", "-", "-"
+                                g_gosp_1h, g_gosc_1h, suma_1h = "-", "-", "-"
+                                g_gosp_2h, g_gosc_2h, suma_2h = "-", "-", "-"
+                                
+                                if ":" in wynik_czysty:
+                                    try:
+                                        p_m = wynik_czysty.split(":")
+                                        g_gosp_m = int(p_m[0])
+                                        g_gosc_m = int(p_m[1])
+                                        suma_m = g_gosp_m + g_gosc_m
+                                    except:
+                                        pass
+                                        
+                                if ":" in ht_czysty:
+                                    try:
+                                        p_1h = ht_czysty.split(":")
+                                        g_gosp_1h = int(p_1h[0])
+                                        g_gosc_1h = int(p_1h[1])
+                                        suma_1h = g_gosp_1h + g_gosc_1h
+                                    except:
+                                        pass
+                                        
+                                if isinstance(g_gosp_m, int) and isinstance(g_gosp_1h, int):
+                                    try:
+                                        g_gosp_2h = g_gosp_m - g_gosp_1h
+                                        g_gosc_2h = g_gosc_m - g_gosc_1h
+                                        suma_2h = g_gosp_2h + g_gosc_2h
+                                    except:
+                                        pass
+                                
+                                dane_soccerstats_baza.append([
+                                    nazwa_ligi, data, gospodarz, gosc,
+                                    wynik_czysty, g_gosp_m, g_gosc_m, suma_m,        # Mecz
+                                    ht_czysty, g_gosp_1h, g_gosc_1h, suma_1h,       # 1. Połowa
+                                    g_gosp_2h, g_gosc_2h, suma_2h,                  # 2. Połowa
+                                    o25_czysty, tg_czysty, bts_czysty               # Dodatki
+                                ])
+                        
+        if dane_soccerstats_baza:
+            ss_df = pd.DataFrame(dane_soccerstats_baza, columns=
