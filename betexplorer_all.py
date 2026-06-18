@@ -102,7 +102,7 @@ headers = {
 all_data = []
 
 # ==========================================
-# 1. POBIERANIE Z BETEXPLORER (Twój oryginalny działający kod)
+# 1. POBIERANIE Z BETEXPLORER 
 # ==========================================
 for i, url in enumerate(urls, start=1):
     print(f"[{i}/{len(urls)}] Pobieram: {url}")
@@ -278,7 +278,7 @@ for i, url in enumerate(urls, start=1):
         print("BŁĄD:", url, e)
 
 # ==========================================
-# DATAFRAME I PODZIAŁ (Dokładnie jak w Twoim kodzie)
+# DATAFRAME I PODZIAŁ
 # ==========================================
 df = pd.DataFrame(
     all_data,
@@ -315,7 +315,7 @@ results_df = results_df.sort_values(
 
 
 # ==========================================================
-# 2. POBIERANIE Z SOCCERSTATS (Narzędzie integracyjne)
+# 2. POBIERANIE Z SOCCERSTATS
 # ==========================================================
 dane_soccerstats_baza = []
 print("Rozpoczynam pobieranie danych z SoccerStats...")
@@ -493,4 +493,64 @@ if not fd_all_data.empty and not results_df.empty:
 kolumny_liczbowe = [
     "Gole_Gosp_Mecz", "Gole_Gosc_Mecz", "Suma_Goli_Mecz",
     "Gole_Gosp_1H", "Gole_Gosc_1H", "Suma_Goli_1H",
-    "Gole_Gosp_2H",
+    "Gole_Gosp_2H", "Gole_Gosc_2H", "Suma_Goli_2H",
+    "Suma_Roznych", "Suma_Strzalow", "Suma_Celnych"
+]
+
+for col in kolumny_liczbowe:
+    if col in results_df.columns:
+        results_df[col] = pd.to_numeric(results_df[col], errors='coerce').astype('Int64').astype(str).replace('<NA>', '-')
+
+if not fixtures_df.empty: fixtures_df = fixtures_df.fillna("-")
+if not results_df.empty: results_df = results_df.fillna("-")
+
+for col in ["Odd1", "OddX", "Odd2"]:
+    if col in fixtures_df.columns: fixtures_df[col] = fixtures_df[col].apply(lambda x: str(x).replace(".", ",") if str(x) != "-" else "-")
+    if col in results_df.columns: results_df[col] = results_df[col].apply(lambda x: str(x).replace(".", ",") if str(x) != "-" else "-")
+
+# ==========================================
+# 5. GOOGLE SHEETS AUTORYZACJA I ZAPIS
+# ==========================================
+scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+
+if os.path.exists("credentials.json"): creds = Credentials.from_service_account_file("credentials.json", scopes=scope)
+else: creds = Credentials.from_service_account_info(json.loads(os.environ["GOOGLE_CREDENTIALS"]), scopes=scope)
+
+client = gspread.authorize(creds)
+spreadsheet = client.open("BetExplorer")
+
+try: summary_sheet = spreadsheet.worksheet("Summary")
+except: summary_sheet = spreadsheet.add_worksheet(title="Summary", rows=100, cols=10)
+
+try: fixtures_sheet = spreadsheet.worksheet("Fixtures")
+except: fixtures_sheet = spreadsheet.add_worksheet(title="Fixtures", rows=1000, cols=35)
+
+try: results_sheet = spreadsheet.worksheet("Results")
+except: results_sheet = spreadsheet.add_worksheet(title="Results", rows=5000, cols=35)
+
+try:
+    fixtures_sheet.resize(rows=1000, cols=35)
+    results_sheet.resize(rows=5000, cols=35)
+except: pass
+
+print("Wysyłam Czysty Terminarz do Google Sheets...")
+fixtures_sheet.clear()
+fixtures_sheet.update([fixtures_df.columns.tolist()] + fixtures_df.astype(str).values.tolist())
+
+print("Wysyłam Historię ze statystykami do Google Sheets...")
+results_sheet.clear()
+results_sheet.update([results_df.columns.tolist()] + results_df.astype(str).values.tolist())
+
+summary_sheet.clear()
+summary_sheet.update([
+    ["Metric", "Value"],
+    ["Last Update", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
+    ["Fixtures Czyste", len(fixtures_df)],
+    ["Results Zintegrowane", len(results_df)]
+])
+
+print("\n" + "=" * 60)
+print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
+print("Fixtures:", len(fixtures_df))
+print("Results:", len(results_df))
+print("=" * 60)
