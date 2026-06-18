@@ -298,7 +298,7 @@ df["Date"] = dates
 df.insert(3, "Time", times)
 
 # ==========================================================
-# SEKCJA: SOCCERSTATS (POBIERANIE LINKÓW Z EXCELA)
+# SEKCJA: SOCCERSTATS (ZAAWANSOWANA TRANSFORMAZJA MATEMATYCZNA)
 # ==========================================================
 dane_soccerstats_baza = []
 print("Rozpoczynam pobieranie danych z SoccerStats...")
@@ -323,16 +323,13 @@ try:
             html_ss = skaner_ss.get(url_ss, headers={"User-Agent": headers["User-Agent"]}, timeout=30).text
             soup_ss = BeautifulSoup(html_ss, "html.parser")
             
-            # 1. Szukamy właściwej tabeli i OMIJAMY PUŁAPKĘ Z LEGENDĄ
+            # Szukamy właściwej tabeli z meczami (omijamy legendę)
             tabela_meczow = None
             wszystkie_tabele = soup_ss.find_all("table")
-            
             for t in wszystkie_tabele:
                 tekst_tabeli = t.get_text()
-                # Tabela musi mieć statystyki...
                 if "HT" in tekst_tabeli and "BTS" in tekst_tabeli:
                     wiersze_test = t.find_all("tr")
-                    # ...oraz dużo wierszy (prawdziwa tabela wyników ma dziesiątki wierszy, legenda tylko kilka)
                     if len(wiersze_test) > 15:  
                         tabela_meczow = t
                         break
@@ -344,47 +341,33 @@ try:
                 for wiersz in wiersze_ss:
                     komorki = wiersz.find_all(["td", "th"])
                     
-                    # Sprawdzamy wszystkie rzędy z danymi (pomijamy cieniutkie linie graficzne)
                     if len(komorki) >= 6:
                         teksty = [k.get_text(" ", strip=True) for k in komorki]
                         
-                        # 2. Inteligentny kompas - szukamy na którym miejscu w komórkach leży WYNIK
                         wynik_index = -1
                         for idx, val in enumerate(teksty):
-                            # Wynik zazwyczaj ma dwukropek lub myślnik i cyfry (np. "1 - 0", "1:0")
                             if ("-" in val or ":" in val) and any(c.isdigit() for c in val):
-                                # Zabezpieczenie przed pomyleniem daty z wynikiem (wynik jest zwykle w środku komórek)
                                 if 1 <= idx <= 5: 
                                     wynik_index = idx
                                     break
                                     
-                        # Skoro znaleźliśmy wynik, wiemy dokładnie gdzie jest reszta danych!
                         if wynik_index != -1:
                             wynik = teksty[wynik_index]
                             gospodarz = teksty[wynik_index - 1]
-                            
-                            # Data bywa przesunięta, więc bierzemy ją bezpiecznie
                             data = teksty[wynik_index - 2] if wynik_index >= 2 else teksty[0]
                             gosc = teksty[wynik_index + 1] if wynik_index + 1 < len(teksty) else ""
                             
-                            # Filtrujemy wiersze tekstowe typu "Home goals", które złapały znak "-"
                             if "HOME" in gospodarz.upper() or "GOSPODARZ" in gospodarz.upper():
                                 continue
                                 
-                            # Autouzupełnianie brakujących dat dla meczów tego samego dnia
                             if data and len(data) > 2:
                                 ostatnia_data = data
                             else:
                                 data = ostatnia_data
                                 
-                            # Ostateczny warunek meczowy: musi być nazwa gospodarza i gościa
                             if gospodarz and gosc and gosc != gospodarz:
-                                
-                                # 3. Pobieranie statystyk (znajdują się zawszę NA PRAWO od nazwy gościa)
                                 ht, o25, tg, bts = "-", "-", "-", "-"
                                 pozostale_komorki = teksty[wynik_index + 2:]
-                                
-                                # Omijamy puste komórki (np. ukryte ikonki wykresów z SoccerStats)
                                 statystyki = [s for s in pozostale_komorki if s.strip()] 
                                 
                                 if len(statystyki) >= 4:
@@ -397,30 +380,67 @@ try:
                                     if len(statystyki) > 1: o25 = statystyki[1]
                                     if len(statystyki) > 2: tg = statystyki[2]
                                     
-                                # 4. Sprzątanie i polerowanie danych do arkusza Google Sheets
-                                wynik_czysty = wynik.replace("*", "").strip()
-                                # Zamienia SoccerStatsowe "1 - 0" na czyste "1:0"
-                                if "-" in wynik_czysty:
-                                    wynik_czysty = wynik_czysty.replace("-", ":").replace(" ", "")
-                                    
-                                ht_czysty = ht.replace("*", "").strip()
+                                wynik_czysty = wynik.replace("*", "").strip().replace(" ", "").replace("-", ":")
+                                ht_czysty = ht.replace("*", "").strip().replace(" ", "").replace("-", ":").replace("(", "").replace(")", "")
                                 o25_czysty = o25.replace("*", "").strip()
                                 tg_czysty = tg.replace("*", "").strip()
                                 bts_czysty = bts.replace("*", "").strip()
                                 
+                                # --- KALKULATOR MATEMATYCZNY PYTHON ---
+                                # Domyślne wartości jako tekst "-" (na wypadek meczów przełożonych)
+                                g_gosp_m, g_gosc_m, suma_m = "-", "-", "-"
+                                g_gosp_1h, g_gosc_1h, suma_1h = "-", "-", "-"
+                                g_gosp_2h, g_gosc_2h, suma_2h = "-", "-", "-"
+                                
+                                # 1. Rozbicie i suma dla CAŁEGO MECZU
+                                if ":" in wynik_czysty:
+                                    try:
+                                        p_m = wynik_czysty.split(":")
+                                        g_gosp_m = int(p_m[0])
+                                        g_gosc_m = int(p_m[1])
+                                        suma_m = g_gosp_m + g_gosc_m
+                                    except:
+                                        pass
+                                        
+                                # 2. Rozbicie i suma dla 1. POŁOWY (HT)
+                                if ":" in ht_czysty:
+                                    try:
+                                        p_1h = ht_czysty.split(":")
+                                        g_gosp_1h = int(p_1h[0])
+                                        g_gosc_1h = int(p_1h[1])
+                                        suma_1h = g_gosp_1h + g_gosc_1h
+                                    except:
+                                        pass
+                                        
+                                # 3. Obliczenia i suma dla 2. POŁOWY (Mecz - HT)
+                                if isinstance(g_gosp_m, int) and isinstance(g_gosp_1h, int):
+                                    try:
+                                        g_gosp_2h = g_gosp_m - g_gosp_1h
+                                        g_gosc_2h = g_gosc_m - g_gosc_1h
+                                        suma_2h = g_gosp_2h + g_gosc_2h
+                                    except:
+                                        pass
+                                
+                                # Wrzucamy do bazy rozszerzony zestaw kolumn
                                 dane_soccerstats_baza.append([
-                                    nazwa_ligi, data, gospodarz, wynik_czysty, gosc, ht_czysty, o25_czysty, tg_czysty, bts_czysty
+                                    nazwa_ligi, data, gospodarz, gosc,
+                                    wynik_czysty, g_gosp_m, g_gosc_m, suma_m,        # Mecz
+                                    ht_czysty, g_gosp_1h, g_gosc_1h, suma_1h,       # 1. Połowa
+                                    g_gosp_2h, g_gosc_2h, suma_2h,                  # 2. Połowa
+                                    o25_czysty, tg_czysty, bts_czysty               # Dodatki
                                 ])
                         
         if dane_soccerstats_baza:
             ss_df = pd.DataFrame(dane_soccerstats_baza, columns=[
-                "Liga", "Data", "Gospodarz", "Wynik", "Gosc", "HT", "2.5+", "TG", "BTS"
+                "Liga", "Data", "Gospodarz", "Gosc",
+                "Wynik_Koncowy", "Gole_Gosp_Mecz", "Gole_Gosc_Mecz", "Suma_Goli_Mecz",
+                "Wynik_HT", "Gole_Gosp_1H", "Gole_Gosc_1H", "Suma_Goli_1H",
+                "Gole_Gosp_2H", "Gole_Gosc_2H", "Suma_Goli_2H",
+                "2.5+", "TG", "BTS"
             ])
-            # Czyszczenie dubli
             ss_df = ss_df.drop_duplicates()
-            print(f"Sukces! Pobrano łącznie {len(ss_df)} ustrukturyzowanych wierszy z SoccerStats.")
+            print(f"Sukces! Pobrano i przeliczono {len(ss_df)} wierszy z SoccerStats.")
         else:
-            print("Znalazłem wielką tabelę, ale żaden wiersz nie przeszedł skanera meczowego.")
             ss_df = pd.DataFrame()
             
 except Exception as e:
