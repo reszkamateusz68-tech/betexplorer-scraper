@@ -1,6 +1,5 @@
 import os
 import json
-import re
 import gspread
 import requests
 import cloudscraper
@@ -134,18 +133,17 @@ for value in df["Date"]:
 df["Date"] = dates
 df.insert(3, "Time", times)
 
-# Ekstrakcja Roku - KLUCZ DO BEZBŁĘDNEGO ŁĄCZENIA BAZ!
-df["Year"] = pd.to_datetime(df["Date"], errors='coerce').dt.year.fillna(today.year).astype(int).astype(str)
-
 fixtures_df = df[df["Type"] == "Fixture"].copy()
 results_df = df[df["Type"] == "Result"].copy()
 
-# Zabezpieczenie przed utratą kursów - wiersze z kursami lądują na górze przed usunięciem dubli
-fixtures_df = fixtures_df.sort_values(by=["Date", "Time", "Home", "Away", "Odd1"], ascending=[True, True, True, True, False])
-fixtures_df = fixtures_df.drop_duplicates(subset=["Date", "Home", "Away"])
+# PANCERNE ZABEZPIECZENIE KURSÓW (Matematyczna flaga 1 lub 0)
+fixtures_df['HasOdds'] = fixtures_df['Odd1'].astype(str).apply(lambda x: 1 if x.strip() not in ["", "-", "nan"] else 0)
+fixtures_df = fixtures_df.sort_values(by=["Date", "Time", "Home", "Away", "HasOdds"], ascending=[True, True, True, True, False])
+fixtures_df = fixtures_df.drop_duplicates(subset=["Date", "Home", "Away"]).drop(columns=["HasOdds"])
 
-results_df = results_df.sort_values(by=["Date", "Home", "Away", "Odd1"], ascending=[False, True, True, False])
-results_df = results_df.drop_duplicates(subset=["Date", "Home", "Away"])
+results_df['HasOdds'] = results_df['Odd1'].astype(str).apply(lambda x: 1 if x.strip() not in ["", "-", "nan"] else 0)
+results_df = results_df.sort_values(by=["Date", "Home", "Away", "HasOdds"], ascending=[False, True, True, False])
+results_df = results_df.drop_duplicates(subset=["Date", "Home", "Away"]).drop(columns=["HasOdds"])
 
 
 # ==========================================================
@@ -161,13 +159,8 @@ try:
         
         for i_ss, url_ss in enumerate(urls_ss, start=1):
             url_ss = str(url_ss).strip()
-            
-            # Wyszukiwanie roku z linku (np. finland_2025 -> 2025)
-            match_yr = re.search(r'(20\d{2})', url_ss)
-            year_ss = match_yr.group(1) if match_yr else str(today.year)
-            
             nazwa_ligi = url_ss.split("league=")[1].split("&")[0] if "league=" in url_ss else f"Liga_{i_ss}"
-            print(f"[{i_ss}/{len(urls_ss)}] Pobieram SoccerStats dla: {nazwa_ligi} (Rok: {year_ss})")
+            print(f"[{i_ss}/{len(urls_ss)}] Pobieram SoccerStats dla: {nazwa_ligi}")
             
             html_ss = skaner_ss.get(url_ss, headers=headers, timeout=30).text
             soup_ss = BeautifulSoup(html_ss, "html.parser")
@@ -180,6 +173,7 @@ try:
             
             if tabela_meczow:
                 wiersze_ss = tabela_meczow.find_all("tr")
+                
                 for wiersz in wiersze_ss:
                     komorki = wiersz.find_all(["td", "th"])
                     if len(komorki) >= 6:
@@ -237,7 +231,7 @@ try:
                                     except: pass
                                 
                                 dane_soccerstats_baza.append([
-                                    year_ss, gospodarz, gosc, wynik_czysty,
+                                    gospodarz, gosc, wynik_czysty,
                                     g_gosp_m, g_gosc_m, suma_m,
                                     ht_czysty, g_gosp_1h, g_gosc_1h, suma_1h,
                                     g_gosp_2h, g_gosc_2h, suma_2h,
@@ -246,20 +240,20 @@ try:
                         
         if dane_soccerstats_baza:
             ss_df = pd.DataFrame(dane_soccerstats_baza, columns=[
-                "Year", "Home", "Away", "Score",
+                "Home", "Away", "Score",
                 "Gole_Gosp_Mecz", "Gole_Gosc_Mecz", "Suma_Goli_Mecz",
                 "Wynik_HT", "Gole_Gosp_1H", "Gole_Gosc_1H", "Suma_Goli_1H",
                 "Gole_Gosp_2H", "Gole_Gosc_2H", "Suma_Goli_2H", "2.5+", "TG", "BTS"
             ])
-            # Usunięcie dubli z zachowaniem roku
-            ss_df = ss_df.drop_duplicates(subset=["Year", "Home", "Away", "Score"])
+            # Usunięcie dubli opierając się wyłącznie na meczu i wyniku (brak roku)
+            ss_df = ss_df.drop_duplicates(subset=["Home", "Away", "Score"])
         else: ss_df = pd.DataFrame()
             
 except Exception as e: print("Błąd SoccerStats:", e); ss_df = pd.DataFrame()
 
 
 # ==========================================================
-# 3. MAPOWANIE I SCALANIE DANYCH
+# 3. MAPOWANIE I SCALANIE DANYCH (KLUCZ: HOME, AWAY, SCORE)
 # ==========================================================
 mapowanie_ss, mapowanie_fd = {}, {}
 if os.path.exists("slownik_druzyn.json"):
@@ -276,7 +270,9 @@ if not ss_df.empty and not results_df.empty:
     ss_do_scalenia = ss_df.copy()
     ss_do_scalenia["Home"] = ss_do_scalenia["Home"].apply(lambda x: mapowanie_ss.get(x, x))
     ss_do_scalenia["Away"] = ss_do_scalenia["Away"].apply(lambda x: mapowanie_ss.get(x, x))
-    results_df = pd.merge(results_df, ss_do_scalenia, on=["Year", "Home", "Away", "Score"], how="left")
+    
+    # Łączenie twardo na Gospodarz, Gość i Wynik - obojętne w jakim miesiącu lub roku!
+    results_df = pd.merge(results_df, ss_do_scalenia, on=["Home", "Away", "Score"], how="left")
 
 # --- SCALANIE FOOTBALL-DATA.CO.UK ---
 print("Rozpoczynam integrację danych z Football-Data.co.uk...")
@@ -296,13 +292,8 @@ for url_fd in urls_fd:
 
 if not fd_all_data.empty and not results_df.empty:
     try:
-        kolumny_fd = ["Date", "Home", "Away", "HG", "AG", "HS", "AS", "HST", "AST", "HC", "AC"]
+        kolumny_fd = ["Home", "Away", "HG", "AG", "HS", "AS", "HST", "AST", "HC", "AC"]
         fd_processed = fd_all_data[[c for c in kolumny_fd if c in fd_all_data.columns]].copy()
-        
-        # Wyciągamy Rok z daty CSV dla perfekcyjnego złączenia
-        if "Date" in fd_processed.columns:
-            fd_processed["Year"] = pd.to_datetime(fd_processed["Date"], dayfirst=True, errors='coerce').dt.year.fillna(today.year).astype(int).astype(str)
-        else: fd_processed["Year"] = str(today.year)
         
         fd_processed = fd_processed.dropna(subset=["HG", "AG"])
         fd_processed["Score"] = fd_processed["HG"].astype(int).astype(str) + ":" + fd_processed["AG"].astype(int).astype(str)
@@ -325,22 +316,17 @@ if not fd_all_data.empty and not results_df.empty:
             fd_processed.loc[fd_processed["HST"] > fd_processed["AST"], "Wiecej_Celnych"] = "Gospodarz"
             fd_processed.loc[fd_processed["AST"] > fd_processed["HST"], "Wiecej_Celnych"] = "Gosc"
             
-        fd_final = fd_processed.drop(columns=["Date", "HG", "AG", "HS", "AS", "HST", "AST", "HC", "AC"], errors="ignore")
-        fd_final = fd_final.drop_duplicates(subset=["Year", "Home", "Away", "Score"])
+        fd_final = fd_processed.drop(columns=["HG", "AG", "HS", "AS", "HST", "AST", "HC", "AC"], errors="ignore")
+        fd_final = fd_final.drop_duplicates(subset=["Home", "Away", "Score"])
         
-        results_df = pd.merge(results_df, fd_final, on=["Year", "Home", "Away", "Score"], how="left")
+        results_df = pd.merge(results_df, fd_final, on=["Home", "Away", "Score"], how="left")
             
     except Exception as e: print("Football-Data błąd mapowania:", e)
-
-# Finalne kasowanie dubli systemowych, sprzątanie roboczej kolumny Year
-results_df = results_df.drop_duplicates(subset=["Date", "Home", "Away"]).drop(columns=["Year"], errors="ignore")
-fixtures_df = fixtures_df.drop(columns=["Year"], errors="ignore")
 
 
 # ==========================================
 # 4. CZYSZCZENIE I FORMATOWANIE DO GOOGLE SHEETS
 # ==========================================
-# Inteligentne usuwanie .0 z ułamków przy użyciu natywnego typu Int64
 kolumny_liczbowe = [
     "Gole_Gosp_Mecz", "Gole_Gosc_Mecz", "Suma_Goli_Mecz",
     "Gole_Gosp_1H", "Gole_Gosc_1H", "Suma_Goli_1H",
@@ -350,7 +336,6 @@ kolumny_liczbowe = [
 
 for col in kolumny_liczbowe:
     if col in results_df.columns:
-        # Konwersja na liczby całkowite odporne na puste komórki (NaN -> myślnik)
         results_df[col] = pd.to_numeric(results_df[col], errors='coerce').astype('Int64').astype(str).replace('<NA>', '-')
 
 if not fixtures_df.empty: fixtures_df = fixtures_df.fillna("-")
