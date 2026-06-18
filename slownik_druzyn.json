@@ -1,0 +1,32 @@
+{
+  "SoccerStats_To_BetExplorer": {
+    "Inter Turku": "Inter Turku",
+    "HJK Helsinki": "HJK",
+    "Ilves": "Ilves",
+    "Jaro": "Jaro",
+    "Mariehamn": "Mariehamn",
+    "Gnistan": "Gnistan",
+    "TPS": "TPS",
+    "SJK": "SJK",
+    "VPS": "VPS",
+    "KuPS": "KuPS",
+    "Lahti": "Lahti",
+    "Oulu": "AC Oulu"
+  },
+  "FootballData_To_BetExplorer": {
+    "Inter Turku": "Inter Turku",
+    "HJK": "HJK",
+    "Ilves": "Ilves",
+    "Jaro": "Jaro",
+    "Mariehamn": "Mariehamn",
+    "Gnistan": "Gnistan",
+    "TPS": "TPS",
+    "SJK": "SJK",
+    "VPS": "VPS",
+    "KuPS": "KuPS",
+    "Lahti": "Lahti",
+    "AC Oulu": "AC Oulu",
+    "Haka": "Haka",
+    "KTP": "KTP"
+  }
+}
