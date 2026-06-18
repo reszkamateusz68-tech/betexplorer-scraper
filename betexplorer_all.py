@@ -4,7 +4,6 @@ import gspread
 import requests
 import cloudscraper
 import pandas as pd
-import re
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from google.oauth2.service_account import Credentials
@@ -12,152 +11,311 @@ from google.oauth2.service_account import Credentials
 today = datetime.now()
 
 def split_datetime(value):
-    if pd.isna(value): return None, ""
+    if pd.isna(value):
+        return None, ""
+
     value = str(value).strip()
 
-    if value.lower().startswith("today"): return today.date(), value.replace("Today", "").strip()
-    if value.lower().startswith("tomorrow"): return (today.date() + timedelta(days=1), value.replace("Tomorrow", "").strip())
-    if value.lower().startswith("yesterday"): return (today.date() - timedelta(days=1), value.replace("Yesterday", "").strip())
+    # Today 20:00
+    if value.lower().startswith("today"):
+        time_part = value.replace("Today", "").strip()
+        return today.date(), time_part
 
+    # Tomorrow 01:00
+    if value.lower().startswith("tomorrow"):
+        time_part = value.replace("Tomorrow", "").strip()
+        return (
+            today.date() + timedelta(days=1),
+            time_part
+        )
+
+    # Yesterday
+    if value.lower().startswith("yesterday"):
+        time_part = value.replace("Yesterday", "").strip()
+        return (
+            today.date() - timedelta(days=1),
+            time_part
+        )
+
+    # 17.06. 01:00
     try:
         parts = value.split()
-        if len(parts) == 2 and parts[0].endswith("."):
-            day, month = parts[0].rstrip(".").split(".")
-            return (datetime(today.year, int(month), int(day)).date(), parts[1])
-    except: pass
+        if len(parts) == 2:
+            date_part = parts[0]
+            time_part = parts[1]
+            if date_part.endswith("."):
+                day, month = date_part.rstrip(".").split(".")
+                return (
+                    datetime(
+                        today.year,
+                        int(month),
+                        int(day)
+                    ).date(),
+                    time_part
+                )
+    except:
+        pass
 
-    try: return (datetime.strptime(value, "%d.%m.%Y").date(), "")
-    except: pass
+    # 18.08.2025
+    try:
+        return (
+            datetime.strptime(
+                value,
+                "%d.%m.%Y"
+            ).date(),
+            ""
+        )
+    except:
+        pass
 
+    # 24.05.
     try:
         if value.endswith("."):
             day, month = value.rstrip(".").split(".")
-            return (datetime(today.year, int(month), int(day)).date(), "")
-    except: pass
+            return (
+                datetime(
+                    today.year,
+                    int(month),
+                    int(day)
+                ).date(),
+                ""
+            )
+    except:
+        pass
 
     return value, ""
 
-# ==========================================
-# 1. POBIERANIE Z BETEXPLORER (Z CLOUDSCRAPER)
-# ==========================================
+# Wczytanie lig z Excel
 urls = pd.read_excel("ligi.xlsx")["URL"].dropna().tolist()
+
 headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/137.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Cache-Control": "no-cache"
 }
 
 all_data = []
 
-# Używamy cloudscapera, aby ominąć ukrywanie kursów przez systemy anty-botowe BetExplorera
-skaner_be = cloudscraper.create_scraper()
-
+# ==========================================
+# 1. POBIERANIE Z BETEXPLORER (Twój oryginalny działający kod)
+# ==========================================
 for i, url in enumerate(urls, start=1):
     print(f"[{i}/{len(urls)}] Pobieram: {url}")
     try:
-        html = skaner_be.get(url, headers=headers, timeout=30).text
-        soup = BeautifulSoup(html, "html.parser")
-        league = url.split("/football/")[1].replace("/fixtures/", "").replace("/results/", "")
+        html = requests.get(
+            url,
+            headers=headers,
+            timeout=30
+        ).text
+
+        soup = BeautifulSoup(
+            html,
+            "html.parser"
+        )
+
+        league = url.split("/football/")[1]
+        league = league.replace("/fixtures/", "")
+        league = league.replace("/results/", "")
+
         rows = soup.find_all("tr")
 
+        # ==========================================
+        # FUTURE FIXTURES
+        # ==========================================
         if "/fixtures/" in url:
             for row in rows:
-                date_cell = row.find("td", class_="table-main__datetime")
-                if not date_cell: continue
+                date_cell = row.find(
+                    "td",
+                    class_="table-main__datetime"
+                )
+
+                if not date_cell:
+                    continue
 
                 spans = row.find_all("span")
-                if len(spans) < 2: continue
+
+                if len(spans) < 2:
+                    continue
 
                 home = spans[0].get_text(strip=True)
                 away = spans[1].get_text(strip=True)
 
                 odds = []
+
                 odds_cells = row.select("td.table-main__odds")
-                
-                # Agresywny wyciągacz kursów - zagląda w każdą możliwą strukturę komórki
+
                 for cell in odds_cells:
                     odd = cell.get("data-odd")
                     if not odd:
                         span = cell.find(attrs={"data-odd": True})
-                        if span: odd = span.get("data-odd")
+                        if span:
+                            odd = span.get("data-odd")
                     if not odd:
                         button = cell.find("button")
-                        if button: odd = button.get_text(strip=True)
+                        if button:
+                            odd = button.get_text(strip=True)
                     if not odd:
                         text = cell.get_text(" ", strip=True)
-                        if text: odd = text
+                        if text:
+                            odd = text
                     odds.append(odd if odd else "-")
                         
-                odd1 = odds[0] if len(odds) >= 1 else "-"
-                oddx = odds[1] if len(odds) >= 2 else "-"
-                odd2 = odds[2] if len(odds) >= 3 else "-"
+                odd1 = "-"
+                oddx = "-"
+                odd2 = "-"
 
-                all_data.append(["Fixture", league, date_cell.get_text(strip=True), home, away, "", odd1, oddx, odd2])
+                if len(odds) >= 1:
+                    odd1 = odds[0]
 
+                if len(odds) >= 2:
+                    oddx = odds[1]
+
+                if len(odds) >= 3:
+                    odd2 = odds[2]
+
+                all_data.append([
+                    "Fixture",
+                    league,
+                    date_cell.get_text(strip=True),
+                    home,
+                    away,
+                    "",
+                    odd1,
+                    oddx,
+                    odd2
+                ])
+
+        # ==========================================
+        # HISTORICAL RESULTS
+        # ==========================================
         elif "/results/" in url:
             for row in rows:
-                match = row.find("a", class_="in-match")
-                if not match: continue
+                match = row.find(
+                    "a",
+                    class_="in-match"
+                )
+
+                if not match:
+                    continue
 
                 spans = match.find_all("span")
-                if len(spans) < 2: continue
+
+                if len(spans) < 2:
+                    continue
 
                 home = spans[0].get_text(" ", strip=True)
                 away = spans[1].get_text(" ", strip=True)
 
                 score = ""
-                score_cell = row.find("td", class_="h-text-center")
-                if score_cell: score = score_cell.get_text(strip=True)
 
-                odds_cells = row.select("td.table-main__odds")
+                score_cell = row.find(
+                    "td",
+                    class_="h-text-center"
+                )
+
+                if score_cell:
+                    score = score_cell.get_text(strip=True)
+
+                odds_cells = row.select(
+                    "td.table-main__odds"
+                )
+
                 odds = []
+
                 for cell in odds_cells:
                     odd = cell.get("data-odd")
                     if not odd:
-                        span = cell.find(attrs={"data-odd": True})
-                        if span: odd = span.get("data-odd")
-                    if not odd:
-                        text = cell.get_text(" ", strip=True)
-                        if text: odd = text
-                    odds.append(odd if odd else "-")
+                        span = cell.find(
+                            attrs={"data-odd": True}
+                        )
+                        if span:
+                            odd = span.get("data-odd")
+                    odds.append(
+                        odd if odd else "-"
+                    )
 
-                odd1 = odds[0] if len(odds) >= 1 else "-"
-                oddx = odds[1] if len(odds) >= 2 else "-"
-                odd2 = odds[2] if len(odds) >= 3 else "-"
+                odd1 = "-"
+                oddx = "-"
+                odd2 = "-"
+
+                if len(odds) >= 1:
+                    odd1 = odds[0]
+
+                if len(odds) >= 2:
+                    oddx = odds[1]
+
+                if len(odds) >= 3:
+                    odd2 = odds[2]
 
                 date = ""
-                date_cell = row.find("td", class_=lambda x: x and "h-text-right" in x)
-                if date_cell: date = date_cell.get_text(strip=True)
 
-                all_data.append(["Result", league, date, home, away, score, odd1, oddx, odd2])
+                date_cell = row.find(
+                    "td",
+                    class_=lambda x: x and "h-text-right" in x
+                )
 
-    except Exception as e: print("BŁĄD:", url, e)
+                if date_cell:
+                    date = date_cell.get_text(strip=True)
 
-df = pd.DataFrame(all_data, columns=["Type", "League", "Date", "Home", "Away", "Score", "Odd1", "OddX", "Odd2"])
+                all_data.append([
+                    "Result",
+                    league,
+                    date,
+                    home,
+                    away,
+                    score,
+                    odd1,
+                    oddx,
+                    odd2
+                ])
 
-dates, times = [], []
+    except Exception as e:
+        print("BŁĄD:", url, e)
+
+# ==========================================
+# DATAFRAME I PODZIAŁ (Dokładnie jak w Twoim kodzie)
+# ==========================================
+df = pd.DataFrame(
+    all_data,
+    columns=[
+        "Type", "League", "Date", "Home", "Away", "Score", "Odd1", "OddX", "Odd2"
+    ]
+)
+
+df = df.drop_duplicates()
+
+dates = []
+times = []
+
 for value in df["Date"]:
     d, t = split_datetime(value)
     dates.append(d)
     times.append(t)
-    
+
 df["Date"] = dates
 df.insert(3, "Time", times)
 
 fixtures_df = df[df["Type"] == "Fixture"].copy()
 results_df = df[df["Type"] == "Result"].copy()
 
-# PANCERNE ZABEZPIECZENIE KURSÓW - gwarantuje, że wiersz z kursami wypycha na wierzch myślniki
-fixtures_df['HasOdds'] = fixtures_df['Odd1'].astype(str).apply(lambda x: 1 if x.strip() not in ["", "-", "nan"] else 0)
-fixtures_df = fixtures_df.sort_values(by=["Date", "Time", "Home", "Away", "HasOdds"], ascending=[True, True, True, True, False])
-fixtures_df = fixtures_df.drop_duplicates(subset=["Date", "Home", "Away"]).drop(columns=["HasOdds"])
+fixtures_df = fixtures_df.sort_values(
+    by=["Date", "Time"],
+    ascending=True
+)
 
-results_df['HasOdds'] = results_df['Odd1'].astype(str).apply(lambda x: 1 if x.strip() not in ["", "-", "nan"] else 0)
-results_df = results_df.sort_values(by=["Date", "Home", "Away", "HasOdds"], ascending=[False, True, True, False])
-results_df = results_df.drop_duplicates(subset=["Date", "Home", "Away"]).drop(columns=["HasOdds"])
+results_df = results_df.sort_values(
+    by=["Date"],
+    ascending=False
+)
 
 
 # ==========================================================
-# 2. POBIERANIE Z SOCCERSTATS
+# 2. POBIERANIE Z SOCCERSTATS (Narzędzie integracyjne)
 # ==========================================================
 dane_soccerstats_baza = []
 print("Rozpoczynam pobieranie danych z SoccerStats...")
@@ -335,64 +493,4 @@ if not fd_all_data.empty and not results_df.empty:
 kolumny_liczbowe = [
     "Gole_Gosp_Mecz", "Gole_Gosc_Mecz", "Suma_Goli_Mecz",
     "Gole_Gosp_1H", "Gole_Gosc_1H", "Suma_Goli_1H",
-    "Gole_Gosp_2H", "Gole_Gosc_2H", "Suma_Goli_2H",
-    "Suma_Roznych", "Suma_Strzalow", "Suma_Celnych"
-]
-
-for col in kolumny_liczbowe:
-    if col in results_df.columns:
-        results_df[col] = pd.to_numeric(results_df[col], errors='coerce').astype('Int64').astype(str).replace('<NA>', '-')
-
-if not fixtures_df.empty: fixtures_df = fixtures_df.fillna("-")
-if not results_df.empty: results_df = results_df.fillna("-")
-
-for col in ["Odd1", "OddX", "Odd2"]:
-    if col in fixtures_df.columns: fixtures_df[col] = fixtures_df[col].apply(lambda x: str(x).replace(".", ",") if str(x) != "-" else "-")
-    if col in results_df.columns: results_df[col] = results_df[col].apply(lambda x: str(x).replace(".", ",") if str(x) != "-" else "-")
-
-# ==========================================
-# 5. GOOGLE SHEETS AUTORYZACJA I ZAPIS
-# ==========================================
-scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-
-if os.path.exists("credentials.json"): creds = Credentials.from_service_account_file("credentials.json", scopes=scope)
-else: creds = Credentials.from_service_account_info(json.loads(os.environ["GOOGLE_CREDENTIALS"]), scopes=scope)
-
-client = gspread.authorize(creds)
-spreadsheet = client.open("BetExplorer")
-
-try: summary_sheet = spreadsheet.worksheet("Summary")
-except: summary_sheet = spreadsheet.add_worksheet(title="Summary", rows=100, cols=10)
-
-try: fixtures_sheet = spreadsheet.worksheet("Fixtures")
-except: fixtures_sheet = spreadsheet.add_worksheet(title="Fixtures", rows=1000, cols=35)
-
-try: results_sheet = spreadsheet.worksheet("Results")
-except: results_sheet = spreadsheet.add_worksheet(title="Results", rows=5000, cols=35)
-
-try:
-    fixtures_sheet.resize(rows=1000, cols=35)
-    results_sheet.resize(rows=5000, cols=35)
-except: pass
-
-print("Wysyłam Czysty Terminarz do Google Sheets...")
-fixtures_sheet.clear()
-fixtures_sheet.update([fixtures_df.columns.tolist()] + fixtures_df.astype(str).values.tolist())
-
-print("Wysyłam Historię ze statystykami do Google Sheets...")
-results_sheet.clear()
-results_sheet.update([results_df.columns.tolist()] + results_df.astype(str).values.tolist())
-
-summary_sheet.clear()
-summary_sheet.update([
-    ["Metric", "Value"],
-    ["Last Update", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
-    ["Fixtures Czyste", len(fixtures_df)],
-    ["Results Zintegrowane", len(results_df)]
-])
-
-print("\n" + "=" * 60)
-print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Fixtures:", len(fixtures_df))
-print("Results:", len(results_df))
-print("=" * 60)
+    "Gole_Gosp_2H",
