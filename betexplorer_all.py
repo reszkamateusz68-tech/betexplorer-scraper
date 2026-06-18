@@ -338,22 +338,17 @@ try:
                 for wiersz in wiersze_ss:
                     komorki = wiersz.find_all("td")
                     
-                    # Interesują nas tylko pełne wiersze z danymi (mają minimum 8-9 komórek)
+                    # Interesują nas pełne wiersze (mają minimum 8-9 komórek)
                     if len(komorki) >= 8:
                         teksty = [k.get_text(strip=True) for k in komorki]
                         
-                        # Pomijamy nagłówki i wiersze informacyjne
-                        if "*HT*" in teksty or "*BTS*" in teksty or "Sat" in teksty[0] or "Sun" in teksty[0] or "Fri" in teksty[0]:
-                            continue
-                            
                         # Pobieramy podstawowe dane według kolumn z IMPORTHTML
                         data = teksty[0]
                         gospodarz = teksty[1]
                         wynik = teksty[2]
                         gosc = teksty[3]
                         
-                        # SoccerStats w tabeli 10/11 tworzy pustą kolumnę (indeks 4) przed statystykami
-                        # Bezpiecznie sprawdzamy indeksy dla HT, 2.5+, TG, BTS
+                        # Pancerny mechanizm sprawdzania przesunięcia kolumn dla statystyk
                         if len(teksty) >= 9:
                             ht = teksty[5]
                             o25 = teksty[6]
@@ -365,17 +360,18 @@ try:
                             tg = teksty[6]
                             bts = teksty[7] if len(teksty) > 7 else "-"
                         
-                        # Warunek: zapisujemy tylko jeśli to faktyczny mecz (mamy gospodarza, gościa i jakiś wynik)
-                        if gospodarz and gosc and wynik and gosc != gospodarz:
-                            # Czyścimy gwiazdki (*), aby dane były idealnie czyste do obliczeń
+                        # WARUNEK IDEALNY: Zapisujemy tylko jeśli w kolumnie wyniku jest dwukropek (prawdziwy mecz)
+                        if ":" in wynik and gospodarz and gosc:
+                            
+                            # Czyścimy gwiazdki (*), aby dane były czyste i estetyczne
                             wynik_czysty = wynik.replace("*", "").strip()
                             ht_czysty = ht.replace("*", "").strip()
                             o25_czysty = o25.replace("*", "").strip()
                             tg_czysty = tg.replace("*", "").strip()
                             bts_czysty = bts.replace("*", "").strip()
                             
-                            # Ignorujemy ewentualne wiersze nagłówkowe, które mogły się prześlizgnąć
-                            if "Gospodarz" in gospodarz or "Gosc" in gosc or "*HT*" in ht_czysty:
+                            # Dodatkowe zabezpieczenie przed błędnym złapaniem nagłówków
+                            if "Gospodarz" in gospodarz or "*HT*" in ht_czysty:
                                 continue
                                 
                             dane_soccerstats_baza.append([
@@ -386,7 +382,6 @@ try:
             ss_df = pd.DataFrame(dane_soccerstats_baza, columns=[
                 "Liga", "Data", "Gospodarz", "Wynik", "Gosc", "HT", "2.5+", "TG", "BTS"
             ])
-            # Usuwamy ewentualne zdublowane wiersze
             ss_df = ss_df.drop_duplicates()
             print(f"Sukces! Pobrano łącznie {len(ss_df)} ustrukturyzowanych wierszy z SoccerStats.")
         else:
