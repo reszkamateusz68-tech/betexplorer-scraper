@@ -320,7 +320,6 @@ try:
                 
             print(f"[{i_ss}/{len(urls_ss)}] Pobieram SoccerStats dla: {nazwa_ligi}")
             
-            # --- POPRAWIONA LINIJKA NAGŁÓWKÓW ---
             html_ss = skaner_ss.get(url_ss, headers=headers, timeout=30).text
             soup_ss = BeautifulSoup(html_ss, "html.parser")
             
@@ -418,11 +417,206 @@ try:
                                 
                                 dane_soccerstats_baza.append([
                                     nazwa_ligi, data, gospodarz, gosc,
-                                    wynik_czysty, g_gosp_m, g_gosc_m, suma_m,        # Mecz
-                                    ht_czysty, g_gosp_1h, g_gosc_1h, suma_1h,       # 1. Połowa
-                                    g_gosp_2h, g_gosc_2h, suma_2h,                  # 2. Połowa
-                                    o25_czysty, tg_czysty, bts_czysty               # Dodatki
+                                    wynik_czysty, g_gosp_m, g_gosc_m, suma_m,
+                                    ht_czysty, g_gosp_1h, g_gosc_1h, suma_1h,
+                                    g_gosp_2h, g_gosc_2h, suma_2h,
+                                    o25_czysty, tg_czysty, bts_czysty
                                 ])
                         
         if dane_soccerstats_baza:
-            ss_df = pd.DataFrame(dane_soccerstats_baza, columns=
+            ss_df = pd.DataFrame(
+                dane_soccerstats_baza, 
+                columns=[
+                    "Liga", "Data", "Gospodarz", "Gosc",
+                    "Wynik_Koncowy", "Gole_Gosp_Mecz", "Gole_Gosc_Mecz", "Suma_Goli_Mecz",
+                    "Wynik_HT", "Gole_Gosp_1H", "Gole_Gosc_1H", "Suma_Goli_1H",
+                    "Gole_Gosp_2H", "Gole_Gosc_2H", "Suma_Goli_2H",
+                    "2.5+", "TG", "BTS"
+                ]
+            )
+            ss_df = ss_df.drop_duplicates()
+            print(f"Sukces! Pobrano i przeliczono {len(ss_df)} wierszy z SoccerStats.")
+        else:
+            ss_df = pd.DataFrame()
+            
+except Exception as e:
+    print("Wystąpił błąd podczas pracy z SoccerStats:", e)
+    ss_df = pd.DataFrame()
+
+# ==========================================
+# GOOGLE SHEETS AUTORYZACJA
+# ==========================================
+scope = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
+
+if os.path.exists("credentials.json"):
+    creds = Credentials.from_service_account_file(
+        "credentials.json",
+        scopes=scope
+    )
+else:
+    credentials_dict = json.loads(
+        os.environ["GOOGLE_CREDENTIALS"]
+    )
+    creds = Credentials.from_service_account_info(
+        credentials_dict,
+        scopes=scope
+    )
+
+client = gspread.authorize(creds)
+spreadsheet = client.open("BetExplorer")
+
+try:
+    summary_sheet = spreadsheet.worksheet("Summary")
+except:
+    summary_sheet = spreadsheet.add_worksheet(title="Summary", rows=100, cols=10)
+
+# ==========================================
+# PODZIAŁ DANYCH
+# ==========================================
+fixtures_df = df[df["Type"] == "Fixture"].copy()
+results_df = df[df["Type"] == "Result"].copy()
+
+fixtures_df = fixtures_df.sort_values(by=["Date", "Time"], ascending=True)
+results_df = results_df.sort_values(by=["Date"], ascending=False)
+
+# ==========================================================
+# SEKCJA: SŁOWNIK MAPOWANIA I SCALANIE DANYCH (OPCJA B)
+# ==========================================================
+mapowanie_ss = {}
+mapowanie_fd = {}
+
+if os.path.exists("slownik_druzyn.json"):
+    try:
+        with open("slownik_druzyn.json", "r", encoding="utf-8") as f:
+            slownik_data = json.load(f)
+            mapowanie_ss = slownik_data.get("SoccerStats_To_BetExplorer", {})
+            mapowanie_fd = slownik_data.get("FootballData_To_BetExplorer", {})
+            print(f"Załadowano słownik. Reguły SS: {len(mapowanie_ss)}, Reguły FD: {len(mapowanie_fd)}")
+    except Exception as e:
+        print("Błąd podczas ładowania slownik_druzyn.json:", e)
+
+# --- MAPOWANIE I SCALANIE SOCCERSTATS ---
+if not ss_df.empty:
+    print("Ujednolicam nazwy drużyn dla SoccerStats...")
+    ss_do_scalenia = ss_df.copy()
+    ss_do_scalenia["Gospodarz"] = ss_do_scalenia["Gospodarz"].apply(lambda x: mapowanie_ss.get(x, x))
+    ss_do_scalenia["Gosc"] = ss_do_scalenia["Gosc"].apply(lambda x: mapowanie_ss.get(x, x))
+    
+    ss_do_scalenia = ss_do_scalenia.drop(columns=["Liga", "Wynik_Koncowy", "Wynik_HT"], errors="ignore")
+    
+    if not fixtures_df.empty:
+        print("Scalam terminarz BetExplorer + SoccerStats...")
+        fixtures_df = pd.merge(fixtures_df, ss_do_scalenia, on=["Gospodarz", "Gosc"], how="left")
+        
+    if not results_df.empty:
+        print("Scalam historię BetExplorer + SoccerStats...")
+        results_df = pd.merge(results_df, ss_do_scalenia, on=["Gospodarz", "Gosc"], how="left")
+
+# --- INTEGRACJA FOOTBALL-DATA.CO.UK (ZAAWANSOWANE STATYSTYKI) ---
+print("Rozpoczynam integrację danych z Football-Data.co.uk...")
+try:
+    url_fd = "https://www.football-data.co.uk/new/FIN.csv"
+    fd_raw = pd.read_csv(url_fd, on_bad_lines='skip')
+    
+    if not fd_raw.empty and "Home" in fd_raw.columns:
+        print("Pomyślnie pobrano plik zaawansowany z Football-Data!")
+        
+        kolumny_fd = ["Home", "Away", "HG", "AG", "HTHG", "HTAG", "HS", "AS", "HST", "AST", "HC", "AC"]
+        istniejace_kolumny = [c for c in kolumny_fd if c in fd_raw.columns]
+        fd_processed = fd_raw[istniejace_kolumny].copy()
+        
+        fd_processed["Gospodarz"] = fd_processed["Home"].apply(lambda x: mapowanie_fd.get(str(x).strip(), str(x).strip()))
+        fd_processed["Gosc"] = fd_processed["Away"].apply(lambda x: mapowanie_fd.get(str(x).strip(), str(x).strip()))
+        
+        if "HC" in fd_processed.columns and "AC" in fd_processed.columns:
+            fd_processed["Suma_Roznych"] = fd_processed["HC"] + fd_processed["AC"]
+        
+        if "HS" in fd_processed.columns and "AS" in fd_processed.columns:
+            fd_processed["Suma_Strzalow"] = fd_processed["HS"] + fd_processed["AS"]
+            fd_processed["Wiecej_Strzalow"] = "Remis"
+            fd_processed.loc[fd_processed["HS"] > fd_processed["AS"], "Wiecej_Strzalow"] = "Gospodarz"
+            fd_processed.loc[fd_processed["AS"] > fd_processed["HS"], "Wiecej_Strzalow"] = "Gosc"
+            
+        if "HST" in fd_processed.columns and "AST" in fd_processed.columns:
+            fd_processed["Suma_Celnych"] = fd_processed["HST"] + fd_processed["AST"]
+            fd_processed["Wiecej_Celnych"] = "Remis"
+            fd_processed.loc[fd_processed["HST"] > fd_processed["AST"], "Wiecej_Celnych"] = "Gospodarz"
+            fd_processed.loc[fd_processed["AST"] > fd_processed["HST"], "Wiecej_Celnych"] = "Gosc"
+            
+        fd_final = fd_processed.drop(columns=["Home", "Away", "HG", "AG", "HTHG", "HTAG"], errors="ignore")
+        
+        if not results_df.empty:
+            print("Doklejam statystyki rożnych i strzałów do tabeli Results...")
+            results_df = pd.merge(results_df, fd_final, on=["Gospodarz", "Gosc"], how="left")
+            
+except Exception as e:
+    print("Football-Data pominięte lub brak danych dla tej ligi:", e)
+
+if not fixtures_df.empty: fixtures_df = fixtures_df.fillna("-")
+if not results_df.empty: results_df = results_df.fillna("-")
+
+# ==========================================
+# GOOGLE SHEETS - ZAPIS SCALONYCH TABEL
+# ==========================================
+try:
+    fixtures_sheet = spreadsheet.worksheet("Fixtures")
+except:
+    fixtures_sheet = spreadsheet.add_worksheet(title="Fixtures", rows=1000, cols=35)
+
+try:
+    results_sheet = spreadsheet.worksheet("Results")
+except:
+    results_sheet = spreadsheet.add_worksheet(title="Results", rows=5000, cols=35)
+
+try:
+    fixtures_sheet.resize(rows=1000, cols=35)
+    results_sheet.resize(rows=5000, cols=35)
+except:
+    pass
+
+for col in ["Odd1", "OddX", "Odd2"]:
+    if col in fixtures_df.columns:
+        fixtures_df[col] = fixtures_df[col].apply(lambda x: str(x).replace(".", ",") if str(x) != "-" else "-")
+    if col in results_df.columns:
+        results_df[col] = results_df[col].apply(lambda x: str(x).replace(".", ",") if str(x) != "-" else "-")
+
+print("Wysyłam zintegrowany Terminarz do Google Sheets...")
+fixtures_sheet.clear()
+fixtures_sheet.update(
+    [fixtures_df.columns.tolist()] +
+    fixtures_df.astype(str).values.tolist()
+)
+
+print("Wysyłam zintegrowaną Historię ze statystykami rożnych i strzałów...")
+results_sheet.clear()
+results_sheet.update(
+    [results_df.columns.tolist()] +
+    results_df.astype(str).values.tolist()
+)
+
+try:
+    stary_arkusz = spreadsheet.worksheet("SoccerStats_Model")
+    spreadsheet.del_worksheet(stary_arkusz)
+except:
+    pass
+
+summary_sheet.clear()
+summary_sheet.update(
+    [
+        ["Metric", "Value"],
+        ["Last Update", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
+        ["Fixtures Zintegrowane", len(fixtures_df)],
+        ["Results Zintegrowane", len(results_df)],
+        ["Baza Zaawansowana (Opcja B)", "TAK - Połączono 3 systemy"]
+    ]
+)
+
+print()
+print("=" * 60)
+print("PROCES INTEGRACJI 3 SYSTEMÓW ZAKOŃCZONY PEŁNYM SUKCESEM!")
+print("Fixtures (wzbogacone):", len(fixtures_df))
+print("Results (wzbogacone + rożne + strzały):", len(results_df))
+print("=" * 60)
