@@ -454,6 +454,9 @@ if not ss_df.empty:
         except:
             arkusz_ss = spreadsheet.add_worksheet(title="SoccerStats_Model", rows=2000, cols=25)
         
+        # CZYSZCZENIE WARTOŚCI NAN / INF PRZED WYSYŁKĄ (NAPRAWA BŁĘDU JSON)
+        ss_df = ss_df.fillna("")  # Zamienia wszystkie wartości NaN na pusty tekst
+        
         arkusz_ss.clear()
         arkusz_ss.update(
             [ss_df.columns.tolist()] + 
