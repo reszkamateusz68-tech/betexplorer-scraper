@@ -485,90 +485,111 @@ results_df = df[df["Type"] == "Result"].copy()
 fixtures_df = fixtures_df.sort_values(by=["Date", "Time"], ascending=True)
 results_df = results_df.sort_values(by=["Date"], ascending=False)
 
-# ==========================================
-# TWORZENIE / POBIERANIE ARKUSZY
-# ==========================================
-try:
-    fixtures_sheet = spreadsheet.worksheet("Fixtures")
-except:
-    fixtures_sheet = spreadsheet.add_worksheet(title="Fixtures", rows=1000, cols=20)
+# ==========================================================
+# SEKCJA: SŁOWNIK MAPOWANIA I SCALANIE DANYCH (OPCJA B)
+# ==========================================================
+import json
 
-try:
-    results_sheet = spreadsheet.worksheet("Results")
-except:
-    results_sheet = spreadsheet.add_worksheet(title="Results", rows=5000, cols=20)
+# Ładujemy obie sekcje słownika mapowania drużyn
+mapowanie_ss = {}
+mapowanie_fd = {}
 
-# ==========================================
-# FIXTURES UPDATE
-# ==========================================
-print("Aktualizacja Fixtures...")
-for col in ["Odd1", "OddX", "Odd2"]:
-    fixtures_df[col] = fixtures_df[col].apply(
-        lambda x: str(x).replace(".", ",") if str(x) != "-" else "-"
-    )
-fixtures_sheet.clear()
-fixtures_sheet.update(
-    [fixtures_df.columns.tolist()] +
-    fixtures_df.astype(str).values.tolist()
-)
-
-# ==========================================
-# RESULTS UPDATE
-# ==========================================
-print("Aktualizacja Results...")
-for col in ["Odd1", "OddX", "Odd2"]:
-    results_df[col] = results_df[col].apply(
-        lambda x: str(x).replace(".", ",") if str(x) != "-" else "-"
-    )
-results_sheet.clear()
-results_sheet.update(
-    [results_df.columns.tolist()] +
-    results_df.astype(str).values.tolist()
-)
-
-# ==========================================
-# SOCCERSTATS UPDATE
-# ==========================================
-if not ss_df.empty:
-    print("Wysyłam statystyki SoccerStats do Google Sheets...")
+if os.path.exists("slownik_druzyn.json"):
     try:
-        try:
-            arkusz_ss = spreadsheet.worksheet("SoccerStats_Model")
-        except:
-            arkusz_ss = spreadsheet.add_worksheet(title="SoccerStats_Model", rows=2000, cols=25)
-        
-        # CZYSZCZENIE WARTOŚCI NAN / INF PRZED WYSYŁKĄ (NAPRAWA BŁĘDU JSON)
-        ss_df = ss_df.fillna("")  # Zamienia wszystkie wartości NaN na pusty tekst
-        
-        arkusz_ss.clear()
-        arkusz_ss.update(
-            [ss_df.columns.tolist()] + 
-            ss_df.astype(str).values.tolist()
-        )
-        print("Zakładka SoccerStats_Model została zaktualizowana!")
+        with open("slownik_druzyn.json", "r", encoding="utf-8") as f:
+            slownik_data = json.load(f)
+            mapowanie_ss = slownik_data.get("SoccerStats_To_BetExplorer", {})
+            mapowanie_fd = slownik_data.get("FootballData_To_BetExplorer", {})
+            print(f"Załadowano słownik. Reguły SS: {len(mapowanie_ss)}, Reguły FD: {len(mapowanie_fd)}")
     except Exception as e:
-        print("Błąd zapisu zakładki SoccerStats_Model:", e)
+        print("Błąd podczas ładowania slownik_druzyn.json:", e)
 
-# ==========================================
-# SUMMARY UPDATE
-# ==========================================
-summary_sheet.clear()
-summary_sheet.update(
-    [
-        ["Metric", "Value"],
-        ["Last Update", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
-        ["Fixtures", len(fixtures_df)],
-        ["Results", len(results_df)],
-        ["Leagues", df["League"].nunique()],
-        ["Total Rows", len(df)]
-    ]
-)
-
-print()
-print("=" * 60)
-print("GOTOWE")
-print("Fixtures:", len(fixtures_df))
-print("Results:", len(results_df))
+# --- MAPOWANIE I SCALANIE SOCCERSTATS ---
 if not ss_df.empty:
-    print("SoccerStats wierszy:", len(ss_df))
-print("=" * 60)
+    print("Ujednolicam nazwy drużyn dla SoccerStats...")
+    ss_do_scalenia = ss_df.copy()
+    ss_do_scalenia["Gospodarz"] = ss_do_scalenia["Gospodarz"].apply(lambda x: mapowanie_ss.get(x, x))
+    ss_do_scalenia["Gosc"] = ss_do_scalenia["Gosc"].apply(lambda x: mapowanie_ss.get(x, x))
+    
+    ss_do_scalenia = ss_do_scalenia.drop(columns=["Liga", "Wynik_Koncowy", "Wynik_HT"], errors="ignore")
+    
+    if not fixtures_df.empty:
+        print("Scalam terminarz BetExplorer + SoccerStats...")
+        fixtures_df = pd.merge(fixtures_df, ss_do_scalenia, on=["Gospodarz", "Gosc"], how="left")
+        
+    if not results_df.empty:
+        print("Scalam historię BetExplorer + SoccerStats...")
+        results_df = pd.merge(results_df, ss_do_scalenia, on=["Gospodarz", "Gosc"], how="left")
+# Wypełniamy ewentualne puste miejsca po złączeniu (meczach, które się nie zmapowały) bezpiecznym znakiem "-"
+if not fixtures_df.empty: fixtures_df = fixtures_df.fillna("-")
+if not results_df.empty: results_df = results_df.fillna("-")
+
+
+# ==========================================
+# GOOGLE SHEETS - ZAPIS SCALONYCH TABEL
+# ==========================================
+    try:
+        fixtures_sheet = spreadsheet.worksheet("Fixtures")
+    except:
+        fixtures_sheet = spreadsheet.add_worksheet(title="Fixtures", rows=1000, cols=30)
+    
+    try:
+        results_sheet = spreadsheet.worksheet("Results")
+    except:
+        results_sheet = spreadsheet.add_worksheet(title="Results", rows=5000, cols=30)
+    
+    # Upewniamy się, że arkusze mają wystarczająco dużo kolumn na nowe statystyki
+    try:
+        fixtures_sheet.resize(rows=1000, cols=30)
+        results_sheet.resize(rows=5000, cols=30)
+    except:
+        pass
+    
+    # Zapraszamy kursy do formatu europejskiego (przecinki zamiast kropek)
+    for col in ["Odd1", "OddX", "Odd2"]:
+        if col in fixtures_df.columns:
+            fixtures_df[col] = fixtures_df[col].apply(lambda x: str(x).replace(".", ",") if str(x) != "-" else "-")
+        if col in results_df.columns:
+            results_df[col] = results_df[col].apply(lambda x: str(x).replace(".", ",") if str(x) != "-" else "-")
+    
+    # Czyszczenie i wysyłka do arkusza FIXTURES
+    print("Wysyłam rozszerzony Terminarz do Google Sheets...")
+    fixtures_sheet.clear()
+    fixtures_sheet.update(
+        [fixtures_df.columns.tolist()] +
+        fixtures_df.astype(str).values.tolist()
+    )
+    
+    # Czyszczenie i wysyłka do arkusza RESULTS
+    print("Wysyłam rozszerzoną Historię do Google Sheets...")
+    results_sheet.clear()
+    results_sheet.update(
+        [results_df.columns.tolist()] +
+        results_df.astype(str).values.tolist()
+    )
+    
+    # Usuwamy starą, niepotrzebną już zakładkę modelową, aby nie śmiecić
+    try:
+        stary_arkusz = spreadsheet.worksheet("SoccerStats_Model")
+        spreadsheet.del_worksheet(stary_arkusz)
+    except:
+        pass
+    
+    # AKTUALIZACJA METRYK SUMMARY
+    summary_sheet.clear()
+    summary_sheet.update(
+        [
+            ["Metric", "Value"],
+            ["Last Update", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
+            ["Fixtures Total", len(fixtures_df)],
+            ["Results Total", len(results_df)],
+            ["Baza zintegrowana", "TAK (Opcja B)"]
+        ]
+    )
+    
+    print()
+    print("=" * 60)
+    print("PROCES SKALOWANIA ZAKOŃCZONY SUKCESEM!")
+    print("Fixtures (wzbogacone):", len(fixtures_df))
+    print("Results (wzbogacone):", len(results_df))
+    print("=" * 60)
