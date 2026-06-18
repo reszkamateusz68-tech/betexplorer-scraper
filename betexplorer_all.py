@@ -2,7 +2,7 @@ import os
 import json
 import gspread
 import requests
-import cloudscraper  # <-- TA LINIJKA NAPRAWIA BŁĄD Z LOGÓW!
+import cloudscraper
 import pandas as pd
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
@@ -154,6 +154,10 @@ for i, url in enumerate(urls, start=1):
                         button = cell.find("button")
                         if button:
                             odd = button.get_text(strip=True)
+                    if not odd:
+                        text = cell.get_text(" ", strip=True)
+                        if text:
+                            odd = text
                     odds.append(odd if odd else "-")
                         
                 if len(odds) == 0:
@@ -307,6 +311,14 @@ try:
         skaner_ss = cloudscraper.create_scraper()
         
         for i_ss, url_ss in enumerate(urls_ss, start=1):
+            url_ss = str(url_ss).strip()
+            
+            # OCZYSZCZANIE LINKU ZE ŚMIECI REKLAMOWYCH GOOGLE VIGNETTE
+            if "&" in url_ss:
+                url_ss = url_ss.split("&")[0]
+            if "#" in url_ss:
+                url_ss = url_ss.split("#")[0]
+                
             try:
                 nazwa_ligi = url_ss.split("league=")[1]
             except:
@@ -317,24 +329,31 @@ try:
             html_ss = skaner_ss.get(url_ss, headers={"User-Agent": headers["User-Agent"]}, timeout=30).text
             soup_ss = BeautifulSoup(html_ss, "html.parser")
             
+            # Pancerny system szukania tabeli na SoccerStats
             tabela_bramek = soup_ss.find("table", {"id": "btb"})
+            
             if not tabela_bramek:
-                tabele = soup_ss.find_all("table", class_="tab")
-                if tabele:
-                    tabela_bramek = tabele[0]
-                    
+                # Przeszukujemy wszystkie tabele na stronie i szukamy tej, która zawiera dane ligowe
+                wszystkie_tabele = soup_ss.find_all("table")
+                for t in wszystkie_tabele:
+                    tekst_tabeli = t.get_text()
+                    if "Home goals" in tekst_tabeli or "Away goals" in tekst_tabeli or "GP" in tekst_tabeli:
+                        tabela_bramek = t
+                        break
+                        
             if tabela_bramek:
                 wiersze_ss = tabela_bramek.find_all("tr")
                 for wiersz in wiersze_ss:
                     komorki = wiersz.find_all(["td", "th"])
                     dane_wiersza = [k.get_text(strip=True) for k in komorki]
-                    if dane_wiersza and len(dane_wiersza) > 2:
+                    if dane_wiersza and len(dane_wiersza) > 1:
                         dane_soccerstats_baza.append([nazwa_ligi] + dane_wiersza)
                         
         if dane_soccerstats_baza:
             ss_df = pd.DataFrame(dane_soccerstats_baza)
             print(f"Sukces! Pobrano łącznie {len(ss_df)} wierszy statystyk z SoccerStats.")
         else:
+            print("Nie udało się wyciągnąć wierszy z tabeli SoccerStats.")
             ss_df = pd.DataFrame()
     else:
         print("Błąd: Nie znaleziono pliku ligi_soccerstats.xlsx na GitHubie!")
@@ -425,7 +444,7 @@ results_sheet.update(
 )
 
 # ==========================================
-# SOCCERSTATS UPDATE (BRAKUJĄCA SEKCJA!)
+# SOCCERSTATS UPDATE
 # ==========================================
 if not ss_df.empty:
     print("Wysyłam statystyki SoccerStats do Google Sheets...")
@@ -464,4 +483,6 @@ print("=" * 60)
 print("GOTOWE")
 print("Fixtures:", len(fixtures_df))
 print("Results:", len(results_df))
+if not ss_df.empty:
+    print("SoccerStats wierszy:", len(ss_df))
 print("=" * 60)
