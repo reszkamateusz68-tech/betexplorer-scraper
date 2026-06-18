@@ -502,18 +502,24 @@ if os.path.exists("slownik_druzyn.json"):
 if not ss_df.empty:
     print("Ujednolicam nazwy drużyn dla SoccerStats...")
     ss_do_scalenia = ss_df.copy()
-    ss_do_scalenia["Gospodarz"] = ss_do_scalenia["Gospodarz"].apply(lambda x: mapowanie_ss.get(x, x))
-    ss_do_scalenia["Gosc"] = ss_do_scalenia["Gosc"].apply(lambda x: mapowanie_ss.get(x, x))
     
-    ss_do_scalenia = ss_do_scalenia.drop(columns=["Liga", "Wynik_Koncowy", "Wynik_HT"], errors="ignore")
+    # 1. Zmiana nazw kolumn na takie same jak w BetExplorer, aby funkcja merge je rozpoznała
+    ss_do_scalenia = ss_do_scalenia.rename(columns={"Gospodarz": "Home", "Gosc": "Away"})
+    
+    # 2. Używamy słownika do podmienienia nazw drużyn
+    ss_do_scalenia["Home"] = ss_do_scalenia["Home"].apply(lambda x: mapowanie_ss.get(x, x))
+    ss_do_scalenia["Away"] = ss_do_scalenia["Away"].apply(lambda x: mapowanie_ss.get(x, x))
+    
+    # 3. Usuwamy kolumny z ligą, datą i surowym wynikiem (BetExplorer ma własne, lepsze)
+    ss_do_scalenia = ss_do_scalenia.drop(columns=["Liga", "Wynik_Koncowy", "Wynik_HT", "Data"], errors="ignore")
     
     if not fixtures_df.empty:
         print("Scalam terminarz BetExplorer + SoccerStats...")
-        fixtures_df = pd.merge(fixtures_df, ss_do_scalenia, on=["Gospodarz", "Gosc"], how="left")
+        fixtures_df = pd.merge(fixtures_df, ss_do_scalenia, on=["Home", "Away"], how="left")
         
     if not results_df.empty:
         print("Scalam historię BetExplorer + SoccerStats...")
-        results_df = pd.merge(results_df, ss_do_scalenia, on=["Gospodarz", "Gosc"], how="left")
+        results_df = pd.merge(results_df, ss_do_scalenia, on=["Home", "Away"], how="left")
 
 # --- INTEGRACJA FOOTBALL-DATA.CO.UK (ZAAWANSOWANE STATYSTYKI) ---
 print("Rozpoczynam integrację danych z Football-Data.co.uk...")
@@ -528,8 +534,9 @@ try:
         istniejace_kolumny = [c for c in kolumny_fd if c in fd_raw.columns]
         fd_processed = fd_raw[istniejace_kolumny].copy()
         
-        fd_processed["Gospodarz"] = fd_processed["Home"].apply(lambda x: mapowanie_fd.get(str(x).strip(), str(x).strip()))
-        fd_processed["Gosc"] = fd_processed["Away"].apply(lambda x: mapowanie_fd.get(str(x).strip(), str(x).strip()))
+        # Mapowanie drużyn dla Football-Data
+        fd_processed["Home"] = fd_processed["Home"].apply(lambda x: mapowanie_fd.get(str(x).strip(), str(x).strip()))
+        fd_processed["Away"] = fd_processed["Away"].apply(lambda x: mapowanie_fd.get(str(x).strip(), str(x).strip()))
         
         if "HC" in fd_processed.columns and "AC" in fd_processed.columns:
             fd_processed["Suma_Roznych"] = fd_processed["HC"] + fd_processed["AC"]
@@ -546,11 +553,12 @@ try:
             fd_processed.loc[fd_processed["HST"] > fd_processed["AST"], "Wiecej_Celnych"] = "Gospodarz"
             fd_processed.loc[fd_processed["AST"] > fd_processed["HST"], "Wiecej_Celnych"] = "Gosc"
             
-        fd_final = fd_processed.drop(columns=["Home", "Away", "HG", "AG", "HTHG", "HTAG"], errors="ignore")
+        # Usuwamy podstawowe kolumny bramkowe z FD, bo SoccerStats/BetExplorer mają to dokładniej
+        fd_final = fd_processed.drop(columns=["HG", "AG", "HTHG", "HTAG"], errors="ignore")
         
         if not results_df.empty:
             print("Doklejam statystyki rożnych i strzałów do tabeli Results...")
-            results_df = pd.merge(results_df, fd_final, on=["Gospodarz", "Gosc"], how="left")
+            results_df = pd.merge(results_df, fd_final, on=["Home", "Away"], how="left")
             
 except Exception as e:
     print("Football-Data pominięte lub brak danych dla tej ligi:", e)
