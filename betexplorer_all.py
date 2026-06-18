@@ -4,6 +4,7 @@ import gspread
 import requests
 import cloudscraper
 import pandas as pd
+import re
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from google.oauth2.service_account import Credentials
@@ -37,7 +38,7 @@ def split_datetime(value):
     return value, ""
 
 # ==========================================
-# 1. POBIERANIE Z BETEXPLORER
+# 1. POBIERANIE Z BETEXPLORER (Z CLOUDSCRAPER)
 # ==========================================
 urls = pd.read_excel("ligi.xlsx")["URL"].dropna().tolist()
 headers = {
@@ -47,10 +48,13 @@ headers = {
 
 all_data = []
 
+# Używamy cloudscapera, aby ominąć ukrywanie kursów przez systemy anty-botowe BetExplorera
+skaner_be = cloudscraper.create_scraper()
+
 for i, url in enumerate(urls, start=1):
     print(f"[{i}/{len(urls)}] Pobieram: {url}")
     try:
-        html = requests.get(url, headers=headers, timeout=30).text
+        html = skaner_be.get(url, headers=headers, timeout=30).text
         soup = BeautifulSoup(html, "html.parser")
         league = url.split("/football/")[1].replace("/fixtures/", "").replace("/results/", "")
         rows = soup.find_all("tr")
@@ -68,16 +72,19 @@ for i, url in enumerate(urls, start=1):
 
                 odds = []
                 odds_cells = row.select("td.table-main__odds")
+                
+                # Agresywny wyciągacz kursów - zagląda w każdą możliwą strukturę komórki
                 for cell in odds_cells:
                     odd = cell.get("data-odd")
                     if not odd:
                         span = cell.find(attrs={"data-odd": True})
                         if span: odd = span.get("data-odd")
                     if not odd:
-                        el = cell.find(["button", "a", "span"])
-                        if el: odd = el.get_text(strip=True)
+                        button = cell.find("button")
+                        if button: odd = button.get_text(strip=True)
                     if not odd:
-                        odd = cell.get_text(strip=True)
+                        text = cell.get_text(" ", strip=True)
+                        if text: odd = text
                     odds.append(odd if odd else "-")
                         
                 odd1 = odds[0] if len(odds) >= 1 else "-"
@@ -108,6 +115,9 @@ for i, url in enumerate(urls, start=1):
                     if not odd:
                         span = cell.find(attrs={"data-odd": True})
                         if span: odd = span.get("data-odd")
+                    if not odd:
+                        text = cell.get_text(" ", strip=True)
+                        if text: odd = text
                     odds.append(odd if odd else "-")
 
                 odd1 = odds[0] if len(odds) >= 1 else "-"
@@ -136,7 +146,7 @@ df.insert(3, "Time", times)
 fixtures_df = df[df["Type"] == "Fixture"].copy()
 results_df = df[df["Type"] == "Result"].copy()
 
-# PANCERNE ZABEZPIECZENIE KURSÓW (Matematyczna flaga 1 lub 0)
+# PANCERNE ZABEZPIECZENIE KURSÓW - gwarantuje, że wiersz z kursami wypycha na wierzch myślniki
 fixtures_df['HasOdds'] = fixtures_df['Odd1'].astype(str).apply(lambda x: 1 if x.strip() not in ["", "-", "nan"] else 0)
 fixtures_df = fixtures_df.sort_values(by=["Date", "Time", "Home", "Away", "HasOdds"], ascending=[True, True, True, True, False])
 fixtures_df = fixtures_df.drop_duplicates(subset=["Date", "Home", "Away"]).drop(columns=["HasOdds"])
@@ -173,7 +183,6 @@ try:
             
             if tabela_meczow:
                 wiersze_ss = tabela_meczow.find_all("tr")
-                
                 for wiersz in wiersze_ss:
                     komorki = wiersz.find_all(["td", "th"])
                     if len(komorki) >= 6:
@@ -245,7 +254,6 @@ try:
                 "Wynik_HT", "Gole_Gosp_1H", "Gole_Gosc_1H", "Suma_Goli_1H",
                 "Gole_Gosp_2H", "Gole_Gosc_2H", "Suma_Goli_2H", "2.5+", "TG", "BTS"
             ])
-            # Usunięcie dubli opierając się wyłącznie na meczu i wyniku (brak roku)
             ss_df = ss_df.drop_duplicates(subset=["Home", "Away", "Score"])
         else: ss_df = pd.DataFrame()
             
@@ -253,7 +261,7 @@ except Exception as e: print("Błąd SoccerStats:", e); ss_df = pd.DataFrame()
 
 
 # ==========================================================
-# 3. MAPOWANIE I SCALANIE DANYCH (KLUCZ: HOME, AWAY, SCORE)
+# 3. MAPOWANIE I SCALANIE DANYCH 
 # ==========================================================
 mapowanie_ss, mapowanie_fd = {}, {}
 if os.path.exists("slownik_druzyn.json"):
@@ -264,17 +272,14 @@ if os.path.exists("slownik_druzyn.json"):
             mapowanie_fd = slownik_data.get("FootballData_To_BetExplorer", {})
     except: pass
 
-# --- SCALANIE SOCCERSTATS ---
 if not ss_df.empty and not results_df.empty:
     print("Ujednolicam nazwy i scalam historię z SoccerStats...")
     ss_do_scalenia = ss_df.copy()
     ss_do_scalenia["Home"] = ss_do_scalenia["Home"].apply(lambda x: mapowanie_ss.get(x, x))
     ss_do_scalenia["Away"] = ss_do_scalenia["Away"].apply(lambda x: mapowanie_ss.get(x, x))
     
-    # Łączenie twardo na Gospodarz, Gość i Wynik - obojętne w jakim miesiącu lub roku!
     results_df = pd.merge(results_df, ss_do_scalenia, on=["Home", "Away", "Score"], how="left")
 
-# --- SCALANIE FOOTBALL-DATA.CO.UK ---
 print("Rozpoczynam integrację danych z Football-Data.co.uk...")
 fd_all_data = pd.DataFrame()
 
