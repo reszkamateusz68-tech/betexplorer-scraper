@@ -313,14 +313,9 @@ try:
         for i_ss, url_ss in enumerate(urls_ss, start=1):
             url_ss = str(url_ss).strip()
             
-            # OCZYSZCZANIE LINKU ZE ŚMIECI REKLAMOWYCH GOOGLE VIGNETTE
-            if "&" in url_ss:
-                url_ss = url_ss.split("&")[0]
-            if "#" in url_ss:
-                url_ss = url_ss.split("#")[0]
-                
+            # Pobieramy nazwę ligi z linku (np. finland, england)
             try:
-                nazwa_ligi = url_ss.split("league=")[1]
+                nazwa_ligi = url_ss.split("league=")[1].split("&")[0]
             except:
                 nazwa_ligi = f"Liga_{i_ss}"
                 
@@ -329,31 +324,39 @@ try:
             html_ss = skaner_ss.get(url_ss, headers={"User-Agent": headers["User-Agent"]}, timeout=30).text
             soup_ss = BeautifulSoup(html_ss, "html.parser")
             
-            # Pancerny system szukania tabeli na SoccerStats
-            tabela_bramek = soup_ss.find("table", {"id": "btb"})
+            # Szukamy konkretnej tabeli z meczami (ma klasę 'sortable')
+            tabela_meczow = soup_ss.find("table", class_="sortable")
             
-            if not tabela_bramek:
-                # Przeszukujemy wszystkie tabele na stronie i szukamy tej, która zawiera dane ligowe
-                wszystkie_tabele = soup_ss.find_all("table")
-                for t in wszystkie_tabele:
-                    tekst_tabeli = t.get_text()
-                    if "Home goals" in tekst_tabeli or "Away goals" in tekst_tabeli or "GP" in tekst_tabeli:
-                        tabela_bramek = t
-                        break
-                        
-            if tabela_bramek:
-                wiersze_ss = tabela_bramek.find_all("tr")
+            if tabela_meczow:
+                wiersze_ss = tabela_meczow.find_all("tr", class_="odd")
+                
                 for wiersz in wiersze_ss:
-                    komorki = wiersz.find_all(["td", "th"])
-                    dane_wiersza = [k.get_text(strip=True) for k in komorki]
-                    if dane_wiersza and len(dane_wiersza) > 1:
-                        dane_soccerstats_baza.append([nazwa_ligi] + dane_wiersza)
+                    komorki = wiersz.find_all("td")
+                    # Interesują nas tylko wiersze, które mają odpowiednią liczbę kolumn meczowych
+                    if len(komorki) >= 9:
+                        data = komorki[0].get_text(strip=True)
+                        gospodarz = komorki[1].get_text(strip=True)
+                        wynik = komorki[2].get_text(strip=True)
+                        gosc = komorki[3].get_text(strip=True)
+                        ht = komorki[4].get_text(strip=True)
+                        o25 = komorki[5].get_text(strip=True)
+                        tg = komorki[6].get_text(strip=True)
+                        bts = komorki[7].get_text(strip=True)
+                        
+                        # Zapisujemy tylko jeśli wiersz zawiera dane meczu (np. ma podany wynik lub gwiazdki)
+                        if gospodarz and gosc:
+                            dane_soccerstats_baza.append([
+                                nazwa_ligi, data, gospodarz, wynik, gosc, ht, o25, tg, bts
+                            ])
                         
         if dane_soccerstats_baza:
-            ss_df = pd.DataFrame(dane_soccerstats_baza)
-            print(f"Sukces! Pobrano łącznie {len(ss_df)} wierszy statystyk z SoccerStats.")
+            # Tworzymy piękny DataFrame z jasnymi, ustrukturyzowanymi nagłówkami
+            ss_df = pd.DataFrame(dane_soccerstats_baza, columns=[
+                "Liga", "Data", "Gospodarz", "Wynik", "Gosc", "HT", "2.5+", "TG", "BTS"
+            ])
+            print(f"Sukces! Pobrano łącznie {len(ss_df)} ustrukturyzowanych wierszy z SoccerStats.")
         else:
-            print("Nie udało się wyciągnąć wierszy z tabeli SoccerStats.")
+            print("Nie udało się wyciągnąć wierszy z tabeli meczowej sortable.")
             ss_df = pd.DataFrame()
     else:
         print("Błąd: Nie znaleziono pliku ligi_soccerstats.xlsx na GitHubie!")
