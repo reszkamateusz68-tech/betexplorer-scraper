@@ -356,7 +356,64 @@ for value in df["Date"]:
 df["Date"] = dates
 df.insert(3, "Time", times)
 
+# ==========================================================
+# SEKCJA: SOCCERSTATS (POBIERANIE LINKÓW Z EXCELA)
+# ==========================================================
+dane_soccerstats_baza = []
+print("Rozpoczynam pobieranie danych z SoccerStats...")
 
+try:
+    # Wczytujemy listę linków z nowego pliku Excela
+    if os.path.exists("ligi_soccerstats.xlsx"):
+        urls_ss = pd.read_excel("ligi_soccerstats.xlsx")["URL"].dropna().tolist()
+        print(f"Znaleziono {len(urls_ss)} linków w pliku ligi_soccerstats.xlsx")
+        
+        # Używamy cloudscraper, żeby bezpiecznie ominąć blokady Cloudflare
+        skaner_ss = cloudscraper.create_scraper()
+        
+        for i_ss, url_ss in enumerate(urls_ss, start=1):
+            # Wyciągamy prostą nazwę ligi z końcówki linku (np. england, spain)
+            try:
+                nazwa_ligi = url_ss.split("league=")[1]
+            except:
+                nazwa_ligi = f"Liga_{i_ss}"
+                
+            print(f"[{i_ss}/{len(urls_ss)}] Pobieram SoccerStats dla: {nazwa_ligi}")
+            
+            html_ss = skaner_ss.get(url_ss, headers={"User-Agent": headers["User-Agent"]}, timeout=30).text
+            soup_ss = BeautifulSoup(html_ss, "html.parser")
+            
+            # Szukamy tabeli ze statystykami bramek po ID 'btb' (Goals per half)
+            tabela_bramek = soup_ss.find("table", {"id": "btb"})
+            
+            if not tabela_bramek:
+                # Jeśli nie ma po ID, szukamy pierwszej lepszej tabeli statystycznej o klasie 'tab'
+                tabele = soup_ss.find_all("table", class_="tab")
+                if tabele:
+                    tabela_bramek = tabele[0]
+                    
+            if tabela_bramek:
+                wiersze_ss = tabela_bramek.find_all("tr")
+                for wiersz in wiersze_ss:
+                    komorki = wiersz.find_all(["td", "th"])
+                    dane_wiersza = [k.get_text(strip=True) for k in komorki]
+                    if dane_wiersza and len(dane_wiersza) > 2:
+                        # Dodajemy nazwę ligi jako pierwszą kolumnę
+                        dane_soccerstats_baza.append([nazwa_ligi] + dane_wiersza)
+                        
+        # Budujemy końcową tabelę danych
+        if dane_soccerstats_baza:
+            ss_df = pd.DataFrame(dane_soccerstats_baza)
+            print(f"Sukces! Pobrano łącznie {len(ss_df)} wierszy statystyk z SoccerStats.")
+        else:
+            ss_df = pd.DataFrame()
+    else:
+        print("Błąd: Nie znaleziono pliku ligi_soccerstats.xlsx na GitHubie!")
+        ss_df = pd.DataFrame()
+
+except Exception as e:
+    print("Wystąpił błąd podczas pracy z SoccerStats:", e)
+    ss_df = pd.DataFrame()
 
 # ==========================================
 # GOOGLE SHEETS AUTORYZACJA
