@@ -27,9 +27,3 @@ jobs:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
         run: |
           python betexplorer_all.py
-
-      - name: Run Sofascore Scraper
-        env:
-          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
-        run: |
-          python sofascore_scraper.py
