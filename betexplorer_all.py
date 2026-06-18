@@ -323,84 +323,104 @@ try:
             html_ss = skaner_ss.get(url_ss, headers={"User-Agent": headers["User-Agent"]}, timeout=30).text
             soup_ss = BeautifulSoup(html_ss, "html.parser")
             
-            # Szukamy tabeli po jej charakterystycznych nagłówkach statystycznych
+            # 1. Szukamy właściwej tabeli i OMIJAMY PUŁAPKĘ Z LEGENDĄ
             tabela_meczow = None
             wszystkie_tabele = soup_ss.find_all("table")
+            
             for t in wszystkie_tabele:
                 tekst_tabeli = t.get_text()
-                if "*HT*" in tekst_tabeli and "*BTS*" in tekst_tabeli:
-                    tabela_meczow = t
-                    break
+                # Tabela musi mieć statystyki...
+                if "HT" in tekst_tabeli and "BTS" in tekst_tabeli:
+                    wiersze_test = t.find_all("tr")
+                    # ...oraz dużo wierszy (prawdziwa tabela wyników ma dziesiątki wierszy, legenda tylko kilka)
+                    if len(wiersze_test) > 15:  
+                        tabela_meczow = t
+                        break
             
             if tabela_meczow:
                 wiersze_ss = tabela_meczow.find_all("tr")
-                ostatnia_data = "" # Pamięć do wypełniania pustych dat
+                ostatnia_data = ""
                 
                 for wiersz in wiersze_ss:
-                    komorki = wiersz.find_all("td")
+                    komorki = wiersz.find_all(["td", "th"])
                     
-                    # Wchodzimy tylko w pełne wiersze tabeli (odrzucamy wąskie wiersze dzielące)
-                    if len(komorki) >= 8:
-                        teksty = [k.get_text(strip=True) for k in komorki]
+                    # Sprawdzamy wszystkie rzędy z danymi (pomijamy cieniutkie linie graficzne)
+                    if len(komorki) >= 6:
+                        teksty = [k.get_text(" ", strip=True) for k in komorki]
                         
-                        # Filtrujemy wiersze nagłówkowe
-                        teksty_polaczone = "".join(teksty).upper()
-                        if "HT" in teksty_polaczone and "BTS" in teksty_polaczone:
-                            continue
-                        if "HOME" in teksty_polaczone or "GOSPODARZ" in teksty_polaczone:
-                            continue
+                        # 2. Inteligentny kompas - szukamy na którym miejscu w komórkach leży WYNIK
+                        wynik_index = -1
+                        for idx, val in enumerate(teksty):
+                            # Wynik zazwyczaj ma dwukropek lub myślnik i cyfry (np. "1 - 0", "1:0")
+                            if ("-" in val or ":" in val) and any(c.isdigit() for c in val):
+                                # Zabezpieczenie przed pomyleniem daty z wynikiem (wynik jest zwykle w środku komórek)
+                                if 1 <= idx <= 5: 
+                                    wynik_index = idx
+                                    break
+                                    
+                        # Skoro znaleźliśmy wynik, wiemy dokładnie gdzie jest reszta danych!
+                        if wynik_index != -1:
+                            wynik = teksty[wynik_index]
+                            gospodarz = teksty[wynik_index - 1]
                             
-                        # Sztywne mapowanie jak w Google Sheets
-                        data = teksty[0]
-                        gospodarz = teksty[1]
-                        wynik = teksty[2]
-                        gosc = teksty[3]
-                        
-                        # Wypełnianie pustych dat dla meczów z tego samego dnia
-                        if data:
-                            ostatnia_data = data
-                        else:
-                            data = ostatnia_data
+                            # Data bywa przesunięta, więc bierzemy ją bezpiecznie
+                            data = teksty[wynik_index - 2] if wynik_index >= 2 else teksty[0]
+                            gosc = teksty[wynik_index + 1] if wynik_index + 1 < len(teksty) else ""
                             
-                        # Ostateczny warunek: muszą być obie drużyny i jakikolwiek wpis w wyniku
-                        if gospodarz and gosc and wynik:
-                            
-                            # Czasami SoccerStats wrzuca małą ikonkę wykresu (pusta kolumna 4)
-                            if len(teksty) >= 9:
-                                ht = teksty[5]
-                                o25 = teksty[6]
-                                tg = teksty[7]
-                                bts = teksty[8]
+                            # Filtrujemy wiersze tekstowe typu "Home goals", które złapały znak "-"
+                            if "HOME" in gospodarz.upper() or "GOSPODARZ" in gospodarz.upper():
+                                continue
+                                
+                            # Autouzupełnianie brakujących dat dla meczów tego samego dnia
+                            if data and len(data) > 2:
+                                ostatnia_data = data
                             else:
-                                ht = teksty[4]
-                                o25 = teksty[5]
-                                tg = teksty[6]
-                                bts = teksty[7]
+                                data = ostatnia_data
                                 
-                            # Czyszczenie i standaryzacja danych
-                            wynik_czysty = wynik.replace("*", "").strip()
-                            
-                            # Jeśli kod strony ma "1 - 0", zmieniamy na eleganckie "1:0"
-                            if "-" in wynik_czysty and any(c.isdigit() for c in wynik_czysty):
-                                wynik_czysty = wynik_czysty.replace("-", ":").replace(" ", "")
+                            # Ostateczny warunek meczowy: musi być nazwa gospodarza i gościa
+                            if gospodarz and gosc and gosc != gospodarz:
                                 
-                            ht_czysty = ht.replace("*", "").strip()
-                            o25_czysty = o25.replace("*", "").strip()
-                            tg_czysty = tg.replace("*", "").strip()
-                            bts_czysty = bts.replace("*", "").strip()
-                            
-                            dane_soccerstats_baza.append([
-                                nazwa_ligi, data, gospodarz, wynik_czysty, gosc, ht_czysty, o25_czysty, tg_czysty, bts_czysty
-                            ])
+                                # 3. Pobieranie statystyk (znajdują się zawszę NA PRAWO od nazwy gościa)
+                                ht, o25, tg, bts = "-", "-", "-", "-"
+                                pozostale_komorki = teksty[wynik_index + 2:]
+                                
+                                # Omijamy puste komórki (np. ukryte ikonki wykresów z SoccerStats)
+                                statystyki = [s for s in pozostale_komorki if s.strip()] 
+                                
+                                if len(statystyki) >= 4:
+                                    ht = statystyki[0]
+                                    o25 = statystyki[1]
+                                    tg = statystyki[2]
+                                    bts = statystyki[3]
+                                elif len(statystyki) > 0:
+                                    ht = statystyki[0]
+                                    if len(statystyki) > 1: o25 = statystyki[1]
+                                    if len(statystyki) > 2: tg = statystyki[2]
+                                    
+                                # 4. Sprzątanie i polerowanie danych do arkusza Google Sheets
+                                wynik_czysty = wynik.replace("*", "").strip()
+                                # Zamienia SoccerStatsowe "1 - 0" na czyste "1:0"
+                                if "-" in wynik_czysty:
+                                    wynik_czysty = wynik_czysty.replace("-", ":").replace(" ", "")
+                                    
+                                ht_czysty = ht.replace("*", "").strip()
+                                o25_czysty = o25.replace("*", "").strip()
+                                tg_czysty = tg.replace("*", "").strip()
+                                bts_czysty = bts.replace("*", "").strip()
+                                
+                                dane_soccerstats_baza.append([
+                                    nazwa_ligi, data, gospodarz, wynik_czysty, gosc, ht_czysty, o25_czysty, tg_czysty, bts_czysty
+                                ])
                         
         if dane_soccerstats_baza:
             ss_df = pd.DataFrame(dane_soccerstats_baza, columns=[
                 "Liga", "Data", "Gospodarz", "Wynik", "Gosc", "HT", "2.5+", "TG", "BTS"
             ])
+            # Czyszczenie dubli
             ss_df = ss_df.drop_duplicates()
             print(f"Sukces! Pobrano łącznie {len(ss_df)} ustrukturyzowanych wierszy z SoccerStats.")
         else:
-            print("Znalazłem tabelę, ale żaden wiersz nie pasował do struktury 8-kolumnowej.")
+            print("Znalazłem wielką tabelę, ale żaden wiersz nie przeszedł skanera meczowego.")
             ss_df = pd.DataFrame()
             
 except Exception as e:
