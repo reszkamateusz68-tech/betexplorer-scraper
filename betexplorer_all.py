@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import gspread
 import requests
 import cloudscraper
@@ -14,12 +15,9 @@ def split_datetime(value):
     if pd.isna(value): return None, ""
     value = str(value).strip()
 
-    if value.lower().startswith("today"):
-        return today.date(), value.replace("Today", "").strip()
-    if value.lower().startswith("tomorrow"):
-        return (today.date() + timedelta(days=1), value.replace("Tomorrow", "").strip())
-    if value.lower().startswith("yesterday"):
-        return (today.date() - timedelta(days=1), value.replace("Yesterday", "").strip())
+    if value.lower().startswith("today"): return today.date(), value.replace("Today", "").strip()
+    if value.lower().startswith("tomorrow"): return (today.date() + timedelta(days=1), value.replace("Tomorrow", "").strip())
+    if value.lower().startswith("yesterday"): return (today.date() - timedelta(days=1), value.replace("Yesterday", "").strip())
 
     try:
         parts = value.split()
@@ -40,10 +38,9 @@ def split_datetime(value):
     return value, ""
 
 # ==========================================
-# POBIERANIE Z BETEXPLORER
+# 1. POBIERANIE Z BETEXPLORER
 # ==========================================
 urls = pd.read_excel("ligi.xlsx")["URL"].dropna().tolist()
-
 headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
@@ -78,11 +75,10 @@ for i, url in enumerate(urls, start=1):
                         span = cell.find(attrs={"data-odd": True})
                         if span: odd = span.get("data-odd")
                     if not odd:
-                        button = cell.find("button")
-                        if button: odd = button.get_text(strip=True)
+                        el = cell.find(["button", "a", "span"])
+                        if el: odd = el.get_text(strip=True)
                     if not odd:
-                        text = cell.get_text(" ", strip=True)
-                        if text: odd = text
+                        odd = cell.get_text(strip=True)
                     odds.append(odd if odd else "-")
                         
                 odd1 = odds[0] if len(odds) >= 1 else "-"
@@ -125,8 +121,7 @@ for i, url in enumerate(urls, start=1):
 
                 all_data.append(["Result", league, date, home, away, score, odd1, oddx, odd2])
 
-    except Exception as e:
-        print("BŁĄD:", url, e)
+    except Exception as e: print("BŁĄD:", url, e)
 
 df = pd.DataFrame(all_data, columns=["Type", "League", "Date", "Home", "Away", "Score", "Odd1", "OddX", "Odd2"])
 
@@ -135,25 +130,26 @@ for value in df["Date"]:
     d, t = split_datetime(value)
     dates.append(d)
     times.append(t)
+    
 df["Date"] = dates
 df.insert(3, "Time", times)
+
+# Ekstrakcja Roku - KLUCZ DO BEZBŁĘDNEGO ŁĄCZENIA BAZ!
+df["Year"] = pd.to_datetime(df["Date"], errors='coerce').dt.year.fillna(today.year).astype(int).astype(str)
 
 fixtures_df = df[df["Type"] == "Fixture"].copy()
 results_df = df[df["Type"] == "Result"].copy()
 
-# ==========================================
-# NAPRAWA ZNIKAJĄCYCH KURSÓW (Priorytetyzacja przy drop_duplicates)
-# ==========================================
-fixtures_df['HasOdds'] = fixtures_df['Odd1'].apply(lambda x: 1 if str(x).strip() not in ["", "-"] else 0)
-fixtures_df = fixtures_df.sort_values(by=["Date", "Time", "Home", "Away", "HasOdds"], ascending=[True, True, True, True, False])
-fixtures_df = fixtures_df.drop_duplicates(subset=["Date", "Home", "Away"]).drop(columns=["HasOdds"])
+# Zabezpieczenie przed utratą kursów - wiersze z kursami lądują na górze przed usunięciem dubli
+fixtures_df = fixtures_df.sort_values(by=["Date", "Time", "Home", "Away", "Odd1"], ascending=[True, True, True, True, False])
+fixtures_df = fixtures_df.drop_duplicates(subset=["Date", "Home", "Away"])
 
-results_df['HasOdds'] = results_df['Odd1'].apply(lambda x: 1 if str(x).strip() not in ["", "-"] else 0)
-results_df = results_df.sort_values(by=["Date", "Home", "Away", "HasOdds"], ascending=[False, True, True, False])
-results_df = results_df.drop_duplicates(subset=["Date", "Home", "Away"]).drop(columns=["HasOdds"])
+results_df = results_df.sort_values(by=["Date", "Home", "Away", "Odd1"], ascending=[False, True, True, False])
+results_df = results_df.drop_duplicates(subset=["Date", "Home", "Away"])
+
 
 # ==========================================================
-# POBIERANIE Z SOCCERSTATS
+# 2. POBIERANIE Z SOCCERSTATS
 # ==========================================================
 dane_soccerstats_baza = []
 print("Rozpoczynam pobieranie danych z SoccerStats...")
@@ -165,28 +161,29 @@ try:
         
         for i_ss, url_ss in enumerate(urls_ss, start=1):
             url_ss = str(url_ss).strip()
+            
+            # Wyszukiwanie roku z linku (np. finland_2025 -> 2025)
+            match_yr = re.search(r'(20\d{2})', url_ss)
+            year_ss = match_yr.group(1) if match_yr else str(today.year)
+            
             nazwa_ligi = url_ss.split("league=")[1].split("&")[0] if "league=" in url_ss else f"Liga_{i_ss}"
-            print(f"[{i_ss}/{len(urls_ss)}] Pobieram SoccerStats dla: {nazwa_ligi}")
+            print(f"[{i_ss}/{len(urls_ss)}] Pobieram SoccerStats dla: {nazwa_ligi} (Rok: {year_ss})")
             
             html_ss = skaner_ss.get(url_ss, headers=headers, timeout=30).text
             soup_ss = BeautifulSoup(html_ss, "html.parser")
             
             tabela_meczow = None
-            wszystkie_tabele = soup_ss.find_all("table")
-            for t in wszystkie_tabele:
+            for t in soup_ss.find_all("table"):
                 if "HT" in t.get_text() and "BTS" in t.get_text() and len(t.find_all("tr")) > 15:
                     tabela_meczow = t
                     break
             
             if tabela_meczow:
                 wiersze_ss = tabela_meczow.find_all("tr")
-                ostatnia_data = ""
-                
                 for wiersz in wiersze_ss:
                     komorki = wiersz.find_all(["td", "th"])
                     if len(komorki) >= 6:
                         teksty = [k.get_text(" ", strip=True) for k in komorki]
-                        
                         wynik_index = -1
                         for idx, val in enumerate(teksty):
                             if ("-" in val or ":" in val) and any(c.isdigit() for c in val):
@@ -197,18 +194,13 @@ try:
                         if wynik_index != -1:
                             wynik = teksty[wynik_index]
                             gospodarz = teksty[wynik_index - 1]
-                            data = teksty[wynik_index - 2] if wynik_index >= 2 else teksty[0]
                             gosc = teksty[wynik_index + 1] if wynik_index + 1 < len(teksty) else ""
                             
                             if "HOME" in gospodarz.upper() or "GOSPODARZ" in gospodarz.upper(): continue
-                            
-                            if data and len(data) > 2: ostatnia_data = data
-                            else: data = ostatnia_data
                                 
                             if gospodarz and gosc and gosc != gospodarz:
                                 ht, o25, tg, bts = "-", "-", "-", "-"
-                                pozostale_komorki = teksty[wynik_index + 2:]
-                                statystyki = [s for s in pozostale_komorki if s.strip()] 
+                                statystyki = [s for s in teksty[wynik_index + 2:] if s.strip()] 
                                 
                                 if len(statystyki) >= 4:
                                     ht, o25, tg, bts = statystyki[0], statystyki[1], statystyki[2], statystyki[3]
@@ -219,9 +211,6 @@ try:
                                     
                                 wynik_czysty = wynik.replace("*", "").strip().replace(" ", "").replace("-", ":")
                                 ht_czysty = ht.replace("*", "").strip().replace(" ", "").replace("-", ":").replace("(", "").replace(")", "")
-                                o25_czysty = o25.replace("*", "").strip()
-                                tg_czysty = tg.replace("*", "").strip()
-                                bts_czysty = bts.replace("*", "").strip()
                                 
                                 g_gosp_m, g_gosc_m, suma_m = "-", "-", "-"
                                 g_gosp_1h, g_gosc_1h, suma_1h = "-", "-", "-"
@@ -248,76 +237,72 @@ try:
                                     except: pass
                                 
                                 dane_soccerstats_baza.append([
-                                    gospodarz, gosc, wynik_czysty,
+                                    year_ss, gospodarz, gosc, wynik_czysty,
                                     g_gosp_m, g_gosc_m, suma_m,
                                     ht_czysty, g_gosp_1h, g_gosc_1h, suma_1h,
                                     g_gosp_2h, g_gosc_2h, suma_2h,
-                                    o25_czysty, tg_czysty, bts_czysty
+                                    o25.replace("*", "").strip(), tg.replace("*", "").strip(), bts.replace("*", "").strip()
                                 ])
                         
         if dane_soccerstats_baza:
             ss_df = pd.DataFrame(dane_soccerstats_baza, columns=[
-                "Home", "Away", "Score",
+                "Year", "Home", "Away", "Score",
                 "Gole_Gosp_Mecz", "Gole_Gosc_Mecz", "Suma_Goli_Mecz",
                 "Wynik_HT", "Gole_Gosp_1H", "Gole_Gosc_1H", "Suma_Goli_1H",
-                "Gole_Gosp_2H", "Gole_Gosc_2H", "Suma_Goli_2H",
-                "2.5+", "TG", "BTS"
+                "Gole_Gosp_2H", "Gole_Gosc_2H", "Suma_Goli_2H", "2.5+", "TG", "BTS"
             ])
-            ss_df = ss_df.drop_duplicates(subset=["Home", "Away", "Score"])
-        else:
-            ss_df = pd.DataFrame()
+            # Usunięcie dubli z zachowaniem roku
+            ss_df = ss_df.drop_duplicates(subset=["Year", "Home", "Away", "Score"])
+        else: ss_df = pd.DataFrame()
             
-except Exception as e:
-    print("Wystąpił błąd podczas pracy z SoccerStats:", e)
-    ss_df = pd.DataFrame()
+except Exception as e: print("Błąd SoccerStats:", e); ss_df = pd.DataFrame()
 
 
 # ==========================================================
-# MAPOWANIE I SCALANIE TYLKO Z RESULTS (FIXTURES ZOSTAWIONE W SPOKOJU)
+# 3. MAPOWANIE I SCALANIE DANYCH
 # ==========================================================
-mapowanie_ss = {}
-mapowanie_fd = {}
-
+mapowanie_ss, mapowanie_fd = {}, {}
 if os.path.exists("slownik_druzyn.json"):
     try:
         with open("slownik_druzyn.json", "r", encoding="utf-8") as f:
             slownik_data = json.load(f)
             mapowanie_ss = slownik_data.get("SoccerStats_To_BetExplorer", {})
             mapowanie_fd = slownik_data.get("FootballData_To_BetExplorer", {})
-    except Exception as e: pass
+    except: pass
 
-# 1. SCALANIE Z SOCCERSTATS (TYLKO RESULTS, ŁĄCZENIE PO WYNIKU)
+# --- SCALANIE SOCCERSTATS ---
 if not ss_df.empty and not results_df.empty:
     print("Ujednolicam nazwy i scalam historię z SoccerStats...")
     ss_do_scalenia = ss_df.copy()
     ss_do_scalenia["Home"] = ss_do_scalenia["Home"].apply(lambda x: mapowanie_ss.get(x, x))
     ss_do_scalenia["Away"] = ss_do_scalenia["Away"].apply(lambda x: mapowanie_ss.get(x, x))
-    
-    results_df = pd.merge(results_df, ss_do_scalenia, on=["Home", "Away", "Score"], how="left")
+    results_df = pd.merge(results_df, ss_do_scalenia, on=["Year", "Home", "Away", "Score"], how="left")
 
-# 2. SCALANIE Z FOOTBALL-DATA.CO.UK (WIELE PLIKÓW - OBSŁUGA ARCHIWUM 2025)
+# --- SCALANIE FOOTBALL-DATA.CO.UK ---
 print("Rozpoczynam integrację danych z Football-Data.co.uk...")
 fd_all_data = pd.DataFrame()
 
-# Sprawdzamy czy użytkownik wrzucił plik z wieloma linkami FD (np. archiwa 2025)
+urls_fd = ["https://www.football-data.co.uk/new/FIN.csv"]
 if os.path.exists("ligi_footballdata.xlsx"):
-    urls_fd = pd.read_excel("ligi_footballdata.xlsx")["URL"].dropna().tolist()
-else:
-    # Domyślny link dla obecnego sezonu
-    urls_fd = ["https://www.football-data.co.uk/new/FIN.csv"]
+    try: urls_fd = pd.read_excel("ligi_footballdata.xlsx")["URL"].dropna().tolist()
+    except: pass
 
 for url_fd in urls_fd:
     try:
         fd_raw = pd.read_csv(url_fd, on_bad_lines='skip')
         if not fd_raw.empty and "Home" in fd_raw.columns:
             fd_all_data = pd.concat([fd_all_data, fd_raw], ignore_index=True)
-    except Exception as e:
-        pass
+    except: pass
 
 if not fd_all_data.empty and not results_df.empty:
     try:
-        kolumny_fd = ["Home", "Away", "HG", "AG", "HS", "AS", "HST", "AST", "HC", "AC"]
+        kolumny_fd = ["Date", "Home", "Away", "HG", "AG", "HS", "AS", "HST", "AST", "HC", "AC"]
         fd_processed = fd_all_data[[c for c in kolumny_fd if c in fd_all_data.columns]].copy()
+        
+        # Wyciągamy Rok z daty CSV dla perfekcyjnego złączenia
+        if "Date" in fd_processed.columns:
+            fd_processed["Year"] = pd.to_datetime(fd_processed["Date"], dayfirst=True, errors='coerce').dt.year.fillna(today.year).astype(int).astype(str)
+        else: fd_processed["Year"] = str(today.year)
         
         fd_processed = fd_processed.dropna(subset=["HG", "AG"])
         fd_processed["Score"] = fd_processed["HG"].astype(int).astype(str) + ":" + fd_processed["AG"].astype(int).astype(str)
@@ -340,23 +325,22 @@ if not fd_all_data.empty and not results_df.empty:
             fd_processed.loc[fd_processed["HST"] > fd_processed["AST"], "Wiecej_Celnych"] = "Gospodarz"
             fd_processed.loc[fd_processed["AST"] > fd_processed["HST"], "Wiecej_Celnych"] = "Gosc"
             
-        fd_final = fd_processed.drop(columns=["HG", "AG", "HS", "AS", "HST", "AST", "HC", "AC"], errors="ignore")
-        fd_final = fd_final.drop_duplicates(subset=["Home", "Away", "Score"])
+        fd_final = fd_processed.drop(columns=["Date", "HG", "AG", "HS", "AS", "HST", "AST", "HC", "AC"], errors="ignore")
+        fd_final = fd_final.drop_duplicates(subset=["Year", "Home", "Away", "Score"])
         
-        results_df = pd.merge(results_df, fd_final, on=["Home", "Away", "Score"], how="left")
+        results_df = pd.merge(results_df, fd_final, on=["Year", "Home", "Away", "Score"], how="left")
             
     except Exception as e: print("Football-Data błąd mapowania:", e)
 
-# Kasujemy duble, które mogły powstać w przypadku dwóch identycznych meczów w sezonie
-results_df = results_df.drop_duplicates(subset=["Date", "Home", "Away"])
+# Finalne kasowanie dubli systemowych, sprzątanie roboczej kolumny Year
+results_df = results_df.drop_duplicates(subset=["Date", "Home", "Away"]).drop(columns=["Year"], errors="ignore")
+fixtures_df = fixtures_df.drop(columns=["Year"], errors="ignore")
+
 
 # ==========================================
-# CZYSZCZENIE DANYCH PRZED WYSYŁKĄ DO GOOGLE SHEETS
+# 4. CZYSZCZENIE I FORMATOWANIE DO GOOGLE SHEETS
 # ==========================================
-if not fixtures_df.empty: fixtures_df = fixtures_df.fillna("-")
-if not results_df.empty: results_df = results_df.fillna("-")
-
-# Usuwanie końcówki .0 z liczb całkowitych ułamków wymuszonych przez Pandas
+# Inteligentne usuwanie .0 z ułamków przy użyciu natywnego typu Int64
 kolumny_liczbowe = [
     "Gole_Gosp_Mecz", "Gole_Gosc_Mecz", "Suma_Goli_Mecz",
     "Gole_Gosp_1H", "Gole_Gosc_1H", "Suma_Goli_1H",
@@ -366,14 +350,18 @@ kolumny_liczbowe = [
 
 for col in kolumny_liczbowe:
     if col in results_df.columns:
-        results_df[col] = results_df[col].astype(str).apply(lambda x: x[:-2] if x.endswith(".0") else x)
+        # Konwersja na liczby całkowite odporne na puste komórki (NaN -> myślnik)
+        results_df[col] = pd.to_numeric(results_df[col], errors='coerce').astype('Int64').astype(str).replace('<NA>', '-')
+
+if not fixtures_df.empty: fixtures_df = fixtures_df.fillna("-")
+if not results_df.empty: results_df = results_df.fillna("-")
 
 for col in ["Odd1", "OddX", "Odd2"]:
     if col in fixtures_df.columns: fixtures_df[col] = fixtures_df[col].apply(lambda x: str(x).replace(".", ",") if str(x) != "-" else "-")
     if col in results_df.columns: results_df[col] = results_df[col].apply(lambda x: str(x).replace(".", ",") if str(x) != "-" else "-")
 
 # ==========================================
-# GOOGLE SHEETS AUTORYZACJA I ZAPIS
+# 5. GOOGLE SHEETS AUTORYZACJA I ZAPIS
 # ==========================================
 scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 
