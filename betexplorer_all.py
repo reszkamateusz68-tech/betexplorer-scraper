@@ -338,44 +338,54 @@ try:
                 for wiersz in wiersze_ss:
                     komorki = wiersz.find_all("td")
                     
-                    # Interesują nas pełne wiersze (mają minimum 8-9 komórek)
-                    if len(komorki) >= 8:
-                        teksty = [k.get_text(strip=True) for k in komorki]
+                    # Interesują nas pełne wiersze (mają minimum 7-8 komórek)
+                    if len(komorki) >= 7:
+                        # Pobieramy czyste teksty ze wszystkich komórek w wierszu
+                        teksty = [k.get_text(strip=True) for k in komorki if k.get_text(strip=True) or k.get_text(strip=True) == ""]
                         
-                        # Pobieramy podstawowe dane według kolumn z IMPORTHTML
-                        data = teksty[0]
-                        gospodarz = teksty[1]
-                        wynik = teksty[2]
-                        gosc = teksty[3]
+                        # Filtrujemy tylko te wiersze, w których jakikolwiek element ma format wyniku (np. "2:1" lub "*2:1*")
+                        ma_wynik = False
+                        indeks_wyniku = -1
                         
-                        # Pancerny mechanizm sprawdzania przesunięcia kolumn dla statystyk
-                        if len(teksty) >= 9:
-                            ht = teksty[5]
-                            o25 = teksty[6]
-                            tg = teksty[7]
-                            bts = teksty[8] if len(teksty) > 8 else "-"
-                        else:
-                            ht = teksty[4]
-                            o25 = teksty[5]
-                            tg = teksty[6]
-                            bts = teksty[7] if len(teksty) > 7 else "-"
+                        for idx, tekst in enumerate(teksty):
+                            if ":" in tekst and any(char.isdigit() for char in tekst):
+                                ma_wynik = True
+                                indeks_wyniku = idx
+                                break
                         
-                        # WARUNEK IDEALNY: Zapisujemy tylko jeśli w kolumnie wyniku jest dwukropek (prawdziwy mecz)
-                        if ":" in wynik and gospodarz and gosc:
+                        if ma_wynik and indeks_wyniku >= 2:
+                            # Dynamicznie mapujemy pozycje wokół znalezionego wyniku
+                            wynik = teksty[indeks_wyniku].replace("*", "").strip()
+                            gospodarz = teksty[indeks_wyniku - 1].strip()
+                            data = teksty[indeks_wyniku - 2].strip()
+                            gosc = teksty[indeks_wyniku + 1].strip()
                             
-                            # Czyścimy gwiazdki (*), aby dane były czyste i estetyczne
-                            wynik_czysty = wynik.replace("*", "").strip()
-                            ht_czysty = ht.replace("*", "").strip()
-                            o25_czysty = o25.replace("*", "").strip()
-                            tg_czysty = tg.replace("*", "").strip()
-                            bts_czysty = bts.replace("*", "").strip()
+                            # Szukamy statystyk HT (zazwyczaj w nawiasach, np. "(1-0)" lub po prostu kolejny element z kreską)
+                            ht = "-"
+                            o25 = "-"
+                            tg = "-"
+                            bts = "-"
                             
-                            # Dodatkowe zabezpieczenie przed błędnym złapaniem nagłówków
-                            if "Gospodarz" in gospodarz or "*HT*" in ht_czysty:
+                            # Przeszukujemy elementy ZA gościem w poszukiwaniu statystyk
+                            pozostale_elementy = [t.replace("*", "").strip() for t in teksty[indeks_wyniku + 2:] if t.strip()]
+                            
+                            if len(pozostale_elementy) >= 4:
+                                ht = pozostale_elementy[0]
+                                o25 = pozostale_elementy[1]
+                                tg = pozostale_elementy[2]
+                                bts = pozostale_elementy[3]
+                            elif len(pozostale_elementy) == 3:
+                                # Jeśli brakuje jednej kolumny, przypisujemy to co jest
+                                ht = pozostale_elementy[0]
+                                o25 = pozostale_elementy[1]
+                                tg = pozostale_elementy[2]
+                            
+                            # Dodatkowe zabezpieczenie czyszczące
+                            if "Gospodarz" in gospodarz or "Data" in data:
                                 continue
                                 
                             dane_soccerstats_baza.append([
-                                nazwa_ligi, data, gospodarz, wynik_czysty, gosc, ht_czysty, o25_czysty, tg_czysty, bts_czysty
+                                nazwa_ligi, data, gospodarz, wynik, gosc, ht, o25, tg, bts
                             ])
                         
         if dane_soccerstats_baza:
@@ -385,7 +395,7 @@ try:
             ss_df = ss_df.drop_duplicates()
             print(f"Sukces! Pobrano łącznie {len(ss_df)} ustrukturyzowanych wierszy z SoccerStats.")
         else:
-            print("Znalazłem tabelę, ale filtrowanie odrzuciło wszystkie wiersze. Sprawdź warunki.")
+            print("Znalazłem tabelę, ale żaden wiersz nie przeszedł skanera dynamicznego.")
             ss_df = pd.DataFrame()
             
 except Exception as e:
