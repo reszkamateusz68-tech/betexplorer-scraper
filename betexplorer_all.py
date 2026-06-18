@@ -1,19 +1,16 @@
 import os
 import json
 import gspread
-
-from google.oauth2.service_account import Credentials
-
 import requests
+import cloudscraper  # <-- TA LINIJKA NAPRAWIA BŁĄD Z LOGÓW!
 import pandas as pd
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
-from openpyxl.utils import get_column_letter
+from google.oauth2.service_account import Credentials
 
 today = datetime.now()
 
 def split_datetime(value):
-
     if pd.isna(value):
         return None, ""
 
@@ -21,16 +18,12 @@ def split_datetime(value):
 
     # Today 20:00
     if value.lower().startswith("today"):
-
         time_part = value.replace("Today", "").strip()
-
         return today.date(), time_part
 
     # Tomorrow 01:00
     if value.lower().startswith("tomorrow"):
-
         time_part = value.replace("Tomorrow", "").strip()
-
         return (
             today.date() + timedelta(days=1),
             time_part
@@ -38,9 +31,7 @@ def split_datetime(value):
 
     # Yesterday
     if value.lower().startswith("yesterday"):
-
         time_part = value.replace("Yesterday", "").strip()
-
         return (
             today.date() - timedelta(days=1),
             time_part
@@ -48,18 +39,12 @@ def split_datetime(value):
 
     # 17.06. 01:00
     try:
-
         parts = value.split()
-
         if len(parts) == 2:
-
             date_part = parts[0]
             time_part = parts[1]
-
             if date_part.endswith("."):
-
                 day, month = date_part.rstrip(".").split(".")
-
                 return (
                     datetime(
                         today.year,
@@ -68,13 +53,11 @@ def split_datetime(value):
                     ).date(),
                     time_part
                 )
-
     except:
         pass
 
     # 18.08.2025
     try:
-
         return (
             datetime.strptime(
                 value,
@@ -82,17 +65,13 @@ def split_datetime(value):
             ).date(),
             ""
         )
-
     except:
         pass
 
     # 24.05.
     try:
-
         if value.endswith("."):
-
             day, month = value.rstrip(".").split(".")
-
             return (
                 datetime(
                     today.year,
@@ -101,7 +80,6 @@ def split_datetime(value):
                 ).date(),
                 ""
             )
-
     except:
         pass
 
@@ -124,11 +102,8 @@ headers = {
 all_data = []
 
 for i, url in enumerate(urls, start=1):
-
     print(f"[{i}/{len(urls)}] Pobieram: {url}")
-
     try:
-
         html = requests.get(
             url,
             headers=headers,
@@ -150,9 +125,7 @@ for i, url in enumerate(urls, start=1):
         # FUTURE FIXTURES
         # ==========================================
         if "/fixtures/" in url:
-
             for row in rows:
-
                 date_cell = row.find(
                     "td",
                     class_="table-main__datetime"
@@ -162,7 +135,6 @@ for i, url in enumerate(urls, start=1):
                     continue
 
                 spans = row.find_all("span")
-
                 if len(spans) < 2:
                     continue
 
@@ -170,28 +142,18 @@ for i, url in enumerate(urls, start=1):
                 away = spans[1].get_text(strip=True)
 
                 odds = []
-
                 odds_cells = row.select("td.table-main__odds")
 
                 for cell in odds_cells:
-
-                    odd = None
-
-                    # wariant 1
                     odd = cell.get("data-odd")
-
-                    # wariant 2
                     if not odd:
                         span = cell.find(attrs={"data-odd": True})
                         if span:
                             odd = span.get("data-odd")
-
-                    # wariant 3
                     if not odd:
                         button = cell.find("button")
                         if button:
                             odd = button.get_text(strip=True)
-
                     odds.append(odd if odd else "-")
                         
                 if len(odds) == 0:
@@ -205,10 +167,8 @@ for i, url in enumerate(urls, start=1):
 
                 if len(odds) >= 1:
                     odd1 = odds[0]
-
                 if len(odds) >= 2:
                     oddx = odds[1]
-
                 if len(odds) >= 3:
                     odd2 = odds[2]
 
@@ -228,19 +188,15 @@ for i, url in enumerate(urls, start=1):
         # HISTORICAL RESULTS
         # ==========================================
         elif "/results/" in url:
-
             for row in rows:
-
                 match = row.find(
                     "a",
                     class_="in-match"
                 )
-
                 if not match:
                     continue
 
                 spans = match.find_all("span")
-
                 if len(spans) < 2:
                     continue
 
@@ -248,34 +204,25 @@ for i, url in enumerate(urls, start=1):
                 away = spans[1].get_text(" ", strip=True)
 
                 score = ""
-
                 score_cell = row.find(
                     "td",
                     class_="h-text-center"
                 )
-
                 if score_cell:
                     score = score_cell.get_text(strip=True)
 
                 odds_cells = row.select(
                     "td.table-main__odds"
                 )
-
                 odds = []
-
                 for cell in odds_cells:
-
                     odd = cell.get("data-odd")
-
                     if not odd:
-
                         span = cell.find(
                             attrs={"data-odd": True}
                         )
-
                         if span:
                             odd = span.get("data-odd")
-
                     odds.append(
                         odd if odd else "-"
                     )
@@ -286,20 +233,16 @@ for i, url in enumerate(urls, start=1):
 
                 if len(odds) >= 1:
                     odd1 = odds[0]
-
                 if len(odds) >= 2:
                     oddx = odds[1]
-
                 if len(odds) >= 3:
                     odd2 = odds[2]
 
                 date = ""
-
                 date_cell = row.find(
                     "td",
                     class_=lambda x: x and "h-text-right" in x
                 )
-
                 if date_cell:
                     date = date_cell.get_text(strip=True)
 
@@ -316,7 +259,6 @@ for i, url in enumerate(urls, start=1):
                 ])
 
     except Exception as e:
-
         print()
         print("BŁĄD:", url)
         print(e)
@@ -325,7 +267,6 @@ for i, url in enumerate(urls, start=1):
 # ==========================================
 # DATAFRAME
 # ==========================================
-
 df = pd.DataFrame(
     all_data,
     columns=[
@@ -340,16 +281,12 @@ df = pd.DataFrame(
         "Odd2"
     ]
 )
-
 df = df.drop_duplicates()
 
 dates = []
 times = []
-
 for value in df["Date"]:
-
     d, t = split_datetime(value)
-
     dates.append(d)
     times.append(t)
 
@@ -363,16 +300,13 @@ dane_soccerstats_baza = []
 print("Rozpoczynam pobieranie danych z SoccerStats...")
 
 try:
-    # Wczytujemy listę linków z nowego pliku Excela
     if os.path.exists("ligi_soccerstats.xlsx"):
         urls_ss = pd.read_excel("ligi_soccerstats.xlsx")["URL"].dropna().tolist()
         print(f"Znaleziono {len(urls_ss)} linków w pliku ligi_soccerstats.xlsx")
         
-        # Używamy cloudscraper, żeby bezpiecznie ominąć blokady Cloudflare
         skaner_ss = cloudscraper.create_scraper()
         
         for i_ss, url_ss in enumerate(urls_ss, start=1):
-            # Wyciągamy prostą nazwę ligi z końcówki linku (np. england, spain)
             try:
                 nazwa_ligi = url_ss.split("league=")[1]
             except:
@@ -383,11 +317,8 @@ try:
             html_ss = skaner_ss.get(url_ss, headers={"User-Agent": headers["User-Agent"]}, timeout=30).text
             soup_ss = BeautifulSoup(html_ss, "html.parser")
             
-            # Szukamy tabeli ze statystykami bramek po ID 'btb' (Goals per half)
             tabela_bramek = soup_ss.find("table", {"id": "btb"})
-            
             if not tabela_bramek:
-                # Jeśli nie ma po ID, szukamy pierwszej lepszej tabeli statystycznej o klasie 'tab'
                 tabele = soup_ss.find_all("table", class_="tab")
                 if tabele:
                     tabela_bramek = tabele[0]
@@ -398,10 +329,8 @@ try:
                     komorki = wiersz.find_all(["td", "th"])
                     dane_wiersza = [k.get_text(strip=True) for k in komorki]
                     if dane_wiersza and len(dane_wiersza) > 2:
-                        # Dodajemy nazwę ligi jako pierwszą kolumnę
                         dane_soccerstats_baza.append([nazwa_ligi] + dane_wiersza)
                         
-        # Budujemy końcową tabelę danych
         if dane_soccerstats_baza:
             ss_df = pd.DataFrame(dane_soccerstats_baza)
             print(f"Sukces! Pobrano łącznie {len(ss_df)} wierszy statystyk z SoccerStats.")
@@ -418,127 +347,107 @@ except Exception as e:
 # ==========================================
 # GOOGLE SHEETS AUTORYZACJA
 # ==========================================
-
-import gspread
 scope = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
 ]
 
 if os.path.exists("credentials.json"):
-
     creds = Credentials.from_service_account_file(
         "credentials.json",
         scopes=scope
     )
-
 else:
-
     credentials_dict = json.loads(
         os.environ["GOOGLE_CREDENTIALS"]
     )
-
     creds = Credentials.from_service_account_info(
         credentials_dict,
         scopes=scope
     )
 
 client = gspread.authorize(creds)
-
 spreadsheet = client.open("BetExplorer")
 
 try:
     summary_sheet = spreadsheet.worksheet("Summary")
 except:
-    summary_sheet = spreadsheet.add_worksheet(
-        title="Summary",
-        rows=100,
-        cols=10
-    )
+    summary_sheet = spreadsheet.add_worksheet(title="Summary", rows=100, cols=10)
+
 # ==========================================
 # PODZIAŁ DANYCH
 # ==========================================
-
 fixtures_df = df[df["Type"] == "Fixture"].copy()
 results_df = df[df["Type"] == "Result"].copy()
 
-fixtures_df = fixtures_df.sort_values(
-    by=["Date", "Time"],
-    ascending=True
-)
-
-results_df = results_df.sort_values(
-    by=["Date"],
-    ascending=False
-)
+fixtures_df = fixtures_df.sort_values(by=["Date", "Time"], ascending=True)
+results_df = results_df.sort_values(by=["Date"], ascending=False)
 
 # ==========================================
 # TWORZENIE / POBIERANIE ARKUSZY
 # ==========================================
-
 try:
     fixtures_sheet = spreadsheet.worksheet("Fixtures")
 except:
-    fixtures_sheet = spreadsheet.add_worksheet(
-        title="Fixtures",
-        rows=1000,
-        cols=20
-    )
+    fixtures_sheet = spreadsheet.add_worksheet(title="Fixtures", rows=1000, cols=20)
 
 try:
     results_sheet = spreadsheet.worksheet("Results")
 except:
-    results_sheet = spreadsheet.add_worksheet(
-        title="Results",
-        rows=5000,
-        cols=20
-    )
+    results_sheet = spreadsheet.add_worksheet(title="Results", rows=5000, cols=20)
 
 # ==========================================
-# FIXTURES
+# FIXTURES UPDATE
 # ==========================================
-
 print("Aktualizacja Fixtures...")
-
 for col in ["Odd1", "OddX", "Odd2"]:
-
     fixtures_df[col] = fixtures_df[col].apply(
-        lambda x: str(x).replace(".", ",")
-        if str(x) != "-"
-        else "-"
+        lambda x: str(x).replace(".", ",") if str(x) != "-" else "-"
     )
-
 fixtures_sheet.clear()
-
 fixtures_sheet.update(
     [fixtures_df.columns.tolist()] +
     fixtures_df.astype(str).values.tolist()
 )
 
 # ==========================================
-# RESULTS
+# RESULTS UPDATE
 # ==========================================
-
 print("Aktualizacja Results...")
-
 for col in ["Odd1", "OddX", "Odd2"]:
-
     results_df[col] = results_df[col].apply(
-        lambda x: str(x).replace(".", ",")
-        if str(x) != "-"
-        else "-"
+        lambda x: str(x).replace(".", ",") if str(x) != "-" else "-"
     )
-
 results_sheet.clear()
-
 results_sheet.update(
     [results_df.columns.tolist()] +
     results_df.astype(str).values.tolist()
 )
-from datetime import datetime
 
+# ==========================================
+# SOCCERSTATS UPDATE (BRAKUJĄCA SEKCJA!)
+# ==========================================
+if not ss_df.empty:
+    print("Wysyłam statystyki SoccerStats do Google Sheets...")
+    try:
+        try:
+            arkusz_ss = spreadsheet.worksheet("SoccerStats_Model")
+        except:
+            arkusz_ss = spreadsheet.add_worksheet(title="SoccerStats_Model", rows=2000, cols=25)
+        
+        arkusz_ss.clear()
+        arkusz_ss.update(
+            [ss_df.columns.tolist()] + 
+            ss_df.astype(str).values.tolist()
+        )
+        print("Zakładka SoccerStats_Model została zaktualizowana!")
+    except Exception as e:
+        print("Błąd zapisu zakładki SoccerStats_Model:", e)
+
+# ==========================================
+# SUMMARY UPDATE
+# ==========================================
 summary_sheet.clear()
-
 summary_sheet.update(
     [
         ["Metric", "Value"],
@@ -549,6 +458,7 @@ summary_sheet.update(
         ["Total Rows", len(df)]
     ]
 )
+
 print()
 print("=" * 60)
 print("GOTOWE")
