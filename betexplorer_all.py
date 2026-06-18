@@ -313,7 +313,7 @@ try:
         for i_ss, url_ss in enumerate(urls_ss, start=1):
             url_ss = str(url_ss).strip()
             
-            # Pobieramy nazwę ligi z linku (np. finland, england)
+            # Pobieramy nazwę ligi z linku
             try:
                 nazwa_ligi = url_ss.split("league=")[1].split("&")[0]
             except:
@@ -324,44 +324,71 @@ try:
             html_ss = skaner_ss.get(url_ss, headers={"User-Agent": headers["User-Agent"]}, timeout=30).text
             soup_ss = BeautifulSoup(html_ss, "html.parser")
             
-            # Szukamy konkretnej tabeli z meczami (ma klasę 'sortable')
-            tabela_meczow = soup_ss.find("table", class_="sortable")
+            # Inteligentne szukanie tabeli po unikalnych nagłówkach tekstowych
+            tabela_meczow = None
+            wszystkie_tabele = soup_ss.find_all("table")
+            for t in wszystkie_tabele:
+                tekst_tabeli = t.get_text()
+                # Szukamy tabeli, która zawiera kolumny statystyczne widoczne na ekranie
+                if "*HT*" in tekst_tabeli and "*BTS*" in tekst_tabeli:
+                    tabela_meczow = t
+                    break
             
             if tabela_meczow:
-                wiersze_ss = tabela_meczow.find_all("tr", class_="odd")
+                # Pobieramy WSZYSTKIE wiersze z tej tabeli
+                wiersze_ss = tabela_meczow.find_all("tr")
                 
                 for wiersz in wiersze_ss:
                     komorki = wiersz.find_all("td")
-                    # Interesują nas tylko wiersze, które mają odpowiednią liczbę kolumn meczowych
-                    if len(komorki) >= 9:
-                        data = komorki[0].get_text(strip=True)
-                        gospodarz = komorki[1].get_text(strip=True)
-                        wynik = komorki[2].get_text(strip=True)
-                        gosc = komorki[3].get_text(strip=True)
-                        ht = komorki[4].get_text(strip=True)
-                        o25 = komorki[5].get_text(strip=True)
-                        tg = komorki[6].get_text(strip=True)
-                        bts = komorki[7].get_text(strip=True)
+                    
+                    # Tabela wyników ma zazwyczaj 8-9 kolumn (w tym puste separatory)
+                    if len(komorki) >= 8:
+                        teksty = [k.get_text(strip=True) for k in komorki]
                         
-                        # Zapisujemy tylko jeśli wiersz zawiera dane meczu (np. ma podany wynik lub gwiazdki)
-                        if gospodarz and gosc:
+                        # Pomijamy wiersze nagłówkowe i podsumowania
+                        if "*HT*" in teksty or "Sat" in teksty[1] or "Sun" in teksty[1]:
+                            continue
+                            
+                        data = teksty[0]
+                        gospodarz = teksty[1]
+                        wynik = teksty[2]
+                        gosc = teksty[3]
+                        
+                        # SoccerStats dodaje pustą kolumnę na indeksie 4 (kolumna E w Excelu)
+                        # Mapujemy resztę kolonii sprawdzając bezpiecznie długość tablicy
+                        if len(teksty) >= 9:
+                            ht = teksty[5]   # Kolumna F (*HT*)
+                            o25 = teksty[6]  # Kolumna G (*2.5+*)
+                            tg = teksty[7]   # Kolumna H (*TG*)
+                            bts = teksty[8]  # Kolumna I (*BTS*)
+                        else:
+                            ht = teksty[4]
+                            o25 = teksty[5]
+                            tg = teksty[6]
+                            bts = teksty[7]
+                        
+                        # Zapisujemy tylko prawdziwe mecze (gdzie gospodarz i gość nie są puści)
+                        if gospodarz and gosc and gosc != gospodarz:
+                            # Czyścimy asteriski (*), jeśli chcesz mieć czyste wyniki (np. "0:0" zami shortcuts "*0:0*")
+                            wynik = wynik.replace("*", "")
+                            ht = ht.replace("*", "")
+                            o25 = o25.replace("*", "")
+                            tg = tg.replace("*", "")
+                            bts = bts.replace("*", "")
+                            
                             dane_soccerstats_baza.append([
                                 nazwa_ligi, data, gospodarz, wynik, gosc, ht, o25, tg, bts
                             ])
                         
         if dane_soccerstats_baza:
-            # Tworzymy piękny DataFrame z jasnymi, ustrukturyzowanymi nagłówkami
             ss_df = pd.DataFrame(dane_soccerstats_baza, columns=[
                 "Liga", "Data", "Gospodarz", "Wynik", "Gosc", "HT", "2.5+", "TG", "BTS"
             ])
             print(f"Sukces! Pobrano łącznie {len(ss_df)} ustrukturyzowanych wierszy z SoccerStats.")
         else:
-            print("Nie udało się wyciągnąć wierszy z tabeli meczowej sortable.")
+            print("Znalazłem tabelę, ale nie udało się wyciągnąć z niej wierszy meczowych.")
             ss_df = pd.DataFrame()
-    else:
-        print("Błąd: Nie znaleziono pliku ligi_soccerstats.xlsx na GitHubie!")
-        ss_df = pd.DataFrame()
-
+            
 except Exception as e:
     print("Wystąpił błąd podczas pracy z SoccerStats:", e)
     ss_df = pd.DataFrame()
