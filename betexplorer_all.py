@@ -156,29 +156,36 @@ for i, url in enumerate(urls, start=1):
         print("BŁĄD:", url, e)
 
 # ==========================================================
-# 2. DATAFRAME I INTELIGENTNE USUWANIE DUPLIKATÓW
+# 2. DATAFRAME I BEZPIECZNE USUWANIE DUPLIKATÓW
 # ==========================================================
 df = pd.DataFrame(all_data, columns=["Type", "League", "Date", "Home", "Away", "Score", "Odd1", "OddX", "Odd2"])
-df = df.drop_duplicates()
 
-dates, times = [], []
-for value in df["Date"]:
-    d, t = split_datetime(value)
-    dates.append(d)
-    times.append(t)
-
-df["Date"] = dates
-df.insert(3, "Time", times)
-
+# Rozdzielamy od razu na czyste Fixtures i Results z BetExplorera
 fixtures_df = df[df["Type"] == "Fixture"].copy()
 results_df = df[df["Type"] == "Result"].copy()
 
-# SMART DROP dla Fixtures
+# Przetwarzamy daty i godziny dla Fixtures
+dates_f, times_f = [], []
+for value in fixtures_df["Date"]:
+    d, t = split_datetime(value)
+    dates_f.append(d)
+    times_f.append(t)
+fixtures_df["Date"] = dates_f
+fixtures_df.insert(3, "Time", times_f)
+
+# Przetwarzamy daty dla Results
+dates_r, times_r = [], []
+for value in results_df["Date"]:
+    d, t = split_datetime(value)
+    dates_r.append(d)
+    times_r.append(t)
+results_df["Date"] = dates_r
+
+# USUWANIE DUPLIKATÓW: Filtrujemy tylko po bazie BetExplorera, bazując na kursach
 fixtures_df['HasOdds'] = fixtures_df['Odd1'].astype(str).apply(lambda x: 1 if x.strip() not in ["", "-", "nan"] else 0)
 fixtures_df = fixtures_df.sort_values(by=["Date", "Time", "Home", "Away", "HasOdds"], ascending=[True, True, True, True, False])
 fixtures_df = fixtures_df.drop_duplicates(subset=["Date", "Home", "Away"]).drop(columns=["HasOdds"])
 
-# Zabezpieczenie duplikatów dla Results
 results_df['HasOdds'] = results_df['Odd1'].astype(str).apply(lambda x: 1 if x.strip() not in ["", "-", "nan"] else 0)
 results_df = results_df.sort_values(by=["Date", "Home", "Away", "HasOdds"], ascending=[False, True, True, False])
 results_df = results_df.drop_duplicates(subset=["Date", "Home", "Away"]).drop(columns=["HasOdds"])
@@ -286,6 +293,87 @@ try:
         else: ss_df = pd.DataFrame()
             
 except Exception as e: print("Błąd SoccerStats:", e); ss_df = pd.DataFrame()
+
+
+# ==========================================================
+# 4. BEZPIECZNE SCALANIE DANYCH (LEFT JOIN)
+# ==========================================================
+mapowanie_ss, mapowanie_fd = {}, {}
+if os.path.exists("slownik_druzyn.json"):
+    try:
+        with open("slownik_druzyn.json", "r", encoding="utf-8") as f:
+            slownik_data = json.load(f)
+            mapowanie_ss = slownik_data.get("SoccerStats_To_BetExplorer", {})
+            mapowanie_fd = slownik_data.get("FootballData_To_BetExplorer", {})
+    except: pass
+
+if not ss_df.empty and not results_df.empty:
+    print("Ujednolicam nazwy i scalam historię z SoccerStats...")
+    ss_do_scalenia = ss_df.copy()
+    ss_do_scalenia["Home"] = ss_do_scalenia["Home"].apply(lambda x: mapowanie_ss.get(str(x).strip(), str(x).strip()))
+    ss_do_scalenia["Away"] = ss_do_scalenia["Away"].apply(lambda x: mapowanie_ss.get(str(x).strip(), str(x).strip()))
+    
+    # how="left" gwarantuje, że mecze z BetExplorera NIGDY nie zostaną skasowane
+    results_df = pd.merge(results_df, ss_do_scalenia, on=["Home", "Away", "Score"], how="left")
+
+print("Rozpoczynam integrację danych z Football-Data.co.uk...")
+fd_all_data = pd.DataFrame()
+
+urls_fd = []
+if os.path.exists("ligi_footballdata.xlsx"):
+    try: urls_fd = pd.read_excel("ligi_footballdata.xlsx")["URL"].dropna().tolist()
+    except: pass
+
+fd_rename_dict = {
+    "HomeTeam": "Home", "AwayTeam": "Away", 
+    "FTHG": "HG", "FTAG": "AG",
+    "HS": "HS", "AS": "AS", 
+    "HST": "HST", "AST": "AST", 
+    "HC": "HC", "AC": "AC"
+}
+
+for url_fd in urls_fd:
+    try:
+        fd_raw = pd.read_csv(url_fd.strip(), on_bad_lines='skip')
+        if not fd_raw.empty:
+            fd_raw = fd_raw.rename(columns=fd_rename_dict)
+            fd_all_data = pd.concat([fd_all_data, fd_raw], ignore_index=True)
+    except: pass
+
+if not fd_all_data.empty and not results_df.empty:
+    try:
+        kolumny_fd = ["Home", "Away", "HG", "AG", "HS", "AS", "HST", "AST", "HC", "AC"]
+        fd_processed = fd_all_data[[c for c in kolumny_fd if c in fd_all_data.columns]].copy()
+        
+        fd_processed = fd_processed.dropna(subset=["HG", "AG"])
+        fd_processed["Score"] = fd_processed["HG"].astype(int).astype(str) + ":" + fd_processed["AG"].astype(int).astype(str)
+        
+        fd_processed["Home"] = fd_processed["Home"].astype(str).str.strip().apply(lambda x: mapowanie_fd.get(x, x))
+        fd_processed["Away"] = fd_processed["Away"].astype(str).str.strip().apply(lambda x: mapowanie_fd.get(x, x))
+        
+        if "HC" in fd_processed.columns and "AC" in fd_processed.columns:
+            fd_processed["Suma_Roznych"] = fd_processed["HC"] + fd_processed["AC"]
+        
+        if "HS" in fd_processed.columns and "AS" in fd_processed.columns:
+            fd_processed["Suma_Strzalow"] = fd_processed["HS"] + fd_processed["AS"]
+            fd_processed["Wiecej_Strzalow"] = "Remis"
+            fd_processed.loc[fd_processed["HS"] > fd_processed["AS"], "Wiecej_Strzalow"] = "Gospodarz"
+            fd_processed.loc[fd_processed["AS"] > fd_processed["HS"], "Wiecej_Strzalow"] = "Gosc"
+            
+        if "HST" in fd_processed.columns and "AST" in fd_processed.columns:
+            fd_processed["Suma_Celnych"] = fd_processed["HST"] + fd_processed["AST"]
+            fd_processed["Wiecej_Celnych"] = "Remis"
+            fd_processed.loc[fd_processed["HST"] > fd_processed["AST"], "Wiecej_Celnych"] = "Gospodarz"
+            fd_processed.loc[fd_processed["AST"] > fd_processed["HST"], "Wiecej_Celnych"] = "Gosc"
+            
+        fd_final = fd_processed.drop(columns=["HG", "AG", "HS", "AS", "HST", "AST", "HC", "AC"], errors="ignore")
+        fd_final = fd_final.drop_duplicates(subset=["Home", "Away", "Score"])
+        
+        # Kolejny left join – baza główna jest bezpieczna
+        results_df = pd.merge(results_df, fd_final, on=["Home", "Away", "Score"], how="left")
+        print("Integracja Football-Data zakończona pomyślnie.")
+            
+    except Exception as e: print("Football-Data błąd mapowania:", e)
 
 
 # ==========================================================
