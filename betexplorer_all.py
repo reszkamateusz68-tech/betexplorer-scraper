@@ -291,7 +291,7 @@ except Exception as e: print("Błąd SoccerStats:", e); ss_df = pd.DataFrame()
 
 
 # ==========================================================
-# 4. MAPOWANIE I SCALANIE DANYCH 
+# 4. MAPOWANIE I SCALANIE DANYCH (ZAKTUALIZOWANE DLA 25/26)
 # ==========================================================
 mapowanie_ss, mapowanie_fd = {}, {}
 if os.path.exists("slownik_druzyn.json"):
@@ -305,37 +305,59 @@ if os.path.exists("slownik_druzyn.json"):
 if not ss_df.empty and not results_df.empty:
     print("Ujednolicam nazwy i scalam historię z SoccerStats...")
     ss_do_scalenia = ss_df.copy()
-    ss_do_scalenia["Home"] = ss_do_scalenia["Home"].apply(lambda x: mapowanie_ss.get(x, x))
-    ss_do_scalenia["Away"] = ss_do_scalenia["Away"].apply(lambda x: mapowanie_ss.get(x, x))
+    ss_do_scalenia["Home"] = ss_do_scalenia["Home"].apply(lambda x: mapowanie_ss.get(str(x).strip(), str(x).strip()))
+    ss_do_scalenia["Away"] = ss_do_scalenia["Away"].apply(lambda x: mapowanie_ss.get(str(x).strip(), str(x).strip()))
     
     results_df = pd.merge(results_df, ss_do_scalenia, on=["Home", "Away", "Score"], how="left")
 
 print("Rozpoczynam integrację danych z Football-Data.co.uk...")
 fd_all_data = pd.DataFrame()
 
-urls_fd = ["https://www.football-data.co.uk/new/FIN.csv"]
+urls_fd = []
 if os.path.exists("ligi_footballdata.xlsx"):
-    try: urls_fd = pd.read_excel("ligi_footballdata.xlsx")["URL"].dropna().tolist()
-    except: pass
+    try: 
+        urls_fd = pd.read_excel("ligi_footballdata.xlsx")["URL"].dropna().tolist()
+    except Exception as e:
+        print("Błąd odczytu ligi_footballdata.xlsx:", e)
+
+# Słownik standaryzujący nagłówki z Football-Data do naszej struktury
+fd_rename_dict = {
+    "HomeTeam": "Home", "AwayTeam": "Away", 
+    "FTHG": "HG", "FTAG": "AG",
+    "HS": "HS", "AS": "AS", 
+    "HST": "HST", "AST": "AST", 
+    "HC": "HC", "AC": "AC"
+}
 
 for url_fd in urls_fd:
+    url_fd = str(url_fd).strip()
     try:
+        # Pobieramy CSV bezpośrednio z linku
         fd_raw = pd.read_csv(url_fd, on_bad_lines='skip')
-        if not fd_raw.empty and "Home" in fd_raw.columns:
+        if not fd_raw.empty:
+            # Zmieniamy nazwy kolon na standardowe (obsługuje formaty Home i HomeTeam)
+            fd_raw = fd_raw.rename(columns=fd_rename_dict)
             fd_all_data = pd.concat([fd_all_data, fd_raw], ignore_index=True)
-    except: pass
+    except Exception as e: 
+        print(f"Nie udało się pobrać CSV: {url_fd}, błąd: {e}")
 
 if not fd_all_data.empty and not results_df.empty:
     try:
         kolumny_fd = ["Home", "Away", "HG", "AG", "HS", "AS", "HST", "AST", "HC", "AC"]
-        fd_processed = fd_all_data[[c for c in kolumny_fd if c in fd_all_data.columns]].copy()
+        # Wybieramy tylko te kolumny, które rzeczywiście istnieją w pobranych plikach
+        dostepne_kolumny = [c for c in kolumny_fd if c in fd_all_data.columns]
         
+        fd_processed = fd_all_data[dostepne_kolumny].copy()
         fd_processed = fd_processed.dropna(subset=["HG", "AG"])
+        
+        # Tworzenie czystego wyniku tekstowego do klucza (np. "2:1")
         fd_processed["Score"] = fd_processed["HG"].astype(int).astype(str) + ":" + fd_processed["AG"].astype(int).astype(str)
         
-        fd_processed["Home"] = fd_processed["Home"].apply(lambda x: mapowanie_fd.get(str(x).strip(), str(x).strip()))
-        fd_processed["Away"] = fd_processed["Away"].apply(lambda x: mapowanie_fd.get(str(x).strip(), str(x).strip()))
+        # Czyszczenie nazw drużyn i mapowanie ze słownika
+        fd_processed["Home"] = fd_processed["Home"].astype(str).str.strip().apply(lambda x: mapowanie_fd.get(x, x))
+        fd_processed["Away"] = fd_processed["Away"].astype(str).str.strip().apply(lambda x: mapowanie_fd.get(x, x))
         
+        # Obliczenia statystyk meczowych
         if "HC" in fd_processed.columns and "AC" in fd_processed.columns:
             fd_processed["Suma_Roznych"] = fd_processed["HC"] + fd_processed["AC"]
         
@@ -351,13 +373,17 @@ if not fd_all_data.empty and not results_df.empty:
             fd_processed.loc[fd_processed["HST"] > fd_processed["AST"], "Wiecej_Celnych"] = "Gospodarz"
             fd_processed.loc[fd_processed["AST"] > fd_processed["HST"], "Wiecej_Celnych"] = "Gosc"
             
-        fd_final = fd_processed.drop(columns=["HG", "AG", "HS", "AS", "HST", "AST", "HC", "AC"], errors="ignore")
+        # Usuwamy kolumny bazowe i pozbywamy się ewentualnych duplikatów przed złączeniem
+        kolumny_do_dropu = ["HG", "AG", "HS", "AS", "HST", "AST", "HC", "AC"]
+        fd_final = fd_processed.drop(columns=[c for c in kolumny_do_dropu if c in fd_processed.columns], errors="ignore")
         fd_final = fd_final.drop_duplicates(subset=["Home", "Away", "Score"])
         
+        # Scalenie z głównym arkuszem wyników BetExplorer
         results_df = pd.merge(results_df, fd_final, on=["Home", "Away", "Score"], how="left")
+        print("Integracja Football-Data zakończona pomyślnie.")
             
-    except Exception as e: print("Football-Data błąd mapowania:", e)
-
+    except Exception as e: 
+        print("Football-Data błąd mapowania/przetwarzania:", e)
 
 # ==========================================
 # 5. CZYSZCZENIE I FORMATOWANIE DO GOOGLE SHEETS
