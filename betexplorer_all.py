@@ -102,7 +102,7 @@ headers = {
 all_data = []
 
 for i, url in enumerate(urls, start=1):
-    print(f"[{i}/{len(urls)}] Pobieram: {url}")
+    print(f"[{i}/{len(urls)}] Pobieram BetExplorer: {url}")
     try:
         html = requests.get(
             url,
@@ -160,11 +160,6 @@ for i, url in enumerate(urls, start=1):
                             odd = text
                     odds.append(odd if odd else "-")
                         
-                if len(odds) == 0:
-                    print("BRAK KURSÓW:")
-                    print(row)
-                    print("-" * 80)
-                    
                 odd1 = "-"
                 oddx = "-"
                 odd2 = "-"
@@ -269,7 +264,7 @@ for i, url in enumerate(urls, start=1):
         print()
 
 # ==========================================
-# DATAFRAME
+# DATAFRAME Z BETEXPLORER
 # ==========================================
 df = pd.DataFrame(
     all_data,
@@ -297,8 +292,14 @@ for value in df["Date"]:
 df["Date"] = dates
 df.insert(3, "Time", times)
 
+fixtures_df = df[df["Type"] == "Fixture"].copy()
+results_df = df[df["Type"] == "Result"].copy()
+
+fixtures_df = fixtures_df.sort_values(by=["Date", "Time"], ascending=True)
+results_df = results_df.sort_values(by=["Date"], ascending=False)
+
 # ==========================================================
-# SEKCJA: SOCCERSTATS (POBIERANIE LINKÓW Z EXCELA)
+# POBIERANIE Z SOCCERSTATS
 # ==========================================================
 dane_soccerstats_baza = []
 print("Rozpoczynam pobieranie danych z SoccerStats...")
@@ -306,36 +307,21 @@ print("Rozpoczynam pobieranie danych z SoccerStats...")
 try:
     if os.path.exists("ligi_soccerstats.xlsx"):
         urls_ss = pd.read_excel("ligi_soccerstats.xlsx")["URL"].dropna().tolist()
-        print(f"Znaleziono {len(urls_ss)} linków w pliku ligi_soccerstats.xlsx")
-        
         skaner_ss = cloudscraper.create_scraper()
         
         for i_ss, url_ss in enumerate(urls_ss, start=1):
             url_ss = str(url_ss).strip()
-            
-            try:
-                nazwa_ligi = url_ss.split("league=")[1].split("&")[0]
-            except:
-                nazwa_ligi = f"Liga_{i_ss}"
-                
+            nazwa_ligi = url_ss.split("league=")[1].split("&")[0] if "league=" in url_ss else f"Liga_{i_ss}"
             print(f"[{i_ss}/{len(urls_ss)}] Pobieram SoccerStats dla: {nazwa_ligi}")
             
             html_ss = skaner_ss.get(url_ss, headers={"User-Agent": headers["User-Agent"]}, timeout=30).text
             soup_ss = BeautifulSoup(html_ss, "html.parser")
             
-            # 1. Szukamy właściwej tabeli i OMIJAMY PUŁAPKĘ Z LEGENDĄ
             tabela_meczow = None
-            wszystkie_tabele = soup_ss.find_all("table")
-            
-            for t in wszystkie_tabele:
-                tekst_tabeli = t.get_text()
-                # Tabela musi mieć statystyki...
-                if "HT" in tekst_tabeli and "BTS" in tekst_tabeli:
-                    wiersze_test = t.find_all("tr")
-                    # ...oraz dużo wierszy (prawdziwa tabela wyników ma dziesiątki wierszy, legenda tylko kilka)
-                    if len(wiersze_test) > 15:  
-                        tabela_meczow = t
-                        break
+            for t in soup_ss.find_all("table"):
+                if "HT" in t.get_text() and "BTS" in t.get_text() and len(t.find_all("tr")) > 15:  
+                    tabela_meczow = t
+                    break
             
             if tabela_meczow:
                 wiersze_ss = tabela_meczow.find_all("tr")
@@ -344,47 +330,33 @@ try:
                 for wiersz in wiersze_ss:
                     komorki = wiersz.find_all(["td", "th"])
                     
-                    # Sprawdzamy wszystkie rzędy z danymi (pomijamy cieniutkie linie graficzne)
                     if len(komorki) >= 6:
                         teksty = [k.get_text(" ", strip=True) for k in komorki]
-                        
-                        # 2. Inteligentny kompas - szukamy na którym miejscu w komórkach leży WYNIK
                         wynik_index = -1
+                        
                         for idx, val in enumerate(teksty):
-                            # Wynik zazwyczaj ma dwukropek lub myślnik i cyfry (np. "1 - 0", "1:0")
                             if ("-" in val or ":" in val) and any(c.isdigit() for c in val):
-                                # Zabezpieczenie przed pomyleniem daty z wynikiem (wynik jest zwykle w środku komórek)
                                 if 1 <= idx <= 5: 
                                     wynik_index = idx
                                     break
                                     
-                        # Skoro znaleźliśmy wynik, wiemy dokładnie gdzie jest reszta danych!
                         if wynik_index != -1:
                             wynik = teksty[wynik_index]
                             gospodarz = teksty[wynik_index - 1]
-                            
-                            # Data bywa przesunięta, więc bierzemy ją bezpiecznie
                             data = teksty[wynik_index - 2] if wynik_index >= 2 else teksty[0]
                             gosc = teksty[wynik_index + 1] if wynik_index + 1 < len(teksty) else ""
                             
-                            # Filtrujemy wiersze tekstowe typu "Home goals", które złapały znak "-"
                             if "HOME" in gospodarz.upper() or "GOSPODARZ" in gospodarz.upper():
                                 continue
                                 
-                            # Autouzupełnianie brakujących dat dla meczów tego samego dnia
                             if data and len(data) > 2:
                                 ostatnia_data = data
                             else:
                                 data = ostatnia_data
                                 
-                            # Ostateczny warunek meczowy: musi być nazwa gospodarza i gościa
                             if gospodarz and gosc and gosc != gospodarz:
-                                
-                                # 3. Pobieranie statystyk (znajdują się zawszę NA PRAWO od nazwy gościa)
                                 ht, o25, tg, bts = "-", "-", "-", "-"
                                 pozostale_komorki = teksty[wynik_index + 2:]
-                                
-                                # Omijamy puste komórki (np. ukryte ikonki wykresów z SoccerStats)
                                 statystyki = [s for s in pozostale_komorki if s.strip()] 
                                 
                                 if len(statystyki) >= 4:
@@ -397,9 +369,7 @@ try:
                                     if len(statystyki) > 1: o25 = statystyki[1]
                                     if len(statystyki) > 2: tg = statystyki[2]
                                     
-                                # 4. Sprzątanie i polerowanie danych do arkusza Google Sheets
                                 wynik_czysty = wynik.replace("*", "").strip()
-                                # Zamienia SoccerStatsowe "1 - 0" na czyste "1:0"
                                 if "-" in wynik_czysty:
                                     wynik_czysty = wynik_czysty.replace("-", ":").replace(" ", "")
                                     
@@ -416,18 +386,51 @@ try:
             ss_df = pd.DataFrame(dane_soccerstats_baza, columns=[
                 "Liga", "Data", "Gospodarz", "Wynik", "Gosc", "HT", "2.5+", "TG", "BTS"
             ])
-            # Czyszczenie dubli
             ss_df = ss_df.drop_duplicates()
-            print(f"Sukces! Pobrano łącznie {len(ss_df)} ustrukturyzowanych wierszy z SoccerStats.")
         else:
-            print("Znalazłem wielką tabelę, ale żaden wiersz nie przeszedł skanera meczowego.")
             ss_df = pd.DataFrame()
             
 except Exception as e:
     print("Wystąpił błąd podczas pracy z SoccerStats:", e)
     ss_df = pd.DataFrame()
+
+# ==========================================================
+# BEZPIECZNE SCALANIE DANYCH (ZACHOWUJEMY 100% BETEXPLORER)
+# ==========================================================
+print("Złączam dane z SoccerStats do tabeli Results...")
+
+# 1. Wczytanie słownika
+mapowanie_ss = {}
+if os.path.exists("slownik_druzyn.json"):
+    try:
+        with open("slownik_druzyn.json", "r", encoding="utf-8") as f:
+            slownik_data = json.load(f)
+            mapowanie_ss = slownik_data.get("SoccerStats_To_BetExplorer", {})
+    except:
+        pass
+
+# 2. Mapowanie i złączenie (jeśli SoccerStats pobrał dane)
+if not ss_df.empty and not results_df.empty:
+    # Ujednolicamy nazwy kolumn, by zgadzały się z BetExplorer (Home, Away, Score)
+    ss_df = ss_df.rename(columns={"Gospodarz": "Home", "Gosc": "Away", "Wynik": "Score"})
+    
+    # Tłumaczymy nazwy drużyn z SoccerStats na nazwy z BetExplorera
+    ss_df["Home"] = ss_df["Home"].astype(str).str.strip().apply(lambda x: mapowanie_ss.get(x, x))
+    ss_df["Away"] = ss_df["Away"].astype(str).str.strip().apply(lambda x: mapowanie_ss.get(x, x))
+    
+    # Bierzemy z SoccerStats TYLKO kolumny do łączenia oraz nowe statystyki (bez dublowania dat i lig)
+    ss_do_zlaczenia = ss_df[["Home", "Away", "Score", "HT", "2.5+", "TG", "BTS"]].drop_duplicates(subset=["Home", "Away", "Score"])
+    
+    # LEFT JOIN: Baza z BetExplorera jest "po lewej", więc jej wiersze (np. Anglia) nigdy nie zostaną usunięte. 
+    # Statystyki z SS tylko dokleją się "po prawej"
+    results_df = pd.merge(results_df, ss_do_zlaczenia, on=["Home", "Away", "Score"], how="left")
+    
+    # Tam gdzie SoccerStats nie dopasowało meczu, wstawiamy kreskę
+    results_df = results_df.fillna("-")
+
+
 # ==========================================
-# GOOGLE SHEETS AUTORYZACJA
+# GOOGLE SHEETS AUTORYZACJA I WYSYŁKA
 # ==========================================
 scope = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -435,120 +438,58 @@ scope = [
 ]
 
 if os.path.exists("credentials.json"):
-    creds = Credentials.from_service_account_file(
-        "credentials.json",
-        scopes=scope
-    )
+    creds = Credentials.from_service_account_file("credentials.json", scopes=scope)
 else:
-    credentials_dict = json.loads(
-        os.environ["GOOGLE_CREDENTIALS"]
-    )
-    creds = Credentials.from_service_account_info(
-        credentials_dict,
-        scopes=scope
-    )
+    creds = Credentials.from_service_account_info(json.loads(os.environ["GOOGLE_CREDENTIALS"]), scopes=scope)
 
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
-try:
-    summary_sheet = spreadsheet.worksheet("Summary")
-except:
-    summary_sheet = spreadsheet.add_worksheet(title="Summary", rows=100, cols=10)
+# ==========================================
+# ZAKŁADKI (TYLKO FIXTURES, RESULTS, SUMMARY)
+# ==========================================
+try: fixtures_sheet = spreadsheet.worksheet("Fixtures")
+except: fixtures_sheet = spreadsheet.add_worksheet(title="Fixtures", rows=1000, cols=20)
 
-# ==========================================
-# PODZIAŁ DANYCH
-# ==========================================
-fixtures_df = df[df["Type"] == "Fixture"].copy()
-results_df = df[df["Type"] == "Result"].copy()
+try: results_sheet = spreadsheet.worksheet("Results")
+except: results_sheet = spreadsheet.add_worksheet(title="Results", rows=5000, cols=20)
 
-fixtures_df = fixtures_df.sort_values(by=["Date", "Time"], ascending=True)
-results_df = results_df.sort_values(by=["Date"], ascending=False)
+try: summary_sheet = spreadsheet.worksheet("Summary")
+except: summary_sheet = spreadsheet.add_worksheet(title="Summary", rows=100, cols=10)
 
-# ==========================================
-# TWORZENIE / POBIERANIE ARKUSZY
-# ==========================================
-try:
-    fixtures_sheet = spreadsheet.worksheet("Fixtures")
-except:
-    fixtures_sheet = spreadsheet.add_worksheet(title="Fixtures", rows=1000, cols=20)
-
-try:
-    results_sheet = spreadsheet.worksheet("Results")
-except:
-    results_sheet = spreadsheet.add_worksheet(title="Results", rows=5000, cols=20)
-
-# ==========================================
-# FIXTURES UPDATE
-# ==========================================
-print("Aktualizacja Fixtures...")
+# Formatowanie kursów
 for col in ["Odd1", "OddX", "Odd2"]:
-    fixtures_df[col] = fixtures_df[col].apply(
-        lambda x: str(x).replace(".", ",") if str(x) != "-" else "-"
-    )
+    fixtures_df[col] = fixtures_df[col].apply(lambda x: str(x).replace(".", ",") if str(x) != "-" else "-")
+    results_df[col] = results_df[col].apply(lambda x: str(x).replace(".", ",") if str(x) != "-" else "-")
+
+print("Wysyłam Fixtures...")
 fixtures_sheet.clear()
-fixtures_sheet.update(
-    [fixtures_df.columns.tolist()] +
-    fixtures_df.astype(str).values.tolist()
-)
+fixtures_sheet.update([fixtures_df.columns.tolist()] + fixtures_df.astype(str).values.tolist())
 
-# ==========================================
-# RESULTS UPDATE
-# ==========================================
-print("Aktualizacja Results...")
-for col in ["Odd1", "OddX", "Odd2"]:
-    results_df[col] = results_df[col].apply(
-        lambda x: str(x).replace(".", ",") if str(x) != "-" else "-"
-    )
+print("Wysyłam Results...")
 results_sheet.clear()
-results_sheet.update(
-    [results_df.columns.tolist()] +
-    results_df.astype(str).values.tolist()
-)
+results_sheet.update([results_df.columns.tolist()] + results_df.astype(str).values.tolist())
 
-# ==========================================
-# SOCCERSTATS UPDATE
-# ==========================================
-if not ss_df.empty:
-    print("Wysyłam statystyki SoccerStats do Google Sheets...")
-    try:
-        try:
-            arkusz_ss = spreadsheet.worksheet("SoccerStats_Model")
-        except:
-            arkusz_ss = spreadsheet.add_worksheet(title="SoccerStats_Model", rows=2000, cols=25)
-        
-        # CZYSZCZENIE WARTOŚCI NAN / INF PRZED WYSYŁKĄ (NAPRAWA BŁĘDU JSON)
-        ss_df = ss_df.fillna("")  # Zamienia wszystkie wartości NaN na pusty tekst
-        
-        arkusz_ss.clear()
-        arkusz_ss.update(
-            [ss_df.columns.tolist()] + 
-            ss_df.astype(str).values.tolist()
-        )
-        print("Zakładka SoccerStats_Model została zaktualizowana!")
-    except Exception as e:
-        print("Błąd zapisu zakładki SoccerStats_Model:", e)
+# Czyszczenie starej zakładki SoccerStats_Model (jeśli istnieje)
+try:
+    arkusz_do_usuniecia = spreadsheet.worksheet("SoccerStats_Model")
+    spreadsheet.del_worksheet(arkusz_do_usuniecia)
+    print("Usunięto zbędną zakładkę SoccerStats_Model.")
+except: pass
 
-# ==========================================
-# SUMMARY UPDATE
-# ==========================================
+print("Wysyłam Summary...")
 summary_sheet.clear()
-summary_sheet.update(
-    [
-        ["Metric", "Value"],
-        ["Last Update", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
-        ["Fixtures", len(fixtures_df)],
-        ["Results", len(results_df)],
-        ["Leagues", df["League"].nunique()],
-        ["Total Rows", len(df)]
-    ]
-)
+summary_sheet.update([
+    ["Metric", "Value"],
+    ["Last Update", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
+    ["Fixtures", len(fixtures_df)],
+    ["Results", len(results_df)],
+    ["Leagues", df["League"].nunique()],
+    ["Total Rows", len(df)]
+])
 
-print()
-print("=" * 60)
-print("GOTOWE")
+print("\n" + "=" * 60)
+print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
 print("Fixtures:", len(fixtures_df))
 print("Results:", len(results_df))
-if not ss_df.empty:
-    print("SoccerStats wierszy:", len(ss_df))
 print("=" * 60)
