@@ -1,6 +1,5 @@
 import os
 import json
-import re
 import gspread
 import requests
 import cloudscraper
@@ -55,16 +54,12 @@ def split_datetime(value):
     return value, ""
 
 # ==========================================================
-# 1. POBIERANIE Z BETEXPLORER
+# 1. POBIERANIE Z BETEXPLORER (Stara, niezawodna metoda)
 # ==========================================================
 urls = pd.read_excel("ligi.xlsx")["URL"].dropna().tolist()
 
 headers = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/137.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Cache-Control": "no-cache"
@@ -73,11 +68,11 @@ headers = {
 all_data = []
 
 for i, url in enumerate(urls, start=1):
-    print(f"[{i}/{len(urls)}] Pobieram: {url}")
+    print(f"[{i}/{len(urls)}] Pobieram BetExplorer: {url}")
     try:
         html = requests.get(url, headers=headers, timeout=30).text
         soup = BeautifulSoup(html, "html.parser")
-        
+
         league = url.split("/football/")[1].replace("/fixtures/", "").replace("/results/", "")
         rows = soup.find_all("tr")
 
@@ -94,7 +89,7 @@ for i, url in enumerate(urls, start=1):
 
                 odds = []
                 odds_cells = row.select("td.table-main__odds")
-                
+
                 for cell in odds_cells:
                     odd = cell.get("data-odd")
                     if not odd:
@@ -107,7 +102,7 @@ for i, url in enumerate(urls, start=1):
                         text = cell.get_text(" ", strip=True)
                         if text: odd = text
                     odds.append(odd if odd else "-")
-                        
+
                 odd1 = odds[0] if len(odds) >= 1 else "-"
                 oddx = odds[1] if len(odds) >= 2 else "-"
                 odd2 = odds[2] if len(odds) >= 3 else "-"
@@ -131,7 +126,6 @@ for i, url in enumerate(urls, start=1):
 
                 odds_cells = row.select("td.table-main__odds")
                 odds = []
-                
                 for cell in odds_cells:
                     odd = cell.get("data-odd")
                     if not odd:
@@ -153,43 +147,30 @@ for i, url in enumerate(urls, start=1):
                 all_data.append(["Result", league, date, home, away, score, odd1, oddx, odd2])
 
     except Exception as e:
+        print()
         print("BŁĄD:", url, e)
+        print()
 
 # ==========================================================
-# 2. DATAFRAME I BEZPIECZNE USUWANIE DUPLIKATÓW
+# 2. DATAFRAME (Stara i bezpieczna logika)
 # ==========================================================
 df = pd.DataFrame(all_data, columns=["Type", "League", "Date", "Home", "Away", "Score", "Odd1", "OddX", "Odd2"])
+df = df.drop_duplicates()
 
-# Rozdzielamy od razu na czyste Fixtures i Results z BetExplorera
+dates, times = [], []
+for value in df["Date"]:
+    d, t = split_datetime(value)
+    dates.append(d)
+    times.append(t)
+
+df["Date"] = dates
+df.insert(3, "Time", times)
+
 fixtures_df = df[df["Type"] == "Fixture"].copy()
 results_df = df[df["Type"] == "Result"].copy()
 
-# Przetwarzamy daty i godziny dla Fixtures
-dates_f, times_f = [], []
-for value in fixtures_df["Date"]:
-    d, t = split_datetime(value)
-    dates_f.append(d)
-    times_f.append(t)
-fixtures_df["Date"] = dates_f
-fixtures_df.insert(3, "Time", times_f)
-
-# Przetwarzamy daty dla Results
-dates_r, times_r = [], []
-for value in results_df["Date"]:
-    d, t = split_datetime(value)
-    dates_r.append(d)
-    times_r.append(t)
-results_df["Date"] = dates_r
-
-# USUWANIE DUPLIKATÓW: Filtrujemy tylko po bazie BetExplorera, bazując na kursach
-fixtures_df['HasOdds'] = fixtures_df['Odd1'].astype(str).apply(lambda x: 1 if x.strip() not in ["", "-", "nan"] else 0)
-fixtures_df = fixtures_df.sort_values(by=["Date", "Time", "Home", "Away", "HasOdds"], ascending=[True, True, True, True, False])
-fixtures_df = fixtures_df.drop_duplicates(subset=["Date", "Home", "Away"]).drop(columns=["HasOdds"])
-
-results_df['HasOdds'] = results_df['Odd1'].astype(str).apply(lambda x: 1 if x.strip() not in ["", "-", "nan"] else 0)
-results_df = results_df.sort_values(by=["Date", "Home", "Away", "HasOdds"], ascending=[False, True, True, False])
-results_df = results_df.drop_duplicates(subset=["Date", "Home", "Away"]).drop(columns=["HasOdds"])
-
+fixtures_df = fixtures_df.sort_values(by=["Date", "Time"], ascending=True)
+results_df = results_df.sort_values(by=["Date"], ascending=False)
 
 # ==========================================================
 # 3. POBIERANIE Z SOCCERSTATS
@@ -207,7 +188,7 @@ try:
             nazwa_ligi = url_ss.split("league=")[1].split("&")[0] if "league=" in url_ss else f"Liga_{i_ss}"
             print(f"[{i_ss}/{len(urls_ss)}] Pobieram SoccerStats dla: {nazwa_ligi}")
             
-            html_ss = skaner_ss.get(url_ss, headers=headers, timeout=30).text
+            html_ss = skaner_ss.get(url_ss, headers={"User-Agent": headers["User-Agent"]}, timeout=30).text
             soup_ss = BeautifulSoup(html_ss, "html.parser")
             
             tabela_meczow = None
@@ -217,71 +198,60 @@ try:
                     break
             
             if tabela_meczow:
-                wiersze_ss = tabela_meczow.find_all("tr")
-                for wiersz in wiersze_ss:
+                for wiersz in tabela_meczow.find_all("tr"):
                     komorki = wiersz.find_all(["td", "th"])
                     if len(komorki) >= 6:
                         teksty = [k.get_text(" ", strip=True) for k in komorki]
                         wynik_index = -1
                         for idx, val in enumerate(teksty):
-                            if ("-" in val or ":" in val) and any(c.isdigit() for c in val):
-                                if 1 <= idx <= 5: 
-                                    wynik_index = idx
-                                    break
-                                        
+                            if ("-" in val or ":" in val) and any(c.isdigit() for c in val) and 1 <= idx <= 5: 
+                                wynik_index = idx
+                                break
+                                    
                         if wynik_index != -1:
-                            wynik = teksty[wynik_index]
+                            wynik = teksty[wynik_index].replace("*", "").strip().replace("-", ":").replace(" ", "")
                             gospodarz = teksty[wynik_index - 1]
                             gosc = teksty[wynik_index + 1] if wynik_index + 1 < len(teksty) else ""
                             
-                            if "HOME" in gospodarz.upper() or "GOSPODARZ" in gospodarz.upper(): continue
+                            if "HOME" in gospodarz.upper() or "GOSPODARZ" in gospodarz.upper() or not gospodarz or not gosc or gospodarz == gosc:
+                                continue
                                 
-                            if gospodarz and gosc and gosc != gospodarz:
-                                ht, o25, tg, bts = "-", "-", "-", "-"
-                                statystyki = [s for s in teksty[wynik_index + 2:] if s.strip()] 
-                                
-                                if len(statystyki) >= 4:
-                                    ht, o25, tg, bts = statystyki[0], statystyki[1], statystyki[2], statystyki[3]
-                                elif len(statystyki) > 0:
-                                    ht = statystyki[0]
-                                    if len(statystyki) > 1: o25 = statystyki[1]
-                                    if len(statystyki) > 2: tg = statystyki[2]
-                                    
-                                wynik_czysty = wynik.replace("*", "").strip().replace(" ", "").replace("-", ":")
-                                ht_czysty = ht.replace("*", "").strip().replace(" ", "").replace("-", ":").replace("(", "").replace(")", "")
-                                
-                                g_gosp_m, g_gosc_m, suma_m = "-", "-", "-"
-                                g_gosp_1h, g_gosc_1h, suma_1h = "-", "-", "-"
-                                g_gosp_2h, g_gosc_2h, suma_2h = "-", "-", "-"
-                                
-                                if ":" in wynik_czysty:
-                                    try:
-                                        p_m = wynik_czysty.split(":")
-                                        g_gosp_m, g_gosc_m = int(p_m[0]), int(p_m[1])
-                                        suma_m = g_gosp_m + g_gosc_m
-                                    except: pass
-                                        
-                                if ":" in ht_czysty:
-                                    try:
-                                        p_1h = ht_czysty.split(":")
-                                        g_gosp_1h, g_gosc_1h = int(p_1h[0]), int(p_1h[1])
-                                        suma_1h = g_gosp_1h + g_gosc_1h
-                                    except: pass
-                                        
-                                if isinstance(g_gosp_m, int) and isinstance(g_gosp_1h, int):
-                                    try:
-                                        g_gosp_2h, g_gosc_2h = g_gosp_m - g_gosp_1h, g_gosc_m - g_gosc_1h
-                                        suma_2h = g_gosp_2h + g_gosc_2h
-                                    except: pass
-                                
-                                dane_soccerstats_baza.append([
-                                    gospodarz, gosc, wynik_czysty,
-                                    g_gosp_m, g_gosc_m, suma_m,
-                                    ht_czysty, g_gosp_1h, g_gosc_1h, suma_1h,
-                                    g_gosp_2h, g_gosc_2h, suma_2h,
-                                    o25.replace("*", "").strip(), tg.replace("*", "").strip(), bts.replace("*", "").strip()
-                                ])
-                        
+                            statystyki = [s for s in teksty[wynik_index + 2:] if s.strip()] 
+                            ht = statystyki[0].replace("*", "").strip().replace("-", ":").replace(" ", "").replace("(", "").replace(")", "") if len(statystyki) > 0 else "-"
+                            o25 = statystyki[1].replace("*", "").strip() if len(statystyki) > 1 else "-"
+                            tg = statystyki[2].replace("*", "").strip() if len(statystyki) > 2 else "-"
+                            bts = statystyki[3].replace("*", "").strip() if len(statystyki) > 3 else "-"
+                            
+                            g_gosp_m, g_gosc_m, suma_m = "-", "-", "-"
+                            g_gosp_1h, g_gosc_1h, suma_1h = "-", "-", "-"
+                            g_gosp_2h, g_gosc_2h, suma_2h = "-", "-", "-"
+                            
+                            if ":" in wynik:
+                                try:
+                                    p_m = wynik.split(":")
+                                    g_gosp_m, g_gosc_m = int(p_m[0]), int(p_m[1])
+                                    suma_m = g_gosp_m + g_gosc_m
+                                except: pass
+                            if ":" in ht:
+                                try:
+                                    p_1h = ht.split(":")
+                                    g_gosp_1h, g_gosc_1h = int(p_1h[0]), int(p_1h[1])
+                                    suma_1h = g_gosp_1h + g_gosc_1h
+                                except: pass
+                            if isinstance(g_gosp_m, int) and isinstance(g_gosp_1h, int):
+                                try:
+                                    g_gosp_2h, g_gosc_2h = g_gosp_m - g_gosp_1h, g_gosc_m - g_gosc_1h
+                                    suma_2h = g_gosp_2h + g_gosc_2h
+                                except: pass
+                            
+                            dane_soccerstats_baza.append([
+                                gospodarz, gosc, wynik,
+                                g_gosp_m, g_gosc_m, suma_m,
+                                ht, g_gosp_1h, g_gosc_1h, suma_1h,
+                                g_gosp_2h, g_gosc_2h, suma_2h,
+                                o25, tg, bts
+                            ])
+                    
         if dane_soccerstats_baza:
             ss_df = pd.DataFrame(dane_soccerstats_baza, columns=[
                 "Home", "Away", "Score",
@@ -294,9 +264,28 @@ try:
             
 except Exception as e: print("Błąd SoccerStats:", e); ss_df = pd.DataFrame()
 
+# ==========================================================
+# 4. POBIERANIE Z FOOTBALL-DATA.CO.UK
+# ==========================================================
+print("Rozpoczynam integrację danych z Football-Data.co.uk...")
+fd_all_data = pd.DataFrame()
+
+try:
+    if os.path.exists("ligi_footballdata.xlsx"):
+        urls_fd = pd.read_excel("ligi_footballdata.xlsx")["URL"].dropna().tolist()
+        fd_rename_dict = {"HomeTeam": "Home", "AwayTeam": "Away", "FTHG": "HG", "FTAG": "AG"}
+        
+        for url_fd in urls_fd:
+            try:
+                fd_raw = pd.read_csv(url_fd.strip(), on_bad_lines='skip')
+                if not fd_raw.empty:
+                    fd_raw = fd_raw.rename(columns=fd_rename_dict)
+                    fd_all_data = pd.concat([fd_all_data, fd_raw], ignore_index=True)
+            except: pass
+except: pass
 
 # ==========================================================
-# 4. BEZPIECZNE SCALANIE DANYCH (LEFT JOIN)
+# 5. BEZPIECZNE SCALANIE DANYCH (Mecze z BetExplorera NIE MOGĄ zniknąć)
 # ==========================================================
 mapowanie_ss, mapowanie_fd = {}, {}
 if os.path.exists("slownik_druzyn.json"):
@@ -307,39 +296,15 @@ if os.path.exists("slownik_druzyn.json"):
             mapowanie_fd = slownik_data.get("FootballData_To_BetExplorer", {})
     except: pass
 
+# Łączenie z SoccerStats
 if not ss_df.empty and not results_df.empty:
     print("Ujednolicam nazwy i scalam historię z SoccerStats...")
-    ss_do_scalenia = ss_df.copy()
-    ss_do_scalenia["Home"] = ss_do_scalenia["Home"].apply(lambda x: mapowanie_ss.get(str(x).strip(), str(x).strip()))
-    ss_do_scalenia["Away"] = ss_do_scalenia["Away"].apply(lambda x: mapowanie_ss.get(str(x).strip(), str(x).strip()))
+    ss_df["Home"] = ss_df["Home"].astype(str).str.strip().apply(lambda x: mapowanie_ss.get(x, x))
+    ss_df["Away"] = ss_df["Away"].astype(str).str.strip().apply(lambda x: mapowanie_ss.get(x, x))
     
-    # how="left" gwarantuje, że mecze z BetExplorera NIGDY nie zostaną skasowane
-    results_df = pd.merge(results_df, ss_do_scalenia, on=["Home", "Away", "Score"], how="left")
+    results_df = pd.merge(results_df, ss_df, on=["Home", "Away", "Score"], how="left")
 
-print("Rozpoczynam integrację danych z Football-Data.co.uk...")
-fd_all_data = pd.DataFrame()
-
-urls_fd = []
-if os.path.exists("ligi_footballdata.xlsx"):
-    try: urls_fd = pd.read_excel("ligi_footballdata.xlsx")["URL"].dropna().tolist()
-    except: pass
-
-fd_rename_dict = {
-    "HomeTeam": "Home", "AwayTeam": "Away", 
-    "FTHG": "HG", "FTAG": "AG",
-    "HS": "HS", "AS": "AS", 
-    "HST": "HST", "AST": "AST", 
-    "HC": "HC", "AC": "AC"
-}
-
-for url_fd in urls_fd:
-    try:
-        fd_raw = pd.read_csv(url_fd.strip(), on_bad_lines='skip')
-        if not fd_raw.empty:
-            fd_raw = fd_raw.rename(columns=fd_rename_dict)
-            fd_all_data = pd.concat([fd_all_data, fd_raw], ignore_index=True)
-    except: pass
-
+# Łączenie z Football-Data
 if not fd_all_data.empty and not results_df.empty:
     try:
         kolumny_fd = ["Home", "Away", "HG", "AG", "HS", "AS", "HST", "AST", "HC", "AC"]
@@ -356,95 +321,9 @@ if not fd_all_data.empty and not results_df.empty:
         
         if "HS" in fd_processed.columns and "AS" in fd_processed.columns:
             fd_processed["Suma_Strzalow"] = fd_processed["HS"] + fd_processed["AS"]
-            fd_processed["Wiecej_Strzalow"] = "Remis"
-            fd_processed.loc[fd_processed["HS"] > fd_processed["AS"], "Wiecej_Strzalow"] = "Gospodarz"
-            fd_processed.loc[fd_processed["AS"] > fd_processed["HS"], "Wiecej_Strzalow"] = "Gosc"
             
         if "HST" in fd_processed.columns and "AST" in fd_processed.columns:
             fd_processed["Suma_Celnych"] = fd_processed["HST"] + fd_processed["AST"]
-            fd_processed["Wiecej_Celnych"] = "Remis"
-            fd_processed.loc[fd_processed["HST"] > fd_processed["AST"], "Wiecej_Celnych"] = "Gospodarz"
-            fd_processed.loc[fd_processed["AST"] > fd_processed["HST"], "Wiecej_Celnych"] = "Gosc"
-            
-        fd_final = fd_processed.drop(columns=["HG", "AG", "HS", "AS", "HST", "AST", "HC", "AC"], errors="ignore")
-        fd_final = fd_final.drop_duplicates(subset=["Home", "Away", "Score"])
-        
-        # Kolejny left join – baza główna jest bezpieczna
-        results_df = pd.merge(results_df, fd_final, on=["Home", "Away", "Score"], how="left")
-        print("Integracja Football-Data zakończona pomyślnie.")
-            
-    except Exception as e: print("Football-Data błąd mapowania:", e)
-
-
-# ==========================================================
-# 4. MAPOWANIE I SCALANIE DANYCH 
-# ==========================================================
-mapowanie_ss, mapowanie_fd = {}, {}
-if os.path.exists("slownik_druzyn.json"):
-    try:
-        with open("slownik_druzyn.json", "r", encoding="utf-8") as f:
-            slownik_data = json.load(f)
-            mapowanie_ss = slownik_data.get("SoccerStats_To_BetExplorer", {})
-            mapowanie_fd = slownik_data.get("FootballData_To_BetExplorer", {})
-    except: pass
-
-if not ss_df.empty and not results_df.empty:
-    print("Ujednolicam nazwy i scalam historię z SoccerStats...")
-    ss_do_scalenia = ss_df.copy()
-    ss_do_scalenia["Home"] = ss_do_scalenia["Home"].apply(lambda x: mapowanie_ss.get(str(x).strip(), str(x).strip()))
-    ss_do_scalenia["Away"] = ss_do_scalenia["Away"].apply(lambda x: mapowanie_ss.get(str(x).strip(), str(x).strip()))
-    
-    results_df = pd.merge(results_df, ss_do_scalenia, on=["Home", "Away", "Score"], how="left")
-
-print("Rozpoczynam integrację danych z Football-Data.co.uk...")
-fd_all_data = pd.DataFrame()
-
-urls_fd = []
-if os.path.exists("ligi_footballdata.xlsx"):
-    try: urls_fd = pd.read_excel("ligi_footballdata.xlsx")["URL"].dropna().tolist()
-    except: pass
-
-fd_rename_dict = {
-    "HomeTeam": "Home", "AwayTeam": "Away", 
-    "FTHG": "HG", "FTAG": "AG",
-    "HS": "HS", "AS": "AS", 
-    "HST": "HST", "AST": "AST", 
-    "HC": "HC", "AC": "AC"
-}
-
-for url_fd in urls_fd:
-    try:
-        fd_raw = pd.read_csv(url_fd.strip(), on_bad_lines='skip')
-        if not fd_raw.empty:
-            fd_raw = fd_raw.rename(columns=fd_rename_dict)
-            fd_all_data = pd.concat([fd_all_data, fd_raw], ignore_index=True)
-    except: pass
-
-if not fd_all_data.empty and not results_df.empty:
-    try:
-        kolumny_fd = ["Home", "Away", "HG", "AG", "HS", "AS", "HST", "AST", "HC", "AC"]
-        fd_processed = fd_all_data[[c for c in kolumny_fd if c in fd_all_data.columns]].copy()
-        
-        fd_processed = fd_processed.dropna(subset=["HG", "AG"])
-        fd_processed["Score"] = fd_processed["HG"].astype(int).astype(str) + ":" + fd_processed["AG"].astype(int).astype(str)
-        
-        fd_processed["Home"] = fd_processed["Home"].astype(str).str.strip().apply(lambda x: mapowanie_fd.get(x, x))
-        fd_processed["Away"] = fd_processed["Away"].astype(str).str.strip().apply(lambda x: mapowanie_fd.get(x, x))
-        
-        if "HC" in fd_processed.columns and "AC" in fd_processed.columns:
-            fd_processed["Suma_Roznych"] = fd_processed["HC"] + fd_processed["AC"]
-        
-        if "HS" in fd_processed.columns and "AS" in fd_processed.columns:
-            fd_processed["Suma_Strzalow"] = fd_processed["HS"] + fd_processed["AS"]
-            fd_processed["Wiecej_Strzalow"] = "Remis"
-            fd_processed.loc[fd_processed["HS"] > fd_processed["AS"], "Wiecej_Strzalow"] = "Gospodarz"
-            fd_processed.loc[fd_processed["AS"] > fd_processed["HS"], "Wiecej_Strzalow"] = "Gosc"
-            
-        if "HST" in fd_processed.columns and "AST" in fd_processed.columns:
-            fd_processed["Suma_Celnych"] = fd_processed["HST"] + fd_processed["AST"]
-            fd_processed["Wiecej_Celnych"] = "Remis"
-            fd_processed.loc[fd_processed["HST"] > fd_processed["AST"], "Wiecej_Celnych"] = "Gospodarz"
-            fd_processed.loc[fd_processed["AST"] > fd_processed["HST"], "Wiecej_Celnych"] = "Gosc"
             
         fd_final = fd_processed.drop(columns=["HG", "AG", "HS", "AS", "HST", "AST", "HC", "AC"], errors="ignore")
         fd_final = fd_final.drop_duplicates(subset=["Home", "Away", "Score"])
@@ -454,58 +333,44 @@ if not fd_all_data.empty and not results_df.empty:
             
     except Exception as e: print("Football-Data błąd mapowania:", e)
 
-
 # ==========================================================
-# [NOWE] 5. SILNIK FORMY I STATYSTYK (TEAM FORM ENGINE)
+# 6. SILNIK FORMY I STATYSTYK (TEAM FORM ENGINE)
 # ==========================================================
 print("Generuję automatyczne statystyki formy dla nadchodzących meczów...")
 
 def oblicz_statystyki_druzyny(team_name, wyniki_df, n_matches=5):
     mecze_team = wyniki_df[(wyniki_df["Home"] == team_name) | (wyniki_df["Away"] == team_name)].copy()
-    # Zakładamy, że wyniki_df są posortowane chronologicznie od najnowszych
     mecze_team = mecze_team.head(n_matches)
     
     if mecze_team.empty:
-        return {
-            "Forma_Punkty": 0, "Śr_Goli_Zdob": 0.0, "Śr_Goli_Strac": 0.0,
-            "Śr_Roznych": "-", "Śr_Celnych": "-"
-        }
+        return {"Forma_Punkty": 0, "Śr_Goli_Zdob": 0.0, "Śr_Goli_Strac": 0.0, "Śr_Roznych": "-", "Śr_Celnych": "-"}
     
-    punkty = 0
-    gole_zdobyte = 0
-    gole_stracone = 0
-    rozne = []
-    celne = []
+    punkty, gole_zdobyte, gole_stracone, rozne, celne = 0, 0, 0, [], []
     
     for _, match in mecze_team.iterrows():
         is_home = match["Home"] == team_name
-        
         try:
-            # Sprawdzamy czy wynik jest dostępny (rozbicie z tekstowego Score)
             if ":" in str(match["Score"]):
                 parts = str(match["Score"]).split(":")
-                g_home = int(parts[0])
-                g_away = int(parts[1])
+                g_home, g_away = int(parts[0]), int(parts[1])
                 
                 if is_home:
-                    gole_zdobyte += g_home
-                    gole_stracone += g_away
+                    gole_zdobyte += g_home; gole_stracone += g_away
                     if g_home > g_away: punkty += 3
                     elif g_home == g_away: punkty += 1
                 else:
-                    gole_zdobyte += g_away
-                    gole_stracone += g_home
+                    gole_zdobyte += g_away; gole_stracone += g_home
                     if g_away > g_home: punkty += 3
                     elif g_away == g_home: punkty += 1
         except: pass
             
         try:
-            if "Suma_Roznych" in match and pd.notna(match["Suma_Roznych"]) and match["Suma_Roznych"] != "-":
+            if "Suma_Roznych" in match and pd.notna(match["Suma_Roznych"]) and str(match["Suma_Roznych"]) != "-":
                 rozne.append(int(float(match["Suma_Roznych"])))
         except: pass
         
         try:
-            if "Suma_Celnych" in match and pd.notna(match["Suma_Celnych"]) and match["Suma_Celnych"] != "-":
+            if "Suma_Celnych" in match and pd.notna(match["Suma_Celnych"]) and str(match["Suma_Celnych"]) != "-":
                 celne.append(int(float(match["Suma_Celnych"])))
         except: pass
 
@@ -520,14 +385,11 @@ def oblicz_statystyki_druzyny(team_name, wyniki_df, n_matches=5):
 
 fixtures_stats_list = []
 for _, fix in fixtures_df.iterrows():
-    home_t = fix["Home"]
-    away_t = fix["Away"]
-    
-    stats_home = oblicz_statystyki_druzyny(home_t, results_df)
-    stats_away = oblicz_statystyki_druzyny(away_t, results_df)
+    stats_home = oblicz_statystyki_druzyny(fix["Home"], results_df)
+    stats_away = oblicz_statystyki_druzyny(fix["Away"], results_df)
     
     fixtures_stats_list.append([
-        fix["League"], fix["Date"], fix["Time"], home_t, away_t,
+        fix["League"], fix["Date"], fix["Time"], fix["Home"], fix["Away"],
         fix["Odd1"], fix["OddX"], fix["Odd2"],
         stats_home["Forma_Punkty"], stats_away["Forma_Punkty"],
         stats_home["Śr_Goli_Zdob"], stats_away["Śr_Goli_Zdob"],
@@ -543,9 +405,8 @@ analysis_df = pd.DataFrame(fixtures_stats_list, columns=[
     "Śr_Celnych_Mecz_H", "Śr_Celnych_Mecz_A"
 ])
 
-
 # ==========================================================
-# 6. CZYSZCZENIE I FORMATOWANIE DO GOOGLE SHEETS
+# 7. FORMATOWANIE I WYSYŁKA DO GOOGLE SHEETS
 # ==========================================================
 kolumny_liczbowe = [
     "Gole_Gosp_Mecz", "Gole_Gosc_Mecz", "Suma_Goli_Mecz",
@@ -559,57 +420,43 @@ if not results_df.empty:
         if col in results_df.columns:
             results_df[col] = pd.to_numeric(results_df[col], errors='coerce').astype('Int64').astype(str).replace('<NA>', '-')
 
-if not fixtures_df.empty: fixtures_df = fixtures_df.fillna("-")
-if not results_df.empty: results_df = results_df.fillna("-")
-if not analysis_df.empty: analysis_df = analysis_df.fillna("-")
+# Zabezpieczenie przed NaN (zamiana na kreski)
+fixtures_df = fixtures_df.fillna("-")
+results_df = results_df.fillna("-")
+analysis_df = analysis_df.fillna("-")
 
-# Formatowanie kursów kropka -> przecinek dla polskich ustawień arkusza
-for col in ["Odd1", "OddX", "Odd2"]:
-    if col in fixtures_df.columns: fixtures_df[col] = fixtures_df[col].apply(lambda x: str(x).replace(".", ",") if str(x) != "-" else "-")
-    if col in results_df.columns: results_df[col] = results_df[col].apply(lambda x: str(x).replace(".", ",") if str(x) != "-" else "-")
-    if col in analysis_df.columns: analysis_df[col] = analysis_df[col].apply(lambda x: str(x).replace(".", ",") if str(x) != "-" else "-")
+# Formatowanie przecinków do polskich ustawień arkusza
+for df_to_format in [fixtures_df, results_df, analysis_df]:
+    for col in ["Odd1", "OddX", "Odd2"]:
+        if col in df_to_format.columns:
+            df_to_format[col] = df_to_format[col].apply(lambda x: str(x).replace(".", ",") if str(x) != "-" else "-")
 
-
-# ==========================================================
-# 7. GOOGLE SHEETS AUTORYZACJA I ZAPIS
-# ==========================================================
 scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-
 if os.path.exists("credentials.json"): creds = Credentials.from_service_account_file("credentials.json", scopes=scope)
 else: creds = Credentials.from_service_account_info(json.loads(os.environ["GOOGLE_CREDENTIALS"]), scopes=scope)
 
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
+# Dynamiczne tworzenie i wypełnianie zakładek
+zakladki = [
+    ("Fixtures", fixtures_df, 1000, 35),
+    ("Results", results_df, 5000, 45),
+    ("Analysis", analysis_df, 1000, 30)
+]
+
+for nazwa_zakladki, df_data, rows_cnt, cols_cnt in zakladki:
+    try: sheet = spreadsheet.worksheet(nazwa_zakladki)
+    except: sheet = spreadsheet.add_worksheet(title=nazwa_zakladki, rows=rows_cnt, cols=cols_cnt)
+    
+    print(f"Wysyłam zakładkę: {nazwa_zakladki}...")
+    sheet.clear()
+    if not df_data.empty:
+        sheet.update([df_data.columns.tolist()] + df_data.astype(str).values.tolist())
+
+# Podsumowanie
 try: summary_sheet = spreadsheet.worksheet("Summary")
 except: summary_sheet = spreadsheet.add_worksheet(title="Summary", rows=100, cols=10)
-
-try: fixtures_sheet = spreadsheet.worksheet("Fixtures")
-except: fixtures_sheet = spreadsheet.add_worksheet(title="Fixtures", rows=1000, cols=35)
-
-try: results_sheet = spreadsheet.worksheet("Results")
-except: results_sheet = spreadsheet.add_worksheet(title="Results", rows=5000, cols=45)
-
-try: analysis_sheet = spreadsheet.worksheet("Analysis")
-except: analysis_sheet = spreadsheet.add_worksheet(title="Analysis", rows=1000, cols=30)
-
-try:
-    fixtures_sheet.resize(rows=1000, cols=35)
-    results_sheet.resize(rows=5000, cols=45)
-    analysis_sheet.resize(rows=1000, cols=30)
-except: pass
-
-print("Wysyłam Czysty Terminarz do Google Sheets...")
-fixtures_sheet.clear()
-fixtures_sheet.update([fixtures_df.columns.tolist()] + fixtures_df.astype(str).values.tolist())
-
-print("Wysyłam Historię ze statystykami do Google Sheets...")
-results_sheet.clear()
-results_sheet.update([results_df.columns.tolist()] + results_df.astype(str).values.tolist())
-
-print("Wysyłam Zaawansowaną Analizę Formy (Analysis) do Google Sheets...")
-analysis_sheet.clear()
-analysis_sheet.update([analysis_df.columns.tolist()] + analysis_df.astype(str).values.tolist())
 
 summary_sheet.clear()
 summary_sheet.update([
@@ -624,5 +471,5 @@ print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
 print("Fixtures:", len(fixtures_df))
 print("Results:", len(results_df))
-print("Analysis (Mecze z formą):", len(analysis_df))
+print("Analysis:", len(analysis_df))
 print("=" * 60)
