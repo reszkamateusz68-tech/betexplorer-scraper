@@ -48,7 +48,6 @@ def split_datetime(value):
 
     return value, ""
 
-# Lista raportowa do zakładki Summary
 scrape_report = []
 
 headers = {
@@ -67,22 +66,34 @@ try: urls_be = pd.read_excel("ligi.xlsx")["URL"].dropna().tolist()
 except: urls_be = []
 
 for i, url in enumerate(urls_be, start=1):
-    print(f"[{i}/{len(urls_be)}] Pobieram BetExplorer: {url}")
+    url_clean = str(url).strip()
+    print(f"[{i}/{len(urls_be)}] Pobieram BetExplorer: {url_clean}")
+    
+    # Tarcza ochronna na złe linki
+    if "/fixtures/" not in url_clean and "/results/" not in url_clean:
+        scrape_report.append(["BetExplorer", url_clean, "BŁĄD: Link musi kończyć się na /fixtures/ lub /results/"])
+        continue
+        
     try:
-        response = requests.get(url.strip(), headers=headers, timeout=30)
+        response = requests.get(url_clean, headers=headers, timeout=30)
         if response.status_code != 200:
-            scrape_report.append(["BetExplorer", url, f"BŁĄD: Kod {response.status_code} (Strona nie istnieje)"])
+            scrape_report.append(["BetExplorer", url_clean, f"BŁĄD: Kod {response.status_code} (Strona nie istnieje)"])
             continue
             
         html = response.text
         soup = BeautifulSoup(html, "html.parser")
 
-        league = url.split("/football/")[1].replace("/fixtures/", "").replace("/results/", "")
+        # Bezpieczne pobieranie nazwy ligi
+        try:
+            if "/football/" in url_clean: league = url_clean.split("/football/")[1].replace("/fixtures/", "").replace("/results/", "").strip("/")
+            else: league = url_clean.split(".com/")[1].replace("/fixtures/", "").replace("/results/", "").strip("/")
+        except: league = "Unknown_League"
+
         rows = soup.find_all("tr")
         mecz_count = 0
 
         # FIXTURES
-        if "/fixtures/" in url:
+        if "/fixtures/" in url_clean:
             for row in rows:
                 date_cell = row.find("td", class_="table-main__datetime")
                 if not date_cell: continue
@@ -113,11 +124,11 @@ for i, url in enumerate(urls_be, start=1):
 
                 all_data.append(["Fixture", league, date_cell.get_text(strip=True), home, away, "", odd1, oddx, odd2])
                 mecz_count += 1
-            scrape_report.append(["BetExplorer", url, f"OK (Pobrano: {mecz_count} meczów)"])
+            scrape_report.append(["BetExplorer", url_clean, f"OK (Pobrano: {mecz_count} meczów)"])
 
         # RESULTS
-        elif "/results/" in url:
-            current_date = ""  # Pamięć daty dla meczów z tego samego dnia
+        elif "/results/" in url_clean:
+            current_date = ""
             for row in rows:
                 match = row.find("a", class_="in-match")
                 if not match: continue
@@ -147,19 +158,19 @@ for i, url in enumerate(urls_be, start=1):
                 date_cell = row.find("td", class_=lambda x: x and "h-text-right" in x)
                 if date_cell:
                     parsed_date = date_cell.get_text(strip=True)
-                    if parsed_date: current_date = parsed_date  # Aktualizacja pamięci daty
+                    if parsed_date: current_date = parsed_date
 
                 all_data.append(["Result", league, current_date, home, away, score, odd1, oddx, odd2])
                 mecz_count += 1
             
             if mecz_count == 0:
-                scrape_report.append(["BetExplorer", url, "BŁĄD: Znaleziono 0 meczów (Zły link lub brak wyników)"])
+                scrape_report.append(["BetExplorer", url_clean, "BŁĄD: Znaleziono 0 meczów (Pusty sezon / Zły link)"])
             else:
-                scrape_report.append(["BetExplorer", url, f"OK (Pobrano: {mecz_count} meczów)"])
+                scrape_report.append(["BetExplorer", url_clean, f"OK (Pobrano: {mecz_count} meczów)"])
 
     except Exception as e:
-        scrape_report.append(["BetExplorer", url, f"BŁĄD KRYTYCZNY: {str(e)}"])
-        print("BŁĄD:", url, e)
+        scrape_report.append(["BetExplorer", url_clean, f"BŁĄD KRYTYCZNY: {str(e)}"])
+        print("BŁĄD:", url_clean, e)
 
 # ==========================================================
 # DATAFRAME Z BETEXPLORER (Rozdzielenie i sortowanie)
@@ -283,11 +294,9 @@ if not ss_df.empty and not results_df.empty:
     ss_df["Away"] = ss_df["Away"].astype(str).str.strip().apply(lambda x: mapowanie_ss.get(x, x))
     
     ss_do_zlaczenia = ss_df.drop_duplicates(subset=["Home", "Away", "Score"])
-    # Nienaruszalne scalenie Left Join
     results_df = pd.merge(results_df, ss_do_zlaczenia, on=["Home", "Away", "Score"], how="left")
     results_df = results_df.fillna("-")
 
-# Dodajemy kolumny jeśli SoccerStats całkowicie puste (aby struktura tabeli była stała)
 for col in ["HT", "2.5+", "TG", "BTS"]:
     if col not in results_df.columns:
         results_df[col] = "-"
@@ -311,13 +320,6 @@ except: results_sheet = spreadsheet.add_worksheet(title="Results", rows=5000, co
 
 try: summary_sheet = spreadsheet.worksheet("Summary")
 except: summary_sheet = spreadsheet.add_worksheet(title="Summary", rows=100, cols=10)
-
-# Usuwanie arkuszy analitycznych z poprzednich prób
-for stare_z in ["SoccerStats_Model", "Analysis"]:
-    try:
-        arkusz_del = spreadsheet.worksheet(stare_z)
-        spreadsheet.del_worksheet(arkusz_del)
-    except: pass
 
 fixtures_df = fixtures_df.fillna("-")
 results_df = results_df.fillna("-")
@@ -354,5 +356,4 @@ print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
 print("Fixtures:", len(fixtures_df))
 print("Results:", len(results_df))
-print("Sprawdź zakładkę 'Summary' w Google Sheets, aby zobaczyć szczegółowy raport pobierania lig!")
 print("=" * 60)
