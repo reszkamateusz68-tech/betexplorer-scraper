@@ -10,7 +10,58 @@ from google.oauth2.service_account import Credentials
 
 today = datetime.now()
 
+# Wczytanie słownika z mapowaniem nazw drużyn
+try:
+    with open("slownik_druzyn.json", "r", encoding="utf-8") as f:
+        slownik = json.load(f)
+        fd_dict = slownik.get("FootballData_To_BetExplorer", {})
+except FileNotFoundError:
+    print("Brak pliku slownik_druzyn.json. Pobieram dane bez mapowania nazw.")
+    fd_dict = {}
+
 def split_datetime(value):
+    
+def fetch_football_data():
+    print("Pobieram linki i statystyki z ligi_footballdata.xlsx...")
+    
+    # 1. Wczytanie URL-i z pliku Excel
+    try:
+        urls = pd.read_excel("ligi_footballdata.xlsx")["URL"].dropna().tolist()
+    except FileNotFoundError:
+        print("UWAGA: Nie znaleziono pliku ligi_footballdata.xlsx! Pomijam statystyki.")
+        return pd.DataFrame()
+    except Exception as e:
+        print(f"Błąd podczas wczytywania pliku Excel: {e}")
+        return pd.DataFrame()
+    
+    # 2. Pobieranie danych z każdego linku
+    dfs = []
+    for url in urls:
+        try:
+            df_fd = pd.read_csv(url.strip())
+            dfs.append(df_fd)
+        except Exception as e:
+            print(f"Błąd pobierania CSV z {url}: {e}")
+            
+    if not dfs:
+        return pd.DataFrame()
+        
+    # 3. Złączenie wszystkich lig w jedną dużą tabelę
+    fd_master = pd.concat(dfs, ignore_index=True)
+    
+    # 4. Wybieramy tylko te kolumny, które nas interesują (statystyki i uśrednione kursy)
+    cols_to_keep = ['Date', 'HomeTeam', 'AwayTeam', 
+                    'HTHG', 'HTAG', 'HS', 'AS', 'HST', 'AST', 
+                    'HC', 'AC', 'HY', 'AY', 'AvgH', 'AvgD', 'AvgA']
+    
+    existing_cols = [col for col in cols_to_keep if col in fd_master.columns]
+    fd_master = fd_master[existing_cols]
+    
+    # 5. Normalizacja formatu daty
+    fd_master['Date'] = pd.to_datetime(fd_master['Date'], format='mixed', dayfirst=True).dt.date
+    
+    return fd_master
+    
     if pd.isna(value):
         return None, ""
     value = str(value).strip()
@@ -280,26 +331,37 @@ except Exception as e:
 # ==========================================================
 # 3. BEZPIECZNE SCALANIE DANYCH
 # ==========================================================
-print("Złączam dane z SoccerStats do tabeli Results...")
+print("Przetwarzam i scalam dodatkowe statystyki meczowe...")
 
-if os.path.exists("slownik_druzyn.json"):
-    try:
-        with open("slownik_druzyn.json", "r", encoding="utf-8") as f:
-            mapowanie_ss = json.load(f).get("SoccerStats_To_BetExplorer", {})
-    except: mapowanie_ss = {}
-else: mapowanie_ss = {}
+# Uruchomienie funkcji pobierającej z Excela
+fd_df = fetch_football_data()
 
-if not ss_df.empty and not results_df.empty:
-    ss_df["Home"] = ss_df["Home"].astype(str).str.strip().apply(lambda x: mapowanie_ss.get(x, x))
-    ss_df["Away"] = ss_df["Away"].astype(str).str.strip().apply(lambda x: mapowanie_ss.get(x, x))
+if not fd_df.empty:
+    # Ujednolicenie nazw na podstawie Twojego slownik_druzyn.json
+    fd_df['HomeTeam'] = fd_df['HomeTeam'].replace(fd_dict)
+    fd_df['AwayTeam'] = fd_df['AwayTeam'].replace(fd_dict)
     
-    ss_do_zlaczenia = ss_df.drop_duplicates(subset=["Home", "Away", "Score"])
-    results_df = pd.merge(results_df, ss_do_zlaczenia, on=["Home", "Away", "Score"], how="left")
-    results_df = results_df.fillna("-")
+    # Ujednolicenie daty w głównej tabeli
+    results_df['Date'] = pd.to_datetime(results_df['Date'], format='mixed', errors='coerce').dt.date
+    
+    # ZŁĄCZENIE (MERGE)
+    # UWAGA: Upewnij się, że "Home_Team" i "Away_Team" to dokładne nazwy 
+    # kolumn w Twojej głównej tabeli z BetExplorer! Jeśli są to np. "Home" i "Away", zmień to.
+    results_df = pd.merge(
+        results_df, 
+        fd_df, 
+        how='left', 
+        left_on=['Date', 'Home_Team', 'Away_Team'], 
+        right_on=['Date', 'HomeTeam', 'AwayTeam']
+    )
+    
+    # Usuwamy niepotrzebne duplikaty kolumn drużyn z prawego pliku i wypełniamy puste luki
+    results_df = results_df.drop(columns=['HomeTeam', 'AwayTeam'], errors='ignore')
+    results_df = results_df.fillna("")
 
-for col in ["HT", "2.5+", "TG", "BTS"]:
-    if col not in results_df.columns:
-        results_df[col] = "-"
+print("Wysyłam Historię ze statystykami i kursami Avg do Google Sheets...")
+results_sheet.clear()
+results_sheet.update([results_df.columns.tolist()] + results_df.astype(str).values.tolist())
 
 # ==========================================
 # 4. GOOGLE SHEETS AUTORYZACJA I WYSYŁKA
@@ -313,10 +375,10 @@ client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
 try: fixtures_sheet = spreadsheet.worksheet("Fixtures")
-except: fixtures_sheet = spreadsheet.add_worksheet(title="Fixtures", rows=1000, cols=20)
+except: fixtures_sheet = spreadsheet.add_worksheet(title="Fixtures", rows=5000, cols=35)
 
 try: results_sheet = spreadsheet.worksheet("Results")
-except: results_sheet = spreadsheet.add_worksheet(title="Results", rows=5000, cols=20)
+except: results_sheet = spreadsheet.add_worksheet(title="Results", rows=5000, cols=35)
 
 try: summary_sheet = spreadsheet.worksheet("Summary")
 except: summary_sheet = spreadsheet.add_worksheet(title="Summary", rows=100, cols=10)
