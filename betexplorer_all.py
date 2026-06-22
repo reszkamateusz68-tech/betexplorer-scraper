@@ -325,7 +325,6 @@ away_rec['M'] = 1
 all_rec = pd.concat([home_rec, away_rec])
 league_tables = all_rec.groupby(['League', 'Team']).sum().reset_index()
 league_tables['GD'] = league_tables['GF'] - league_tables['GA']
-# Points Per Game (Siła kalendarza bazowa)
 league_tables['PPG'] = round(league_tables['Pts'] / league_tables['M'], 2)
 
 # Sortowanie klasyczne (Punkty, Różnica bramek, Strzelone)
@@ -337,10 +336,11 @@ league_tables = league_tables[['League', 'Team', 'M', 'W', 'D', 'L', 'GF', 'GA',
 # ==========================================
 fixtures_clean = fixtures_df[['Match_ID', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd1', 'OddX', 'Odd2']].rename(columns={'Odd1': 'Odd_1', 'OddX': 'Odd_X', 'Odd2': 'Odd_2'})
 
+# NAPRAWA: Zabezpieczenie przed błędem ułamków za pomocą str(x)
 for df_to_clean in [results_clean, fixtures_clean, league_tables]:
     for col in df_to_clean.columns:
         if "Odd" in col or "Avg" in col or "Val" in col or col == "PPG":
-            df_to_clean[col] = df_to_clean[col].astype(str).apply(lambda x: x.replace(".", ",") if x not in ["<NA>", "nan", "NaN", "None"] else "-")
+            df_to_clean[col] = df_to_clean[col].apply(lambda x: str(x).replace(".", ",") if str(x).strip() not in ["<NA>", "nan", "NaN", "None", ""] else "-")
 
 results_clean = results_clean.astype(str).replace(["<NA>", "nan", "NaN", "None"], "-")
 fixtures_clean = fixtures_clean.astype(str).replace(["<NA>", "nan", "NaN", "None"], "-")
