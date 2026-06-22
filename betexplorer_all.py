@@ -59,24 +59,29 @@ def split_datetime(value):
 
     return value, ""
 
-def fetch_football_data():
+# ZMIANA 1: Funkcja teraz przyjmuje raport jako argument, by móc do niego dopisywać statusy
+def fetch_football_data(raport):
     print("Pobieram linki i statystyki z ligi_footballdata.xlsx...")
     
     try:
         urls = pd.read_excel("ligi_footballdata.xlsx")["URL"].dropna().tolist()
     except Exception as e:
         print(f"Błąd podczas wczytywania pliku Excel: {e}")
+        raport.append(["Football-Data", "ligi_footballdata.xlsx", f"BŁĄD Excela: {str(e)}"])
         return pd.DataFrame()
     
     dfs = []
     for url in urls:
+        url_clean = url.strip()
         try:
-            df_fd = pd.read_csv(url.strip())
-            # Zabezpieczenie przed pustymi wierszami w pliku z football-data
+            df_fd = pd.read_csv(url_clean)
+            # Zabezpieczenie przed pustymi wierszami
             df_fd = df_fd.dropna(subset=['HomeTeam']) 
             dfs.append(df_fd)
+            raport.append(["Football-Data", url_clean, f"OK (Pobrano: {len(df_fd)} wierszy)"])
         except Exception as e:
-            print(f"Błąd pobierania CSV z {url}: {e}")
+            print(f"Błąd pobierania CSV z {url_clean}: {e}")
+            raport.append(["Football-Data", url_clean, f"BŁĄD: {str(e)}"])
             
     if not dfs:
         return pd.DataFrame()
@@ -104,12 +109,10 @@ headers = {
 # 1. POBIERANIE Z BETEXPLORER
 # ==========================================================
 all_data = []
+scraper_be = cloudscraper.create_scraper() # Używamy mocniejszego scrapera dla BE
 
 try: urls_be = pd.read_excel("ligi.xlsx")["URL"].dropna().tolist()
 except: urls_be = []
-
-# Inicjujemy pancernego scrapera dla BetExplorera przed pętlą
-scraper_be = cloudscraper.create_scraper()
 
 for i, url in enumerate(urls_be, start=1):
     url_clean = str(url).strip()
@@ -120,7 +123,6 @@ for i, url in enumerate(urls_be, start=1):
         continue
         
     try:
-        # Zmieniamy requests.get na scraper_be.get
         response = scraper_be.get(url_clean, headers=headers, timeout=30)
         if response.status_code != 200:
             scrape_report.append(["BetExplorer", url_clean, f"BŁĄD: Kod {response.status_code}"])
@@ -193,7 +195,6 @@ for i, url in enumerate(urls_be, start=1):
                     if not odd:
                         span = cell.find(attrs={"data-odd": True})
                         if span: odd = span.get("data-odd")
-                    # -- NAPRAWA: Zabezpieczenie przed ukrytymi kursami z historii --
                     if not odd:
                         button = cell.find("button")
                         if button: odd = button.get_text(strip=True)
@@ -327,11 +328,10 @@ except Exception as e:
     ss_df = pd.DataFrame()
 
 # ==========================================================
-# 3. BEZPIECZNE SCALANIE DANYCH (Teraz pancerne!)
+# 3. BEZPIECZNE SCALANIE DANYCH 
 # ==========================================================
 print("Przetwarzam i scalam statystyki (SoccerStats + Football-Data)...")
 
-# 1. Konwersja daty i usunięcie białych znaków (BARDZO WAŻNE DLA ZŁĄCZENIA)
 results_df['Date'] = pd.to_datetime(results_df['Date'], errors='coerce').astype(str)
 results_df['Home'] = results_df['Home'].astype(str).str.strip()
 results_df['Away'] = results_df['Away'].astype(str).str.strip()
@@ -341,10 +341,8 @@ if not ss_df.empty:
     ss_df['Home'] = ss_df['Home'].astype(str).str.strip().replace(ss_dict)
     ss_df['Away'] = ss_df['Away'].astype(str).str.strip().replace(ss_dict)
     
-    # Usuwamy ewentualne duplikaty meczów, zostawiając najnowsze
     ss_df = ss_df.drop_duplicates(subset=['Home', 'Away'], keep='last')
     
-    # Łączenie po samych nazwach drużyn (bo w SoccerStats daty często nie mają roku)
     results_df = pd.merge(
         results_df,
         ss_df[['Home', 'Away', 'HT', '2.5+', 'TG', 'BTS']],
@@ -355,7 +353,7 @@ else:
     for col in ['HT', '2.5+', 'TG', 'BTS']: results_df[col] = "-"
 
 # --- SCALANIE FOOTBALL DATA ---
-fd_df = fetch_football_data()
+fd_df = fetch_football_data(scrape_report)
 
 if not fd_df.empty:
     fd_df['HomeTeam'] = fd_df['HomeTeam'].astype(str).str.strip().replace(fd_dict)
@@ -376,7 +374,15 @@ else:
     fd_cols = ['HTHG', 'HTAG', 'HS', 'AS', 'HST', 'AST', 'HC', 'AC', 'HY', 'AY', 'AvgH', 'AvgD', 'AvgA']
     for col in fd_cols: results_df[col] = "-"
 
-# Czyszczenie wyników: zamieniamy wszelkie "nan" i puste komórki na "-"
+# ZMIANA 2: Konwersja kolumn statystycznych na liczby całkowite
+int_cols = ['HTHG', 'HTAG', 'HS', 'AS', 'HST', 'AST', 'HC', 'AC', 'HY', 'AY']
+for col in int_cols:
+    if col in results_df.columns:
+        # Zamieniamy na numeric, a potem formatujemy na int jako string (jeśli nie puste, w przeciwnym razie dajemy myślnik "-")
+        results_df[col] = pd.to_numeric(results_df[col], errors='coerce')
+        results_df[col] = results_df[col].apply(lambda x: str(int(x)) if pd.notnull(x) else "-")
+
+# Czyszczenie pozostałych wyników: zamieniamy wszelkie dziwne puste komórki na "-"
 results_df = results_df.fillna("-").replace(["nan", "NaN", "NaT", ""], "-")
 fixtures_df = fixtures_df.fillna("-").replace(["nan", "NaN", "NaT", ""], "-")
 
