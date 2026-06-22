@@ -15,9 +15,11 @@ try:
     with open("slownik_druzyn.json", "r", encoding="utf-8") as f:
         slownik = json.load(f)
         fd_dict = slownik.get("FootballData_To_BetExplorer", {})
+        ss_dict = slownik.get("SoccerStats_To_BetExplorer", {})
 except FileNotFoundError:
     print("Brak pliku slownik_druzyn.json. Pobieram dane bez mapowania nazw.")
     fd_dict = {}
+    ss_dict = {}
 
 def split_datetime(value):
     if pd.isna(value):
@@ -60,21 +62,18 @@ def split_datetime(value):
 def fetch_football_data():
     print("Pobieram linki i statystyki z ligi_footballdata.xlsx...")
     
-    # 1. Wczytanie URL-i z pliku Excel
     try:
         urls = pd.read_excel("ligi_footballdata.xlsx")["URL"].dropna().tolist()
-    except FileNotFoundError:
-        print("UWAGA: Nie znaleziono pliku ligi_footballdata.xlsx! Pomijam statystyki.")
-        return pd.DataFrame()
     except Exception as e:
         print(f"Błąd podczas wczytywania pliku Excel: {e}")
         return pd.DataFrame()
     
-    # 2. Pobieranie danych z każdego linku
     dfs = []
     for url in urls:
         try:
             df_fd = pd.read_csv(url.strip())
+            # Zabezpieczenie przed pustymi wierszami w pliku z football-data
+            df_fd = df_fd.dropna(subset=['HomeTeam']) 
             dfs.append(df_fd)
         except Exception as e:
             print(f"Błąd pobierania CSV z {url}: {e}")
@@ -82,26 +81,20 @@ def fetch_football_data():
     if not dfs:
         return pd.DataFrame()
         
-    # 3. Złączenie wszystkich lig w jedną dużą tabelę
     fd_master = pd.concat(dfs, ignore_index=True)
     
-    # 4. Wybieramy tylko te kolumny, które nas interesują (statystyki i uśrednione kursy)
     cols_to_keep = ['Date', 'HomeTeam', 'AwayTeam', 
                     'HTHG', 'HTAG', 'HS', 'AS', 'HST', 'AST', 
                     'HC', 'AC', 'HY', 'AY', 'AvgH', 'AvgD', 'AvgA']
     
     existing_cols = [col for col in cols_to_keep if col in fd_master.columns]
     fd_master = fd_master[existing_cols]
-    
-    # 5. Normalizacja formatu daty
-    fd_master['Date'] = pd.to_datetime(fd_master['Date'], format='mixed', dayfirst=True).dt.date
-    
     return fd_master
 
 scrape_report = []
 
 headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Cache-Control": "no-cache"
@@ -119,21 +112,18 @@ for i, url in enumerate(urls_be, start=1):
     url_clean = str(url).strip()
     print(f"[{i}/{len(urls_be)}] Pobieram BetExplorer: {url_clean}")
     
-    # Tarcza ochronna na złe linki
     if "/fixtures/" not in url_clean and "/results/" not in url_clean:
-        scrape_report.append(["BetExplorer", url_clean, "BŁĄD: Link musi kończyć się na /fixtures/ lub /results/"])
+        scrape_report.append(["BetExplorer", url_clean, "BŁĄD: Zły link"])
         continue
         
     try:
         response = requests.get(url_clean, headers=headers, timeout=30)
         if response.status_code != 200:
-            scrape_report.append(["BetExplorer", url_clean, f"BŁĄD: Kod {response.status_code} (Strona nie istnieje)"])
+            scrape_report.append(["BetExplorer", url_clean, f"BŁĄD: Kod {response.status_code}"])
             continue
             
-        html = response.text
-        soup = BeautifulSoup(html, "html.parser")
+        soup = BeautifulSoup(response.text, "html.parser")
 
-        # Bezpieczne pobieranie nazwy ligi
         try:
             if "/football/" in url_clean: league = url_clean.split("/football/")[1].replace("/fixtures/", "").replace("/results/", "").strip("/")
             else: league = url_clean.split(".com/")[1].replace("/fixtures/", "").replace("/results/", "").strip("/")
@@ -199,6 +189,13 @@ for i, url in enumerate(urls_be, start=1):
                     if not odd:
                         span = cell.find(attrs={"data-odd": True})
                         if span: odd = span.get("data-odd")
+                    # -- NAPRAWA: Zabezpieczenie przed ukrytymi kursami z historii --
+                    if not odd:
+                        button = cell.find("button")
+                        if button: odd = button.get_text(strip=True)
+                    if not odd:
+                        text = cell.get_text(" ", strip=True)
+                        if text: odd = text
                     odds.append(odd if odd else "-")
 
                 odd1 = odds[0] if len(odds) >= 1 else "-"
@@ -214,16 +211,15 @@ for i, url in enumerate(urls_be, start=1):
                 mecz_count += 1
             
             if mecz_count == 0:
-                scrape_report.append(["BetExplorer", url_clean, "BŁĄD: Znaleziono 0 meczów (Pusty sezon / Zły link)"])
+                scrape_report.append(["BetExplorer", url_clean, "BŁĄD: Znaleziono 0 meczów"])
             else:
                 scrape_report.append(["BetExplorer", url_clean, f"OK (Pobrano: {mecz_count} meczów)"])
 
     except Exception as e:
-        scrape_report.append(["BetExplorer", url_clean, f"BŁĄD KRYTYCZNY: {str(e)}"])
-        print("BŁĄD:", url_clean, e)
+        scrape_report.append(["BetExplorer", url_clean, f"BŁĄD: {str(e)}"])
 
 # ==========================================================
-# DATAFRAME Z BETEXPLORER (Rozdzielenie i sortowanie)
+# DATAFRAME Z BETEXPLORER
 # ==========================================================
 df = pd.DataFrame(all_data, columns=["Type", "League", "Date", "Home", "Away", "Score", "Odd1", "OddX", "Odd2"])
 df = df.drop_duplicates()
@@ -306,16 +302,15 @@ try:
                                         
                                     wynik_czysty = wynik.replace("*", "").strip()
                                     if "-" in wynik_czysty: wynik_czysty = wynik_czysty.replace("-", ":").replace(" ", "")
-                                        
                                     ht_czysty = ht.replace("*", "").strip()
                                     
                                     dane_soccerstats_baza.append([gospodarz, wynik_czysty, gosc, ht_czysty, o25.replace("*", "").strip(), tg.replace("*", "").strip(), bts.replace("*", "").strip()])
                                     ss_count += 1
                                     
-                    if ss_count == 0: scrape_report.append(["SoccerStats", url_ss, "BŁĄD: Znaleziono tabelę, brak pasujących wierszy"])
+                    if ss_count == 0: scrape_report.append(["SoccerStats", url_ss, "BŁĄD: Znaleziono tabelę, brak wierszy"])
                     else: scrape_report.append(["SoccerStats", url_ss, f"OK (Pobrano: {ss_count} wierszy)"])
                 else:
-                    scrape_report.append(["SoccerStats", url_ss, "BŁĄD: Nie znaleziono tabeli wyników na stronie"])
+                    scrape_report.append(["SoccerStats", url_ss, "BŁĄD: Nie znaleziono tabeli wyników"])
             except Exception as e:
                 scrape_report.append(["SoccerStats", url_ss, f"BŁĄD: {str(e)}"])
                     
@@ -328,28 +323,58 @@ except Exception as e:
     ss_df = pd.DataFrame()
 
 # ==========================================================
-# 3. BEZPIECZNE SCALANIE DANYCH
+# 3. BEZPIECZNE SCALANIE DANYCH (Teraz pancerne!)
 # ==========================================================
-print("Przetwarzam i scalam dodatkowe statystyki meczowe...")
+print("Przetwarzam i scalam statystyki (SoccerStats + Football-Data)...")
 
+# 1. Konwersja daty i usunięcie białych znaków (BARDZO WAŻNE DLA ZŁĄCZENIA)
+results_df['Date'] = pd.to_datetime(results_df['Date'], errors='coerce').astype(str)
+results_df['Home'] = results_df['Home'].astype(str).str.strip()
+results_df['Away'] = results_df['Away'].astype(str).str.strip()
+
+# --- SCALANIE SOCCERSTATS ---
+if not ss_df.empty:
+    ss_df['Home'] = ss_df['Home'].astype(str).str.strip().replace(ss_dict)
+    ss_df['Away'] = ss_df['Away'].astype(str).str.strip().replace(ss_dict)
+    
+    # Usuwamy ewentualne duplikaty meczów, zostawiając najnowsze
+    ss_df = ss_df.drop_duplicates(subset=['Home', 'Away'], keep='last')
+    
+    # Łączenie po samych nazwach drużyn (bo w SoccerStats daty często nie mają roku)
+    results_df = pd.merge(
+        results_df,
+        ss_df[['Home', 'Away', 'HT', '2.5+', 'TG', 'BTS']],
+        how='left',
+        on=['Home', 'Away']
+    )
+else:
+    for col in ['HT', '2.5+', 'TG', 'BTS']: results_df[col] = "-"
+
+# --- SCALANIE FOOTBALL DATA ---
 fd_df = fetch_football_data()
 
 if not fd_df.empty:
-    fd_df['HomeTeam'] = fd_df['HomeTeam'].replace(fd_dict)
-    fd_df['AwayTeam'] = fd_df['AwayTeam'].replace(fd_dict)
+    fd_df['HomeTeam'] = fd_df['HomeTeam'].astype(str).str.strip().replace(fd_dict)
+    fd_df['AwayTeam'] = fd_df['AwayTeam'].astype(str).str.strip().replace(fd_dict)
+    fd_df['Date'] = pd.to_datetime(fd_df['Date'], dayfirst=True, errors='coerce').astype(str)
     
-    results_df['Date'] = pd.to_datetime(results_df['Date'], format='mixed', errors='coerce').dt.date
+    fd_df = fd_df.drop_duplicates(subset=['Date', 'HomeTeam', 'AwayTeam'], keep='last')
     
     results_df = pd.merge(
         results_df, 
         fd_df, 
         how='left', 
-        left_on=['Date', 'Home', 'Away'],  # ZMIENIONE: Poprawne nazwy kolumn
+        left_on=['Date', 'Home', 'Away'], 
         right_on=['Date', 'HomeTeam', 'AwayTeam']
     )
-    
     results_df = results_df.drop(columns=['HomeTeam', 'AwayTeam'], errors='ignore')
-    results_df = results_df.fillna("")
+else:
+    fd_cols = ['HTHG', 'HTAG', 'HS', 'AS', 'HST', 'AST', 'HC', 'AC', 'HY', 'AY', 'AvgH', 'AvgD', 'AvgA']
+    for col in fd_cols: results_df[col] = "-"
+
+# Czyszczenie wyników: zamieniamy wszelkie "nan" i puste komórki na "-"
+results_df = results_df.fillna("-").replace(["nan", "NaN", "NaT", ""], "-")
+fixtures_df = fixtures_df.fillna("-").replace(["nan", "NaN", "NaT", ""], "-")
 
 # ==========================================
 # 4. GOOGLE SHEETS AUTORYZACJA I WYSYŁKA
@@ -366,7 +391,7 @@ try: fixtures_sheet = spreadsheet.worksheet("Fixtures")
 except: fixtures_sheet = spreadsheet.add_worksheet(title="Fixtures", rows=5000, cols=35)
 
 try: results_sheet = spreadsheet.worksheet("Results")
-except: results_sheet = spreadsheet.add_worksheet(title="Results", rows=5000, cols=55) # ZMIENIONE: Arkusz na 55 kolumn
+except: results_sheet = spreadsheet.add_worksheet(title="Results", rows=5000, cols=55)
 
 try: summary_sheet = spreadsheet.worksheet("Summary")
 except: summary_sheet = spreadsheet.add_worksheet(title="Summary", rows=100, cols=10)
@@ -376,15 +401,12 @@ try:
     results_sheet.resize(rows=5000, cols=55)
 except: pass
 
-fixtures_df = fixtures_df.fillna("-")
-results_df = results_df.fillna("-")
-
-# Zmiana kropek na przecinki, żeby polski Google Sheets odczytał liczby poprawnie (również dla AvgH, AvgD, AvgA)
+# Zmiana kropek na przecinki dla polskich arkuszy (z pominięciem myślników i pustych miejsc)
 for col in ["Odd1", "OddX", "Odd2", "AvgH", "AvgD", "AvgA"]:
     if col in fixtures_df.columns:
-        fixtures_df[col] = fixtures_df[col].apply(lambda x: str(x).replace(".", ",") if str(x) != "-" and str(x) != "" else "-")
+        fixtures_df[col] = fixtures_df[col].astype(str).apply(lambda x: x.replace(".", ",") if x not in ["-", ""] else "-")
     if col in results_df.columns:
-        results_df[col] = results_df[col].apply(lambda x: str(x).replace(".", ",") if str(x) != "-" and str(x) != "" else "-")
+        results_df[col] = results_df[col].astype(str).apply(lambda x: x.replace(".", ",") if x not in ["-", ""] else "-")
 
 print("Wysyłam Fixtures...")
 fixtures_sheet.clear()
