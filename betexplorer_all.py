@@ -108,6 +108,9 @@ all_data = []
 try: urls_be = pd.read_excel("ligi.xlsx")["URL"].dropna().tolist()
 except: urls_be = []
 
+# Inicjujemy pancernego scrapera dla BetExplorera przed pętlą
+scraper_be = cloudscraper.create_scraper()
+
 for i, url in enumerate(urls_be, start=1):
     url_clean = str(url).strip()
     print(f"[{i}/{len(urls_be)}] Pobieram BetExplorer: {url_clean}")
@@ -117,7 +120,8 @@ for i, url in enumerate(urls_be, start=1):
         continue
         
     try:
-        response = requests.get(url_clean, headers=headers, timeout=30)
+        # Zmieniamy requests.get na scraper_be.get
+        response = scraper_be.get(url_clean, headers=headers, timeout=30)
         if response.status_code != 200:
             scrape_report.append(["BetExplorer", url_clean, f"BŁĄD: Kod {response.status_code}"])
             continue
