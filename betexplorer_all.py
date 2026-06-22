@@ -20,7 +20,43 @@ except FileNotFoundError:
     fd_dict = {}
 
 def split_datetime(value):
-    
+    if pd.isna(value):
+        return None, ""
+    value = str(value).strip()
+
+    if value.lower().startswith("today"):
+        time_part = value.replace("Today", "").strip()
+        return today.date(), time_part
+
+    if value.lower().startswith("tomorrow"):
+        time_part = value.replace("Tomorrow", "").strip()
+        return (today.date() + timedelta(days=1), time_part)
+
+    if value.lower().startswith("yesterday"):
+        time_part = value.replace("Yesterday", "").strip()
+        return (today.date() - timedelta(days=1), time_part)
+
+    try:
+        parts = value.split()
+        if len(parts) == 2:
+            date_part = parts[0]
+            time_part = parts[1]
+            if date_part.endswith("."):
+                day, month = date_part.rstrip(".").split(".")
+                return (datetime(today.year, int(month), int(day)).date(), time_part)
+    except: pass
+
+    try: return (datetime.strptime(value, "%d.%m.%Y").date(), "")
+    except: pass
+
+    try:
+        if value.endswith("."):
+            day, month = value.rstrip(".").split(".")
+            return (datetime(today.year, int(month), int(day)).date(), "")
+    except: pass
+
+    return value, ""
+
 def fetch_football_data():
     print("Pobieram linki i statystyki z ligi_footballdata.xlsx...")
     
@@ -61,43 +97,6 @@ def fetch_football_data():
     fd_master['Date'] = pd.to_datetime(fd_master['Date'], format='mixed', dayfirst=True).dt.date
     
     return fd_master
-    
-    if pd.isna(value):
-        return None, ""
-    value = str(value).strip()
-
-    if value.lower().startswith("today"):
-        time_part = value.replace("Today", "").strip()
-        return today.date(), time_part
-
-    if value.lower().startswith("tomorrow"):
-        time_part = value.replace("Tomorrow", "").strip()
-        return (today.date() + timedelta(days=1), time_part)
-
-    if value.lower().startswith("yesterday"):
-        time_part = value.replace("Yesterday", "").strip()
-        return (today.date() - timedelta(days=1), time_part)
-
-    try:
-        parts = value.split()
-        if len(parts) == 2:
-            date_part = parts[0]
-            time_part = parts[1]
-            if date_part.endswith("."):
-                day, month = date_part.rstrip(".").split(".")
-                return (datetime(today.year, int(month), int(day)).date(), time_part)
-    except: pass
-
-    try: return (datetime.strptime(value, "%d.%m.%Y").date(), "")
-    except: pass
-
-    try:
-        if value.endswith("."):
-            day, month = value.rstrip(".").split(".")
-            return (datetime(today.year, int(month), int(day)).date(), "")
-    except: pass
-
-    return value, ""
 
 scrape_report = []
 
@@ -238,184 +237,4 @@ for value in df["Date"]:
 df["Date"] = dates
 df.insert(3, "Time", times)
 
-fixtures_df = df[df["Type"] == "Fixture"].copy().sort_values(by=["Date", "Time"], ascending=True)
-results_df = df[df["Type"] == "Result"].copy().sort_values(by=["Date"], ascending=False)
-
-# ==========================================================
-# 2. POBIERANIE Z SOCCERSTATS
-# ==========================================================
-dane_soccerstats_baza = []
-print("Rozpoczynam pobieranie danych z SoccerStats...")
-
-try:
-    if os.path.exists("ligi_soccerstats.xlsx"):
-        urls_ss = pd.read_excel("ligi_soccerstats.xlsx")["URL"].dropna().tolist()
-        skaner_ss = cloudscraper.create_scraper()
-        
-        for i_ss, url_ss in enumerate(urls_ss, start=1):
-            url_ss = str(url_ss).strip()
-            nazwa_ligi = url_ss.split("league=")[1].split("&")[0] if "league=" in url_ss else f"Liga_{i_ss}"
-            print(f"[{i_ss}/{len(urls_ss)}] Pobieram SoccerStats dla: {nazwa_ligi}")
-            
-            try:
-                html_ss = skaner_ss.get(url_ss, headers={"User-Agent": headers["User-Agent"]}, timeout=30).text
-                soup_ss = BeautifulSoup(html_ss, "html.parser")
-                
-                tabela_meczow = None
-                for t in soup_ss.find_all("table"):
-                    if "HT" in t.get_text() and "BTS" in t.get_text() and len(t.find_all("tr")) > 15:  
-                        tabela_meczow = t
-                        break
-                
-                if tabela_meczow:
-                    wiersze_ss = tabela_meczow.find_all("tr")
-                    ostatnia_data = ""
-                    ss_count = 0
-                    
-                    for wiersz in wiersze_ss:
-                        komorki = wiersz.find_all(["td", "th"])
-                        if len(komorki) >= 6:
-                            teksty = [k.get_text(" ", strip=True) for k in komorki]
-                            wynik_index = -1
-                            
-                            for idx, val in enumerate(teksty):
-                                if ("-" in val or ":" in val) and any(c.isdigit() for c in val) and 1 <= idx <= 5: 
-                                    wynik_index = idx
-                                    break
-                                        
-                            if wynik_index != -1:
-                                wynik = teksty[wynik_index]
-                                gospodarz = teksty[wynik_index - 1]
-                                data = teksty[wynik_index - 2] if wynik_index >= 2 else teksty[0]
-                                gosc = teksty[wynik_index + 1] if wynik_index + 1 < len(teksty) else ""
-                                
-                                if "HOME" in gospodarz.upper() or "GOSPODARZ" in gospodarz.upper(): continue
-                                    
-                                if data and len(data) > 2: ostatnia_data = data
-                                else: data = ostatnia_data
-                                    
-                                if gospodarz and gosc and gosc != gospodarz:
-                                    ht, o25, tg, bts = "-", "-", "-", "-"
-                                    statystyki = [s for s in teksty[wynik_index + 2:] if s.strip()] 
-                                    
-                                    if len(statystyki) >= 4:
-                                        ht, o25, tg, bts = statystyki[0], statystyki[1], statystyki[2], statystyki[3]
-                                    elif len(statystyki) > 0:
-                                        ht = statystyki[0]
-                                        if len(statystyki) > 1: o25 = statystyki[1]
-                                        if len(statystyki) > 2: tg = statystyki[2]
-                                        
-                                    wynik_czysty = wynik.replace("*", "").strip()
-                                    if "-" in wynik_czysty: wynik_czysty = wynik_czysty.replace("-", ":").replace(" ", "")
-                                        
-                                    ht_czysty = ht.replace("*", "").strip()
-                                    
-                                    dane_soccerstats_baza.append([gospodarz, wynik_czysty, gosc, ht_czysty, o25.replace("*", "").strip(), tg.replace("*", "").strip(), bts.replace("*", "").strip()])
-                                    ss_count += 1
-                                    
-                    if ss_count == 0: scrape_report.append(["SoccerStats", url_ss, "BŁĄD: Znaleziono tabelę, brak pasujących wierszy"])
-                    else: scrape_report.append(["SoccerStats", url_ss, f"OK (Pobrano: {ss_count} wierszy)"])
-                else:
-                    scrape_report.append(["SoccerStats", url_ss, "BŁĄD: Nie znaleziono tabeli wyników na stronie"])
-            except Exception as e:
-                scrape_report.append(["SoccerStats", url_ss, f"BŁĄD: {str(e)}"])
-                    
-    if dane_soccerstats_baza:
-        ss_df = pd.DataFrame(dane_soccerstats_baza, columns=["Home", "Score", "Away", "HT", "2.5+", "TG", "BTS"]).drop_duplicates()
-    else:
-        ss_df = pd.DataFrame()
-except Exception as e:
-    print("Wystąpił błąd SoccerStats:", e)
-    ss_df = pd.DataFrame()
-
-# ==========================================================
-# 3. BEZPIECZNE SCALANIE DANYCH
-# ==========================================================
-print("Przetwarzam i scalam dodatkowe statystyki meczowe...")
-
-# Uruchomienie funkcji pobierającej z Excela
-fd_df = fetch_football_data()
-
-if not fd_df.empty:
-    # Ujednolicenie nazw na podstawie Twojego slownik_druzyn.json
-    fd_df['HomeTeam'] = fd_df['HomeTeam'].replace(fd_dict)
-    fd_df['AwayTeam'] = fd_df['AwayTeam'].replace(fd_dict)
-    
-    # Ujednolicenie daty w głównej tabeli
-    results_df['Date'] = pd.to_datetime(results_df['Date'], format='mixed', errors='coerce').dt.date
-    
-    # ZŁĄCZENIE (MERGE)
-    # UWAGA: Upewnij się, że "Home_Team" i "Away_Team" to dokładne nazwy 
-    # kolumn w Twojej głównej tabeli z BetExplorer! Jeśli są to np. "Home" i "Away", zmień to.
-    results_df = pd.merge(
-        results_df, 
-        fd_df, 
-        how='left', 
-        left_on=['Date', 'Home_Team', 'Away_Team'], 
-        right_on=['Date', 'HomeTeam', 'AwayTeam']
-    )
-    
-    # Usuwamy niepotrzebne duplikaty kolumn drużyn z prawego pliku i wypełniamy puste luki
-    results_df = results_df.drop(columns=['HomeTeam', 'AwayTeam'], errors='ignore')
-    results_df = results_df.fillna("")
-
-print("Wysyłam Historię ze statystykami i kursami Avg do Google Sheets...")
-results_sheet.clear()
-results_sheet.update([results_df.columns.tolist()] + results_df.astype(str).values.tolist())
-
-# ==========================================
-# 4. GOOGLE SHEETS AUTORYZACJA I WYSYŁKA
-# ==========================================
-scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-
-if os.path.exists("credentials.json"): creds = Credentials.from_service_account_file("credentials.json", scopes=scope)
-else: creds = Credentials.from_service_account_info(json.loads(os.environ["GOOGLE_CREDENTIALS"]), scopes=scope)
-
-client = gspread.authorize(creds)
-spreadsheet = client.open("BetExplorer")
-
-try: fixtures_sheet = spreadsheet.worksheet("Fixtures")
-except: fixtures_sheet = spreadsheet.add_worksheet(title="Fixtures", rows=5000, cols=35)
-
-try: results_sheet = spreadsheet.worksheet("Results")
-except: results_sheet = spreadsheet.add_worksheet(title="Results", rows=5000, cols=35)
-
-try: summary_sheet = spreadsheet.worksheet("Summary")
-except: summary_sheet = spreadsheet.add_worksheet(title="Summary", rows=100, cols=10)
-
-fixtures_df = fixtures_df.fillna("-")
-results_df = results_df.fillna("-")
-
-for col in ["Odd1", "OddX", "Odd2"]:
-    fixtures_df[col] = fixtures_df[col].apply(lambda x: str(x).replace(".", ",") if str(x) != "-" else "-")
-    results_df[col] = results_df[col].apply(lambda x: str(x).replace(".", ",") if str(x) != "-" else "-")
-
-print("Wysyłam Fixtures...")
-fixtures_sheet.clear()
-if not fixtures_df.empty: fixtures_sheet.update([fixtures_df.columns.tolist()] + fixtures_df.astype(str).values.tolist())
-
-print("Wysyłam Results...")
-results_sheet.clear()
-if not results_df.empty: results_sheet.update([results_df.columns.tolist()] + results_df.astype(str).values.tolist())
-
-print("Wysyłam Summary...")
-summary_data = [
-    ["==== PODSUMOWANIE OGÓLNE ====", "", ""],
-    ["Ostatnia aktualizacja", datetime.now().strftime("%Y-%m-%d %H:%M:%S"), ""],
-    ["Fixtures", len(fixtures_df), ""],
-    ["Results", len(results_df), ""],
-    ["Leagues", df["League"].nunique() if not df.empty else 0, ""],
-    ["", "", ""],
-    ["==== RAPORT POBIERANIA Z LINKÓW ====", "", ""],
-    ["System", "URL", "Status / Wynik"]
-]
-summary_data.extend(scrape_report)
-
-summary_sheet.clear()
-summary_sheet.update(summary_data)
-
-print("\n" + "=" * 60)
-print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Fixtures:", len(fixtures_df))
-print("Results:", len(results_df))
-print("=" * 60)
+fixtures_df = df[df["Type"] == "Fixture"].copy().sort_values(by=["Date", "
