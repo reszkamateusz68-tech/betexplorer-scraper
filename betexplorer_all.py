@@ -59,7 +59,6 @@ def split_datetime(value):
 
     return value, ""
 
-# ZMIANA 1: Funkcja teraz przyjmuje raport jako argument, by móc do niego dopisywać statusy
 def fetch_football_data(raport):
     print("Pobieram linki i statystyki z ligi_footballdata.xlsx...")
     
@@ -75,7 +74,6 @@ def fetch_football_data(raport):
         url_clean = url.strip()
         try:
             df_fd = pd.read_csv(url_clean)
-            # Zabezpieczenie przed pustymi wierszami
             df_fd = df_fd.dropna(subset=['HomeTeam']) 
             dfs.append(df_fd)
             raport.append(["Football-Data", url_clean, f"OK (Pobrano: {len(df_fd)} wierszy)"])
@@ -98,8 +96,9 @@ def fetch_football_data(raport):
 
 scrape_report = []
 
+# Przywrócone Twoje oryginalne, pełne nagłówki
 headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Cache-Control": "no-cache"
@@ -109,7 +108,6 @@ headers = {
 # 1. POBIERANIE Z BETEXPLORER
 # ==========================================================
 all_data = []
-scraper_be = cloudscraper.create_scraper() # Używamy mocniejszego scrapera dla BE
 
 try: urls_be = pd.read_excel("ligi.xlsx")["URL"].dropna().tolist()
 except: urls_be = []
@@ -123,7 +121,8 @@ for i, url in enumerate(urls_be, start=1):
         continue
         
     try:
-        response = scraper_be.get(url_clean, headers=headers, timeout=30)
+        # PRZYWRÓCONE STARE REQUESTS (Zdejmujemy cloudscrapera z BE, by odblokować setki meczów)
+        response = requests.get(url_clean, headers=headers, timeout=30)
         if response.status_code != 200:
             scrape_report.append(["BetExplorer", url_clean, f"BŁĄD: Kod {response.status_code}"])
             continue
@@ -328,7 +327,7 @@ except Exception as e:
     ss_df = pd.DataFrame()
 
 # ==========================================================
-# 3. BEZPIECZNE SCALANIE DANYCH 
+# 3. BEZPIECZNE SCALANIE DANYCH
 # ==========================================================
 print("Przetwarzam i scalam statystyki (SoccerStats + Football-Data)...")
 
@@ -362,27 +361,28 @@ if not fd_df.empty:
     
     fd_df = fd_df.drop_duplicates(subset=['Date', 'HomeTeam', 'AwayTeam'], keep='last')
     
+    # FIX: Najpierw zmieniamy nazwy kolumn drużyn na 'Home' i 'Away', żeby idealnie pasowały!
+    # Dzięki temu Pandas połączy tabele prawidłowo i NIE stworzy dziwnej kolumny "Date_y".
+    fd_df = fd_df.rename(columns={'HomeTeam': 'Home', 'AwayTeam': 'Away'})
+    
     results_df = pd.merge(
         results_df, 
         fd_df, 
         how='left', 
-        left_on=['Date', 'Home', 'Away'], 
-        right_on=['Date', 'HomeTeam', 'AwayTeam']
+        on=['Date', 'Home', 'Away']
     )
-    results_df = results_df.drop(columns=['HomeTeam', 'AwayTeam'], errors='ignore')
 else:
     fd_cols = ['HTHG', 'HTAG', 'HS', 'AS', 'HST', 'AST', 'HC', 'AC', 'HY', 'AY', 'AvgH', 'AvgD', 'AvgA']
     for col in fd_cols: results_df[col] = "-"
 
-# ZMIANA 2: Konwersja kolumn statystycznych na liczby całkowite
+# Konwersja statystyk meczowych na czyste liczby całkowite
 int_cols = ['HTHG', 'HTAG', 'HS', 'AS', 'HST', 'AST', 'HC', 'AC', 'HY', 'AY']
 for col in int_cols:
     if col in results_df.columns:
-        # Zamieniamy na numeric, a potem formatujemy na int jako string (jeśli nie puste, w przeciwnym razie dajemy myślnik "-")
         results_df[col] = pd.to_numeric(results_df[col], errors='coerce')
         results_df[col] = results_df[col].apply(lambda x: str(int(x)) if pd.notnull(x) else "-")
 
-# Czyszczenie pozostałych wyników: zamieniamy wszelkie dziwne puste komórki na "-"
+# Czyszczenie wyników (wypełnianie przerw pauzami)
 results_df = results_df.fillna("-").replace(["nan", "NaN", "NaT", ""], "-")
 fixtures_df = fixtures_df.fillna("-").replace(["nan", "NaN", "NaT", ""], "-")
 
@@ -411,19 +411,19 @@ try:
     results_sheet.resize(rows=5000, cols=55)
 except: pass
 
-# Zmiana kropek na przecinki dla polskich arkuszy (z pominięciem myślników i pustych miejsc)
+# Zmiana kropek na przecinki dla polskich arkuszy (z pominięciem myślników)
 for col in ["Odd1", "OddX", "Odd2", "AvgH", "AvgD", "AvgA"]:
     if col in fixtures_df.columns:
-        fixtures_df[col] = fixtures_df[col].astype(str).apply(lambda x: x.replace(".", ",") if x not in ["-", ""] else "-")
+        fixtures_df[col] = fixtures_df[col].astype(str).apply(lambda x: x.replace(".", ",") if x not in ["-", "", "nan", "NaN"] else "-")
     if col in results_df.columns:
-        results_df[col] = results_df[col].astype(str).apply(lambda x: x.replace(".", ",") if x not in ["-", ""] else "-")
+        results_df[col] = results_df[col].astype(str).apply(lambda x: x.replace(".", ",") if x not in ["-", "", "nan", "NaN"] else "-")
 
 print("Wysyłam Fixtures...")
 fixtures_sheet.clear()
 if not fixtures_df.empty: fixtures_sheet.update([fixtures_df.columns.tolist()] + fixtures_df.astype(str).values.tolist())
 
 print("Wysyłam Results...")
-results_sheet.clear()
+results_sheet.clear() # <- Ta funkcja usunie starą kolumnę Date_y z arkusza i nadpisze poprawną tabelą
 if not results_df.empty: results_sheet.update([results_df.columns.tolist()] + results_df.astype(str).values.tolist())
 
 print("Wysyłam Summary...")
