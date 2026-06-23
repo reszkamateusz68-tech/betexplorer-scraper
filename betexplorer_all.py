@@ -14,6 +14,9 @@ from google.oauth2.service_account import Credentials
 
 today = datetime.now()
 
+# ==========================================================
+# GŁÓWNE FUNKCJE POMOCNICZE (Zadeklarowane na samej górze)
+# ==========================================================
 def split_datetime(value):
     if pd.isna(value):
         return None, ""
@@ -45,6 +48,12 @@ def split_datetime(value):
     except: pass
     return value, ""
 
+def get_base_league(l):
+    """Odpowiada za odcinanie lat oraz parametrów stage, łącząc sezony w ciąg osi czasu."""
+    clean_l = str(l).split('?')[0].strip('/')
+    clean_l = re.sub(r'-\d{4}(-\d{4})?$', '', clean_l)
+    return clean_l
+
 def fetch_football_data(raport):
     print("Pobieram statystyki z ligi_footballdata.xlsx...")
     try: urls = pd.read_excel("ligi_footballdata.xlsx")["URL"].dropna().tolist()
@@ -69,20 +78,67 @@ def fetch_football_data(raport):
     existing_cols = [col for col in cols_to_keep if col in fd_master.columns]
     return fd_master[existing_cols]
 
+def get_current_streaks(base_lg, team):
+    """Liczy chronologiczne passy drużyn ponad sezonami."""
+    if 'valid_matches' not in globals() or valid_matches.empty:
+        return 0, 0
+    t_matches = valid_matches[(valid_matches['Base_League'] == base_lg) & ((valid_matches['Home'] == team) | (valid_matches['Away'] == team))].copy()
+    unbeaten, winless = 0, 0
+    ub_broken, wl_broken = False, False
+    for _, m in t_matches.iterrows():
+        is_home = (m['Home'] == team)
+        scored = int(m['FTHG']) if is_home else int(m['FTAG'])
+        conceded = int(m['FTAG']) if is_home else int(m['FTHG'])
+        if not ub_broken:
+            if scored >= conceded: unbeaten += 1
+            else: ub_broken = True
+        if not wl_broken:
+            if scored <= conceded: winless += 1
+            else: wl_broken = True
+        if ub_broken and wl_broken: break
+    return unbeaten, winless
+
+def prepare_for_gsheets(df):
+    """Zabezpiecza przed błędami JSON i formatuje liczby pod polskie Sheets (przecinki)."""
+    output = [df.columns.tolist()]
+    for row in df.values.tolist():
+        new_row = []
+        for idx, val in enumerate(row):
+            col_name = df.columns[idx]
+            if pd.isna(val):
+                new_row.append("-")
+                continue
+            str_val = str(val).strip()
+            if str_val in ["<NA>", "nan", "NaN", "None", "", "inf", "-inf"]:
+                new_row.append("-")
+            else:
+                if any(k in col_name for k in ["Odd", "Avg", "Value", "PPG", "Prawdopodobieństwo", "Pewność", "Kurs"]):
+                    new_row.append(str_val.replace(".", ","))
+                else:
+                    if str_val.endswith(".0") and "%" not in str_val: new_row.append(str_val[:-2])
+                    else: new_row.append(str_val)
+        output.append(new_row)
+    return output
+
+# LISTA NA LOGI DO ZAKŁADKI SUMMARY
 scrape_report = []
+
+# Wczytanie słownika z mapowaniem nazw drużyn
+try:
+    with open("slownik_druzyn.json", "r", encoding="utf-8") as f:
+        slownik = json.load(f)
+        fd_dict = slownik.get("FootballData_To_BetExplorer", {})
+        ss_dict = slownik.get("SoccerStats_To_BetExplorer", {})
+except FileNotFoundError:
+    print("Brak pliku slownik_druzyn.json. Pobieram dane bez mapowania nazw.")
+    fd_dict = {}
+    ss_dict = {}
 
 # ==========================================
 # 1. POBIERANIE Z BETEXPLORER 
 # ==========================================
 try: urls = pd.read_excel("ligi.xlsx")["URL"].dropna().tolist()
 except: urls = []
-
-headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Cache-Control": "no-cache"
-}
 
 all_data = []
 
@@ -110,7 +166,6 @@ for i, url in enumerate(urls, start=1):
         html = response.text
         soup = BeautifulSoup(html, "html.parser")
         
-        # POPRAWKA 1: Czyszczenie parametrów ?stage=... bezpośrednio przy wyciąganiu nazwy ligi
         league_raw = url_clean.split("/football/")[1].replace("/fixtures/", "").replace("/results/", "")
         league = league_raw.split('?')[0].strip('/')
         
@@ -192,26 +247,28 @@ try:
                 ss_count = 0
                 if tabela_meczow:
                     for wiersz in tabela_meczow.find_all("tr"):
-                        teksty = [k.get_text(" ", strip=True) for k in wiersz.find_all(["td", "th"])]
-                        wynik_index = next((idx for idx, val in enumerate(teksty) if ("-" in val or ":" in val) and any(c.isdigit() for c in val) and 1 <= idx <= 5), -1)
-                        if wynik_index != -1:
-                            wynik = teksty[wynik_index]
-                            gospodarz = teksty[wynik_index - 1]
-                            gosc = teksty[wynik_index + 1] if wynik_index + 1 < len(teksty) else ""
-                            if "HOME" in gospodarz.upper(): continue
-                            if gospodarz and gosc and gosc != gospodarz:
-                                statystyki = [s for s in teksty[wynik_index + 2:] if s.strip()] 
-                                ht = statystyki[0] if len(statystyki) > 0 else "-"
-                                wynik_czysty = wynik.replace("*", "").strip().replace(" ", "").replace("-", ":")
-                                ht_czysty = ht.replace("*", "").strip().replace(" ", "").replace("-", ":").replace("(", "").replace(")", "")
-                                
-                                g_gosp_1h, g_gosc_1h = "-", "-"
-                                if ":" in ht_czysty:
-                                    try: p_1h = ht_czysty.split(":"); g_gosp_1h, g_gosc_1h = int(p_1h[0]), int(p_1h[1])
-                                    except: pass
-                                
-                                dane_soccerstats_baza.append([gospodarz, gosc, wynik_czysty, g_gosp_1h, g_gosc_1h])
-                                ss_count += 1
+                        komorki = wiersz.find_all(["td", "th"])
+                        if len(komorki) >= 6:
+                            teksty = [k.get_text(" ", strip=True) for k in komorki]
+                            wynik_index = next((idx for idx, val in enumerate(teksty) if ("-" in val or ":" in val) and any(c.isdigit() for c in val) and 1 <= idx <= 5), -1)
+                            if wynik_index != -1:
+                                wynik = teksty[wynik_index]
+                                gospodarz = teksty[wynik_index - 1]
+                                gosc = teksty[wynik_index + 1] if wynik_index + 1 < len(teksty) else ""
+                                if "HOME" in gospodarz.upper(): continue
+                                if gospodarz and gosc and gosc != gospodarz:
+                                    statystyki = [s for s in teksty[wynik_index + 2:] if s.strip()] 
+                                    ht = statystyki[0] if len(statystyki) > 0 else "-"
+                                    wynik_czysty = wynik.replace("*", "").strip().replace(" ", "").replace("-", ":")
+                                    ht_czysty = ht.replace("*", "").strip().replace(" ", "").replace("-", ":").replace("(", "").replace(")", "")
+                                    
+                                    g_gosp_1h, g_gosc_1h = "-", "-"
+                                    if ":" in ht_czysty:
+                                        try: p_1h = ht_czysty.split(":"); g_gosp_1h, g_gosc_1h = int(p_1h[0]), int(p_1h[1])
+                                        except: pass
+                                    
+                                    dane_soccerstats_baza.append([gospodarz, gosc, wynik_czysty, g_gosp_1h, g_gosc_1h])
+                                    ss_count += 1
                 scrape_report.append(["SoccerStats", url_ss_clean, f"OK (Pobrano: {ss_count} wierszy)" if ss_count > 0 else "BŁĄD: 0 wierszy"])
             except Exception as e: scrape_report.append(["SoccerStats", url_ss_clean, f"BŁĄD: {str(e)}"])
         
@@ -222,15 +279,6 @@ except Exception as e: ss_df = pd.DataFrame()
 # ==========================================
 # 3. MAPOWANIE I SCALANIE DANYCH 
 # ==========================================
-mapowanie_ss, mapowanie_fd = {}, {}
-if os.path.exists("slownik_druzyn.json"):
-    try:
-        with open("slownik_druzyn.json", "r", encoding="utf-8") as f:
-            slownik_data = json.load(f)
-            mapowanie_ss = slownik_data.get("SoccerStats_To_BetExplorer", {})
-            mapowanie_fd = slownik_data.get("FootballData_To_BetExplorer", {})
-    except: pass
-
 if not ss_df.empty and not results_df.empty:
     ss_df["Home"] = ss_df["Home"].apply(lambda x: mapowanie_ss.get(x, x))
     ss_df["Away"] = ss_df["Away"].apply(lambda x: mapowanie_ss.get(x, x))
@@ -298,16 +346,11 @@ fixtures_clean = fixtures_df[['Match_ID', 'League', 'Date', 'Time', 'Home', 'Awa
 # ==========================================
 print("Generowanie inteligentnych tabel ligowych...")
 
-# POPRAWKA 2: Bezpieczne czyszczenie lat i linków w funkcji get_base_league
-def get_base_league(l):
-    clean_l = str(l).split('?')[0].strip('/')
-    clean_l = re.sub(r'-\d{4}(-\d{4})?$', '', clean_l)
-    return clean_l
-
 results_clean['Date_Parsed'] = pd.to_datetime(results_clean['Date'], errors='coerce')
 results_clean = results_clean.sort_values(by='Date_Parsed', ascending=False)
 valid_matches = results_clean.dropna(subset=['FTHG', 'FTAG']).copy()
 
+# Przypisujemy Base_League (Gwarantuje dostępność zmiennej w całym skrypcie globalnym)
 valid_matches['Base_League'] = valid_matches['League'].apply(get_base_league)
 
 if not valid_matches.empty:
@@ -385,7 +428,6 @@ for idx, row in fixtures_clean.iterrows():
     if len(a_current) >= 30: a_window = a_current
     else: a_window = pd.concat([a_current, a_past.head(30 - len(a_current))])
 
-    # TARCZA OCHRONNA: Minimum 10 meczów ogółem w historii window
     if len(h_window) < 10 or len(a_window) < 10: continue
 
     h_1x_all_cnt = sum(h_all['FTHG'] >= h_all['FTAG'])
@@ -448,7 +490,7 @@ headers_1x = [
     "Data", "Godzina", "Liga", "Mecz", "Prawdopodobieństwo_1X", "Value", "Fair_Odd (Twój)", "Buk_Odd (Rynek)",
     "H_Probka_Meczow", "H_1X_Wszystkie", "H_1X_OknoKroczace", "H_Porażki_vs_TOP", "H_Porażki_vs_MID", "H_Porażki_vs_BOTTOM",
     "A_Probka_Meczow", "A_Wygrane_Wszystkie", "A_Wygrane_OknoKroczace", "A_Wygrane_vs_TOP", "A_Wygrane_vs_MID", "A_Wygrane_vs_BOTTOM",
-    "A_FTS_Wyjazd_%", "H_Passa_Bez_Porażki", "A_Passa_Bez_Wygranej", "H_Proxy_xG_Status", "Argumentacja Modelu"
+    "A_FTS_Wyjazd_％", "H_Passa_Bez_Porażki", "A_Passa_Bez_Wygranej", "H_Proxy_xG_Status", "Argumentacja Modelu"
 ]
 df_pred_1x = pd.DataFrame(predictions_1x, columns=headers_1x).sort_values(by="Prawdopodobieństwo_1X", ascending=False)
 
@@ -604,7 +646,7 @@ for idx, row in fixtures_clean.iterrows():
             if estimated_bb_odd < 1.05: estimated_bb_odd = 1.05
             
             uzasadnienie = f"Stabilny zestaw kroczący (bufor 30 gier). "
-            if "Over 0.5 gola" in sugerowany_kupon: uzasadnienie += "Wykryto 100% serii bramkowych (brak 0:0 in historii) -> dodano bezpieczny Over 0.5. "
+            if "Over 0.5 gola" in sugerowany_kupon: uzasadnienie += "Wykryto 100% serii bramkowych (brak 0:0 w historii) -> dodano bezpieczny Over 0.5. "
 
             predictions_builder.append([
                 row['Date'], row['Time'], league, f"{home} - {away}", sugerowany_kupon, 
@@ -626,30 +668,6 @@ headers_builder = [
 ]
 df_pred_builder = pd.DataFrame(predictions_builder, columns=headers_builder).sort_values(by="Pewność Matematyczna", ascending=False)
 
-
-# ==========================================
-# 7. KULOODPORNY FORMATER DO GOOGLE SHEETS
-# ==========================================
-def prepare_for_gsheets(df):
-    output = [df.columns.tolist()]
-    for row in df.values.tolist():
-        new_row = []
-        for idx, val in enumerate(row):
-            col_name = df.columns[idx]
-            if pd.isna(val):
-                new_row.append("-")
-                continue
-            str_val = str(val).strip()
-            if str_val in ["<NA>", "nan", "NaN", "None", "", "inf", "-inf"]:
-                new_row.append("-")
-            else:
-                if any(k in col_name for k in ["Odd", "Avg", "Value", "PPG", "Prawdopodobieństwo", "Pewność", "Kurs"]):
-                    new_row.append(str_val.replace(".", ","))
-                else:
-                    if str_val.endswith(".0") and "%" not in str_val: new_row.append(str_val[:-2])
-                    else: new_row.append(str_val)
-        output.append(new_row)
-    return output
 
 # ==========================================
 # 8. WYSYŁKA GOOGLE SHEETS
