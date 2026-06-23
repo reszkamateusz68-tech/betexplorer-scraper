@@ -83,7 +83,6 @@ def get_current_streaks(base_lg, team):
     return unbeaten, winless
 
 def get_last_match_goals(base_lg, team):
-    """Zwraca liczbę bramek z ostatniego meczu danej drużyny (Home/Away niezależnie)."""
     if 'valid_matches' not in globals() or valid_matches.empty: return -1
     t_matches = valid_matches[(valid_matches['Base_League'] == base_lg) & ((valid_matches['Home'] == team) | (valid_matches['Away'] == team))]
     if t_matches.empty: return -1
@@ -152,7 +151,6 @@ for i, url in enumerate(urls, start=1):
         
         bypass_used = False
         if response.status_code in [429, 403]:
-            print(f"   -> Wykryto limit (Kod {response.status_code}). Chłodzenie serwera i restart przez Cloudscraper...")
             time.sleep(12)
             scraper_be = cloudscraper.create_scraper()
             response = scraper_be.get(url_clean, headers=headers, timeout=30)
@@ -180,7 +178,6 @@ for i, url in enumerate(urls, start=1):
                 spans = row.find_all("span")
                 if len(spans) < 2: continue
                 home, away = spans[0].get_text(strip=True), spans[1].get_text(strip=True)
-                
                 odds = []
                 for cell in row.select("td.table-main__odds"):
                     odd = cell.get("data-odd") or (cell.find(attrs={"data-odd": True}).get("data-odd") if cell.find(attrs={"data-odd": True}) else None) or (cell.find("button").get_text(strip=True) if cell.find("button") else None) or cell.get_text(" ", strip=True)
@@ -197,7 +194,6 @@ for i, url in enumerate(urls, start=1):
                 home, away = spans[0].get_text(" ", strip=True), spans[1].get_text(" ", strip=True)
                 score_cell = row.find("td", class_="h-text-center")
                 score = score_cell.get_text(strip=True) if score_cell else ""
-                
                 odds = []
                 for cell in row.select("td.table-main__odds"):
                     odd = cell.get("data-odd") or (cell.find(attrs={"data-odd": True}).get("data-odd") if cell.find(attrs={"data-odd": True}) else None) or (cell.find("button").get_text(strip=True) if cell.find("button") else None) or cell.get_text(" ", strip=True)
@@ -348,6 +344,9 @@ valid_matches['Base_League'] = valid_matches['League'].apply(get_base_league)
 if not valid_matches.empty:
     valid_matches['FTHG'] = pd.to_numeric(valid_matches['FTHG'], errors='coerce').fillna(0).astype(int)
     valid_matches['FTAG'] = pd.to_numeric(valid_matches['FTAG'], errors='coerce').fillna(0).astype(int)
+    valid_matches['Corners_H'] = pd.to_numeric(valid_matches['Corners_H'], errors='coerce')
+    valid_matches['Corners_A'] = pd.to_numeric(valid_matches['Corners_A'], errors='coerce')
+    valid_matches['Total_Corners'] = valid_matches['Corners_H'] + valid_matches['Corners_A']
     
     home_rec = valid_matches[['League', 'Home', 'FTHG', 'FTAG']].copy()
     home_rec.columns = ['League', 'Team', 'GF', 'GA']
@@ -391,7 +390,7 @@ for lg in league_tables['League'].unique():
 team_ppg = {(r['League'], r['Team']): float(str(r['PPG']).replace(',', '.')) for _, r in league_tables.iterrows()}
 
 # ==========================================
-# 6a. ENGINE 1X PRO (Baza: 30 meczów)
+# 6a. ENGINE 1X PRO
 # ==========================================
 print("Uruchamiam Engine 1X Pro (Baza 30 gier)...")
 predictions_1x = []
@@ -414,11 +413,8 @@ for idx, row in fixtures_clean.iterrows():
     a_current = a_all[a_all['League'] == league]
     a_past = a_all[a_all['League'] != league]
 
-    if len(h_current) >= 30: h_window = h_current
-    else: h_window = pd.concat([h_current, h_past.head(30 - len(h_current))])
-
-    if len(a_current) >= 30: a_window = a_current
-    else: a_window = pd.concat([a_current, a_past.head(30 - len(a_current))])
+    h_window = h_current if len(h_current) >= 30 else pd.concat([h_current, h_past.head(30 - len(h_current))])
+    a_window = a_current if len(a_current) >= 30 else pd.concat([a_current, a_past.head(30 - len(a_current))])
 
     if len(h_window) < 10 or len(a_window) < 10: continue
 
@@ -646,7 +642,7 @@ headers_builder = [
 df_pred_builder = pd.DataFrame(predictions_builder, columns=headers_builder).sort_values(by="Pewność Matematyczna", ascending=False) if predictions_builder else pd.DataFrame(columns=headers_builder)
 
 # ==========================================================
-# 6c. NOWY MODUŁ: MULTIGOL (Przedziały 1-5 i 1-6) z Regresją
+# 6c. ENGINE MULTIGOL (Przedziały 1-5 i 1-6) z Regresją
 # ==========================================================
 print("Uruchamiam Engine Multigol (Detektor 1-5 / 1-6 z Regresją)...")
 predictions_multigol = []
@@ -655,7 +651,6 @@ for idx, row in fixtures_clean.iterrows():
     league, home, away = row['League'], row['Home'], row['Away']
     fixture_base = get_base_league(league)
     
-    # 1. Budowa próbek ogółem i dom/wyjazd (Minimum 10 spotkań w bazie)
     h_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == home) | (valid_matches['Away'] == home))]
     a_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == away) | (valid_matches['Away'] == away))]
     if len(h_tot_all) < 10 or len(a_tot_all) < 10: continue
@@ -664,11 +659,9 @@ for idx, row in fixtures_clean.iterrows():
     a_wyj = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Away'] == away)]
     if len(h_dom) == 0 or len(a_wyj) == 0: continue
 
-    # Ostatnie mecze obu drużyn w lidze (szukanie anomalii)
     h_last_goals = get_last_match_goals(fixture_base, home)
     a_last_goals = get_last_match_goals(fixture_base, away)
     
-    # Warunek Regresji: Przynajmniej jedna drużyna zanotowała w ostatnim meczu anomalię (0 goli lub >5 bramek)
     has_anomaly = False
     anom_text = ""
     if h_last_goals == 0 or h_last_goals > 5:
@@ -678,10 +671,8 @@ for idx, row in fixtures_clean.iterrows():
         has_anomaly = True
         anom_text += f"Ostatni mecz Gościa to anomalia ({a_last_goals} goli). "
 
-    if not has_anomaly:
-        continue # Pomijamy mecze, w których brakuje silnego sygnału na przełamanie (regresję)
+    if not has_anomaly: continue
 
-    # 2. Obliczanie statystyk Multigol 1-5
     h_1_5_dom = sum((h_dom['Total_Goals'] >= 1) & (h_dom['Total_Goals'] <= 5)) / len(h_dom)
     h_1_5_all = sum((h_tot_all['Total_Goals'] >= 1) & (h_tot_all['Total_Goals'] <= 5)) / len(h_tot_all)
     a_1_5_wyj = sum((a_wyj['Total_Goals'] >= 1) & (a_wyj['Total_Goals'] <= 5)) / len(a_wyj)
@@ -689,7 +680,6 @@ for idx, row in fixtures_clean.iterrows():
     
     prob_1_5 = (h_1_5_dom + h_1_5_all + a_1_5_wyj + a_1_5_all) / 4
 
-    # 3. Obliczanie statystyk Multigol 1-6
     h_1_6_dom = sum((h_dom['Total_Goals'] >= 1) & (h_dom['Total_Goals'] <= 6)) / len(h_dom)
     h_1_6_all = sum((h_tot_all['Total_Goals'] >= 1) & (h_tot_all['Total_Goals'] <= 6)) / len(h_tot_all)
     a_1_6_wyj = sum((a_wyj['Total_Goals'] >= 1) & (a_wyj['Total_Goals'] <= 6)) / len(a_wyj)
@@ -697,14 +687,11 @@ for idx, row in fixtures_clean.iterrows():
     
     prob_1_6 = (h_1_6_dom + h_1_6_all + a_1_6_wyj + a_1_6_all) / 4
 
-    # Jeśli baza jest na tyle mocna (ponad 90%), że pokryje anomalię, wypluj typ
     if prob_1_5 >= 0.90 or prob_1_6 >= 0.90:
         if prob_1_5 >= 0.90:
-            typ = "Gole: 1-5"
-            pewnosc = prob_1_5
+            typ, pewnosc = "Gole: 1-5", prob_1_5
         else:
-            typ = "Gole: 1-6"
-            pewnosc = prob_1_6
+            typ, pewnosc = "Gole: 1-6", prob_1_6
             
         uzasadnienie = anom_text + "Silny sygnał powrotu do normy (regresja do średniej). "
         uzasadnienie += f"Skuteczność przedziału w sezonie: Gosp Dom ({round(h_1_6_dom*100)}%), Gosp Ogółem ({round(h_1_6_all*100)}%), Gość Wyjazd ({round(a_1_6_wyj*100)}%), Gość Ogółem ({round(a_1_6_all*100)}%)."
@@ -723,6 +710,114 @@ headers_multigol = [
 ]
 df_pred_multigol = pd.DataFrame(predictions_multigol, columns=headers_multigol).sort_values(by="Pewność Historyczna", ascending=False) if predictions_multigol else pd.DataFrame(columns=headers_multigol)
 
+# ==========================================================
+# 6d. ENGINE CORNERS PRO (Undery Rzutów Rożnych)
+# ==========================================================
+print("Uruchamiam Engine Corners Pro (Undery Rzutów Rożnych)...")
+predictions_corners = []
+
+valid_corners = valid_matches.dropna(subset=['Corners_H', 'Corners_A']).copy()
+
+for idx, row in fixtures_clean.iterrows():
+    league, home, away = row['League'], row['Home'], row['Away']
+    fixture_base = get_base_league(league)
+
+    h_tot_all_c = valid_corners[(valid_corners['Base_League'] == fixture_base) & ((valid_corners['Home'] == home) | (valid_corners['Away'] == home))].copy()
+    a_tot_all_c = valid_corners[(valid_corners['Base_League'] == fixture_base) & ((valid_corners['Home'] == away) | (valid_corners['Away'] == away))].copy()
+
+    # Ze względu na to, że rożne są rzadziej w mniejszych ligach, tarcza to 8 meczów w bazie ogólnej
+    if len(h_tot_all_c) < 8 or len(a_tot_all_c) < 8: continue
+
+    h_dom_c = valid_corners[(valid_corners['Base_League'] == fixture_base) & (valid_corners['Home'] == home)].copy()
+    a_wyj_c = valid_corners[(valid_corners['Base_League'] == fixture_base) & (valid_corners['Away'] == away)].copy()
+
+    # Potrzebujemy przynajmniej 3-4 meczów dom/wyjazd z rożnymi do estymacji
+    if len(h_dom_c) < 3 or len(a_wyj_c) < 3: continue
+
+    h_tot_all_c['Team_C_For'] = np.where(h_tot_all_c['Home'] == home, h_tot_all_c['Corners_H'], h_tot_all_c['Corners_A'])
+    a_tot_all_c['Team_C_For'] = np.where(a_tot_all_c['Home'] == away, a_tot_all_c['Corners_H'], a_tot_all_c['Corners_A'])
+
+    max_match_h = h_dom_c['Total_Corners'].max()
+    max_match_a = a_wyj_c['Total_Corners'].max()
+    max_match_all = max(h_tot_all_c['Total_Corners'].max(), a_tot_all_c['Total_Corners'].max())
+
+    max_team_h_dom = h_dom_c['Corners_H'].max()
+    max_team_h_all = h_tot_all_c['Team_C_For'].max()
+
+    max_team_a_wyj = a_wyj_c['Corners_A'].max()
+    max_team_a_all = a_tot_all_c['Team_C_For'].max()
+
+    c_blocks = []
+    c_probs = []
+    c_odds = []
+
+    # 1. UNDER ROŻNYCH W MECZU (Szukamy linii od 8.5 do 13.5)
+    highest_match = max(max_match_h, max_match_a, max_match_all)
+    for line in [8.5, 9.5, 10.5, 11.5, 12.5, 13.5, 14.5]:
+        if line > highest_match - 2: # Lekka tolerancja skrajnej wariancji
+            p_hd = sum(h_dom_c['Total_Corners'] < line) / len(h_dom_c)
+            p_aw = sum(a_wyj_c['Total_Corners'] < line) / len(a_wyj_c)
+            p_ha = sum(h_tot_all_c['Total_Corners'] < line) / len(h_tot_all_c)
+            p_aa = sum(a_tot_all_c['Total_Corners'] < line) / len(a_tot_all_c)
+            if p_hd >= 0.90 and p_aw >= 0.90 and p_ha >= 0.90 and p_aa >= 0.90:
+                c_blocks.append(f"Mecz: Under {line} Rożnych")
+                avg_p = (p_hd + p_aw + p_ha + p_aa) / 4
+                c_probs.append(avg_p)
+                c_odds.append(round(1 / (avg_p * 0.90), 2))
+                break
+
+    # 2. UNDER ROŻNYCH GOSPODARZA
+    highest_h = max(max_team_h_dom, max_team_h_all)
+    for line in [4.5, 5.5, 6.5, 7.5, 8.5]:
+        if line > highest_h - 1:
+            p_hd = sum(h_dom_c['Corners_H'] < line) / len(h_dom_c)
+            p_ha = sum(h_tot_all_c['Team_C_For'] < line) / len(h_tot_all_c)
+            if p_hd >= 0.92 and p_ha >= 0.92:
+                c_blocks.append(f"{home}: Under {line} Rożnych")
+                avg_p = (p_hd + p_ha) / 2
+                c_probs.append(avg_p)
+                c_odds.append(round(1 / (avg_p * 0.90), 2))
+                break
+
+    # 3. UNDER ROŻNYCH GOŚCIA
+    highest_a = max(max_team_a_wyj, max_team_a_all)
+    for line in [3.5, 4.5, 5.5, 6.5, 7.5]:
+        if line > highest_a - 1:
+            p_aw = sum(a_wyj_c['Corners_A'] < line) / len(a_wyj_c)
+            p_aa = sum(a_tot_all_c['Team_C_For'] < line) / len(a_tot_all_c)
+            if p_aw >= 0.92 and p_aa >= 0.92:
+                c_blocks.append(f"{away}: Under {line} Rożnych")
+                avg_p = (p_aw + p_aa) / 2
+                c_probs.append(avg_p)
+                c_odds.append(round(1 / (avg_p * 0.90), 2))
+                break
+
+    # Akceptacja jeśli znajdzie chociaż jeden mocny blok na rożne
+    if len(c_blocks) >= 1:
+        # Obliczenie zniżki korelacji przy łączeniu (rożne są bardzo skorelowane)
+        est_odd = round((1.0 + sum([(o - 1.0) * 0.60 for o in c_odds])) * 0.95, 2) if len(c_blocks) > 1 else c_odds[0]
+        if est_odd < 1.05: est_odd = 1.05
+        final_safety = round(np.mean(c_probs) * 100, 1)
+
+        uzasadnienie = f"Próbka Rożnych: Gosp Dom ({len(h_dom_c)}), Gosp Ogółem ({len(h_tot_all_c)}), Gość Wyjazd ({len(a_wyj_c)}), Gość Ogółem ({len(a_tot_all_c)}). "
+        uzasadnienie += f"Max Meczowe w sezonie: {int(highest_match)}. Max Gosp: {int(highest_h)}. Max Gość: {int(highest_a)}."
+
+        predictions_corners.append([
+            row['Date'], row['Time'], league, f"{home} - {away}",
+            " + ".join(c_blocks), str(est_odd).replace('.', ','), f"{final_safety}%",
+            len(h_tot_all_c), len(a_tot_all_c),
+            int(max_match_all), int(highest_h), int(highest_a),
+            uzasadnienie
+        ])
+
+headers_corners = [
+    "Data", "Godzina", "Liga", "Mecz", "Sugerowany Typ Rożne", "Szacowany_Kurs", "Pewność Historyczna",
+    "H_Probka_Z_Roznymi", "A_Probka_Z_Roznymi",
+    "Max_Roznych_W_Meczu", "Max_Roznych_Gosp", "Max_Roznych_Gosc",
+    "Analiza Statystyk Rożnych"
+]
+df_pred_corners = pd.DataFrame(predictions_corners, columns=headers_corners).sort_values(by="Pewność Historyczna", ascending=False) if predictions_corners else pd.DataFrame(columns=headers_corners)
+
 
 # ==========================================
 # 7. WYSYŁKA GOOGLE SHEETS
@@ -732,7 +827,7 @@ creds = Credentials.from_service_account_file("credentials.json", scopes=scope) 
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
-for sheet_name in ["Summary", "Fixtures", "Results", "League_Tables", "Predictions_1X", "Predictions_Builder", "Predictions_Multigol"]:
+for sheet_name in ["Summary", "Fixtures", "Results", "League_Tables", "Predictions_1X", "Predictions_Builder", "Predictions_Multigol", "Predictions_Corners"]:
     try: spreadsheet.worksheet(sheet_name)
     except: spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=30)
 
@@ -742,6 +837,7 @@ try:
     spreadsheet.worksheet("Predictions_1X").resize(rows=3000, cols=40)
     spreadsheet.worksheet("Predictions_Builder").resize(rows=3000, cols=35)
     spreadsheet.worksheet("Predictions_Multigol").resize(rows=1500, cols=20)
+    spreadsheet.worksheet("Predictions_Corners").resize(rows=1500, cols=20)
 except: pass
 
 print("Wysyłam Czysty Terminarz do Google Sheets...")
@@ -768,6 +864,10 @@ print("Wysyłam Analizy Multigol (Predictions Multigol)...")
 spreadsheet.worksheet("Predictions_Multigol").clear()
 if not df_pred_multigol.empty: spreadsheet.worksheet("Predictions_Multigol").update(prepare_for_gsheets(df_pred_multigol))
 
+print("Wysyłam Analizy Rożnych (Predictions Corners)...")
+spreadsheet.worksheet("Predictions_Corners").clear()
+if not df_pred_corners.empty: spreadsheet.worksheet("Predictions_Corners").update(prepare_for_gsheets(df_pred_corners))
+
 print("Wysyłam Logi Pobierania (Summary) do Google Sheets...")
 summary_data = [
     ["==== PODSUMOWANIE OGÓLNE ====", "", ""],
@@ -778,6 +878,7 @@ summary_data = [
     ["Wyselekcjonowane Typy 1X Pro", len(df_pred_1x), ""],
     ["Wyselekcjonowane Bloki BetBuilder", len(df_pred_builder), ""],
     ["Typy Multigol (Regresja do średniej)", len(df_pred_multigol), ""],
+    ["Wyselekcjonowane Typy Rożne (Corners)", len(df_pred_corners), ""],
     ["", "", ""],
     ["==== RAPORT POBIERANIA Z LINKÓW ====", "", ""],
     ["System", "URL", "Status / Wynik"]
@@ -788,5 +889,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Wyselekcjonowano typów Multigol:", len(df_pred_multigol))
+print("Wyselekcjonowano typów Rożnych:", len(df_pred_corners))
 print("=" * 60)
