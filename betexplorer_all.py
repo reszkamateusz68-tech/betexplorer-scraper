@@ -276,6 +276,7 @@ def calc_value(odd, avg):
 for outcome in [('Odd1', 'AvgH', 'Val_1'), ('OddX', 'AvgD', 'Val_X'), ('Odd2', 'AvgA', 'Val_2')]:
     results_df[outcome[2]] = results_df.apply(lambda row: calc_value(row[outcome[0]], row[outcome[1]]), axis=1)
 
+# NAPRAWA: Usunięty błąd składniowy cudzysłowu i klamry z poprzedniej wiadomości
 golden_cols = {
     'Match_ID': 'Match_ID', 'Date': 'Date', 'Time': 'Time', 'League': 'League', 'Home': 'Home', 'Away': 'Away',
     'FTHG': 'FTHG', 'FTAG': 'FTAG', 'Total_Goals': 'Total_Goals', 'HTHG': 'HTHG', 'HTAG': 'HTAG',
@@ -283,7 +284,7 @@ golden_cols = {
     'HC': 'Corners_H', 'AC': 'Corners_A', 'HY': 'Cards_H', 'AY': 'Cards_A',
     'Odd1': 'Odd_1', 'OddX': 'Odd_X', 'Odd2': 'Odd_2',
     'AvgH': 'Avg_1', 'AvgD': 'Avg_X', 'AvgA': 'Avg_2',
-    'Val_1': 'Val_1', 'Val_X': 'Val_X', 'Val_2': 'Val_2}
+    'Val_1': 'Val_1', 'Val_X': 'Val_X', 'Val_2': 'Val_2'
 }
 
 results_clean = results_df[list(golden_cols.keys())].rename(columns=golden_cols)
@@ -348,8 +349,25 @@ for lg in league_tables['League'].unique():
 
 team_ppg = {(r['League'], r['Team']): float(str(r['PPG']).replace(',', '.')) for _, r in league_tables.iterrows()}
 
+def get_current_streaks(base_lg, team):
+    t_matches = valid_matches[(valid_matches['Base_League'] == base_lg) & ((valid_matches['Home'] == team) | (valid_matches['Away'] == team))].copy()
+    unbeaten, winless = 0, 0
+    ub_broken, wl_broken = False, False
+    for _, m in t_matches.iterrows():
+        is_home = (m['Home'] == team)
+        scored = int(m['FTHG']) if is_home else int(m['FTAG'])
+        conceded = int(m['FTAG']) if is_home else int(m['FTHG'])
+        if not ub_broken:
+            if scored >= conceded: unbeaten += 1
+            else: ub_broken = True
+        if not wl_broken:
+            if scored <= conceded: winless += 1
+            else: wl_broken = True
+        if ub_broken and wl_broken: break
+    return unbeaten, winless
+
 # ==========================================
-# 6a. ENGINE 1X PRO (Poprawiony NameError)
+# 6a. ENGINE 1X PRO (Zaimplementowane Okno Kroczące 30 Meczów)
 # ==========================================
 print("Uruchamiam Engine 1X Pro...")
 predictions_1x = []
@@ -436,7 +454,7 @@ for idx, row in fixtures_clean.iterrows():
             f"{a_fts_pct}%", h_unbeaten, a_winless, h_proxy, arg
         ])
 
-# FIX: Przeniesione nagłówki i DataFrame nad sekcję Builder, aby wyeliminować NameError
+# FIX: Przeniesione i zadeklarowane przed sekcją Builder
 headers_1x = [
     "Data", "Godzina", "Liga", "Mecz", "Prawdopodobieństwo_1X", "Value", "Fair_Odd (Twój)", "Buk_Odd (Rynek)",
     "H_Probka_Meczow", "H_1X_Wszystkie", "H_1X_OknoKroczace", "H_Porażki_vs_TOP", "H_Porażki_vs_MID", "H_Porażki_vs_BOTTOM",
@@ -447,7 +465,7 @@ df_pred_1x = pd.DataFrame(predictions_1x, columns=headers_1x).sort_values(by="Pr
 
 
 # ==========================================================
-# 6b. ENGINE BETBUILDER PRO V4 (Poprawiony NameError)
+# 6b. ENGINE BETBUILDER PRO V4 (Okno Kroczące 30 + Korekta Kursów)
 # ==========================================================
 print("Uruchamiam Engine BetBuilder Pro V4...")
 predictions_builder = []
@@ -610,7 +628,7 @@ for idx, row in fixtures_clean.iterrows():
                 uzasadnienie
             ])
 
-# FIX: Przeniesione nagłówki i DataFrame nad formater, aby wyeliminować potencjalne NameError
+# FIX: Przeniesione i zadeklarowane przed formaterem gsheets
 headers_builder = [
     "Data", "Godzina", "Liga", "Mecz", "Sugerowany Zestaw BetBuilder", "Szacowany_Kurs_BetBuilder", "Pewność Matematyczna",
     "H_Probka_Meczow", "A_Probka_Meczow",
