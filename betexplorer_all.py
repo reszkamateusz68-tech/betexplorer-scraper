@@ -18,26 +18,16 @@ today = datetime.now()
 # GŁÓWNE FUNKCJE POMOCNICZE
 # ==========================================================
 def split_datetime(value):
-    if pd.isna(value):
-        return None, ""
+    if pd.isna(value): return None, ""
     value = str(value).strip()
-    if value.lower().startswith("today"):
-        time_part = value.replace("Today", "").strip()
-        return today.date(), time_part
-    if value.lower().startswith("tomorrow"):
-        time_part = value.replace("Tomorrow", "").strip()
-        return (today.date() + timedelta(days=1), time_part)
-    if value.lower().startswith("yesterday"):
-        time_part = value.replace("Yesterday", "").strip()
-        return (today.date() - timedelta(days=1), time_part)
+    if value.lower().startswith("today"): return today.date(), value.replace("Today", "").strip()
+    if value.lower().startswith("tomorrow"): return (today.date() + timedelta(days=1), value.replace("Tomorrow", "").strip())
+    if value.lower().startswith("yesterday"): return (today.date() - timedelta(days=1), value.replace("Yesterday", "").strip())
     try:
         parts = value.split()
-        if len(parts) == 2:
-            date_part = parts[0]
-            time_part = parts[1]
-            if date_part.endswith("."):
-                day, month = date_part.rstrip(".").split(".")
-                return (datetime(today.year, int(month), int(day)).date(), time_part)
+        if len(parts) == 2 and parts[0].endswith("."):
+            day, month = parts[0].rstrip(".").split(".")
+            return (datetime(today.year, int(month), int(day)).date(), parts[1])
     except: pass
     try: return (datetime.strptime(value, "%d.%m.%Y").date(), "")
     except: pass
@@ -49,7 +39,6 @@ def split_datetime(value):
     return value, ""
 
 def get_base_league(l):
-    """Odpowiada za odcinanie lat oraz parametrów stage, łącząc sezony w ciąg osi czasu."""
     clean_l = str(l).split('?')[0].strip('/')
     clean_l = re.sub(r'-\d{4}(-\d{4})?$', '', clean_l)
     return clean_l
@@ -60,7 +49,6 @@ def fetch_football_data(raport):
     except Exception as e:
         raport.append(["Football-Data", "ligi_footballdata.xlsx", f"BŁĄD Excela: {e}"])
         return pd.DataFrame()
-
     dfs = []
     for url in urls:
         url_clean = str(url).strip()
@@ -69,9 +57,7 @@ def fetch_football_data(raport):
             df_fd = df_fd.dropna(subset=['HomeTeam'])
             dfs.append(df_fd)
             raport.append(["Football-Data", url_clean, f"OK (Pobrano: {len(df_fd)} wierszy)"])
-        except Exception as e:
-            raport.append(["Football-Data", url_clean, f"BŁĄD: {e}"])
-
+        except Exception as e: raport.append(["Football-Data", url_clean, f"BŁĄD: {e}"])
     if not dfs: return pd.DataFrame()
     fd_master = pd.concat(dfs, ignore_index=True)
     cols_to_keep = ['Date', 'HomeTeam', 'AwayTeam', 'HTHG', 'HTAG', 'HS', 'AS', 'HST', 'AST', 'HC', 'AC', 'HY', 'AY', 'AvgH', 'AvgD', 'AvgA']
@@ -79,9 +65,7 @@ def fetch_football_data(raport):
     return fd_master[existing_cols]
 
 def get_current_streaks(base_lg, team):
-    """Liczy chronologiczne passy drużyn ponad sezonami."""
-    if 'valid_matches' not in globals() or valid_matches.empty:
-        return 0, 0
+    if 'valid_matches' not in globals() or valid_matches.empty: return 0, 0
     t_matches = valid_matches[(valid_matches['Base_League'] == base_lg) & ((valid_matches['Home'] == team) | (valid_matches['Away'] == team))].copy()
     unbeaten, winless = 0, 0
     ub_broken, wl_broken = False, False
@@ -98,8 +82,15 @@ def get_current_streaks(base_lg, team):
         if ub_broken and wl_broken: break
     return unbeaten, winless
 
+def get_last_match_goals(base_lg, team):
+    """Zwraca liczbę bramek z ostatniego meczu danej drużyny (Home/Away niezależnie)."""
+    if 'valid_matches' not in globals() or valid_matches.empty: return -1
+    t_matches = valid_matches[(valid_matches['Base_League'] == base_lg) & ((valid_matches['Home'] == team) | (valid_matches['Away'] == team))]
+    if t_matches.empty: return -1
+    last_m = t_matches.iloc[0]
+    return int(last_m['Total_Goals'])
+
 def prepare_for_gsheets(df):
-    """Zabezpiecza przed błędami JSON i formatuje liczby pod polskie Sheets (przecinki)."""
     output = [df.columns.tolist()]
     for row in df.values.tolist():
         new_row = []
@@ -121,26 +112,20 @@ def prepare_for_gsheets(df):
     return output
 
 def calc_value(odd, avg):
-    """Oblicza procentowe Value (Przewagę nad rynkiem) dla zakładów 1X2."""
     try:
         o, a = float(str(odd).replace(',', '.')), float(str(avg).replace(',', '.'))
         if a > 0: return round(((o / a) - 1) * 100, 2)
     except: pass
     return np.nan
 
-# LISTA NA LOGI DO ZAKŁADKI SUMMARY
 scrape_report = []
-
-# Wczytanie słownika z mapowaniem nazw drużyn
 try:
     with open("slownik_druzyn.json", "r", encoding="utf-8") as f:
         slownik = json.load(f)
         mapowanie_fd = slownik.get("FootballData_To_BetExplorer", {})
         mapowanie_ss = slownik.get("SoccerStats_To_BetExplorer", {})
-except Exception as e:
-    print("Brak pliku slownik_druzyn.json lub błąd wczytywania. Pobieram dane bez mapowania nazw.")
-    mapowanie_fd = {}
-    mapowanie_ss = {}
+except Exception:
+    mapowanie_fd, mapowanie_ss = {}, {}
 
 # ==========================================
 # 1. POBIERANIE Z BETEXPLORER 
@@ -156,11 +141,9 @@ headers = {
 }
 
 all_data = []
-
 for i, url in enumerate(urls, start=1):
     url_clean = str(url).strip()
     print(f"[{i}/{len(urls)}] Pobieram BetExplorer: {url_clean}")
-    
     if "/fixtures/" not in url_clean and "/results/" not in url_clean: continue
 
     try:
@@ -169,10 +152,14 @@ for i, url in enumerate(urls, start=1):
         
         bypass_used = False
         if response.status_code in [429, 403]:
-            time.sleep(5)
+            print(f"   -> Wykryto limit (Kod {response.status_code}). Chłodzenie serwera i restart przez Cloudscraper...")
+            time.sleep(12)
             scraper_be = cloudscraper.create_scraper()
             response = scraper_be.get(url_clean, headers=headers, timeout=30)
             bypass_used = True
+            if response.status_code in [429, 403]:
+                time.sleep(15)
+                response = scraper_be.get(url_clean, headers=headers, timeout=30)
 
         if response.status_code != 200:
             scrape_report.append(["BetExplorer", url_clean, f"BŁĄD: Kod {response.status_code}"])
@@ -180,7 +167,6 @@ for i, url in enumerate(urls, start=1):
 
         html = response.text
         soup = BeautifulSoup(html, "html.parser")
-        
         league_raw = url_clean.split("/football/")[1].replace("/fixtures/", "").replace("/results/", "")
         league = league_raw.split('?')[0].strip('/')
         
@@ -199,7 +185,6 @@ for i, url in enumerate(urls, start=1):
                 for cell in row.select("td.table-main__odds"):
                     odd = cell.get("data-odd") or (cell.find(attrs={"data-odd": True}).get("data-odd") if cell.find(attrs={"data-odd": True}) else None) or (cell.find("button").get_text(strip=True) if cell.find("button") else None) or cell.get_text(" ", strip=True)
                     odds.append(odd if odd else "-")
-                        
                 odd1, oddx, odd2 = (odds[0] if len(odds)>0 else "-"), (odds[1] if len(odds)>1 else "-"), (odds[2] if len(odds)>2 else "-")
                 all_data.append(["Fixture", league, date_cell.get_text(strip=True), home, away, "", odd1, oddx, odd2])
                 mecz_count += 1
@@ -210,7 +195,6 @@ for i, url in enumerate(urls, start=1):
                 spans = row.find_all("span")
                 if len(spans) < 2: continue
                 home, away = spans[0].get_text(" ", strip=True), spans[1].get_text(" ", strip=True)
-                
                 score_cell = row.find("td", class_="h-text-center")
                 score = score_cell.get_text(strip=True) if score_cell else ""
                 
@@ -218,7 +202,6 @@ for i, url in enumerate(urls, start=1):
                 for cell in row.select("td.table-main__odds"):
                     odd = cell.get("data-odd") or (cell.find(attrs={"data-odd": True}).get("data-odd") if cell.find(attrs={"data-odd": True}) else None) or (cell.find("button").get_text(strip=True) if cell.find("button") else None) or cell.get_text(" ", strip=True)
                     odds.append(odd if odd else "-")
-
                 odd1, oddx, odd2 = (odds[0] if len(odds)>0 else "-"), (odds[1] if len(odds)>1 else "-"), (odds[2] if len(odds)>2 else "-")
                 date_cell = row.find("td", class_=lambda x: x and "h-text-right" in x)
                 date = date_cell.get_text(strip=True) if date_cell else ""
@@ -227,7 +210,6 @@ for i, url in enumerate(urls, start=1):
                 
         status_msg = f"OK (Pobrano: {mecz_count} meczów)" + (" [Zadziałał Bypass 429]" if bypass_used else "")
         scrape_report.append(["BetExplorer", url_clean, status_msg if mecz_count > 0 else "BŁĄD: Znaleziono 0 meczów"])
-
     except Exception as e: scrape_report.append(["BetExplorer", url_clean, f"BŁĄD KRYTYCZNY: {e}"])
 
 df = pd.DataFrame(all_data, columns=["Type", "League", "Date", "Home", "Away", "Score", "Odd1", "OddX", "Odd2"]).drop_duplicates()
@@ -235,8 +217,7 @@ df = pd.DataFrame(all_data, columns=["Type", "League", "Date", "Home", "Away", "
 if not df.empty:
     dates, times = zip(*[split_datetime(v) for v in df["Date"]])
     df["Date"], df["Time"] = dates, times
-else:
-    df["Time"] = pd.Series(dtype='object')
+else: df["Time"] = pd.Series(dtype='object')
 
 fixtures_df = df[df["Type"] == "Fixture"].copy()
 results_df = df[df["Type"] == "Result"].copy()
@@ -264,7 +245,6 @@ try:
             try:
                 soup_ss = BeautifulSoup(skaner_ss.get(url_ss_clean, headers=headers, timeout=30).text, "html.parser")
                 tabela_meczow = next((t for t in soup_ss.find_all("table") if "HT" in t.get_text() and "BTS" in t.get_text() and len(t.find_all("tr")) > 15), None)
-                
                 ss_count = 0
                 if tabela_meczow:
                     for wiersz in tabela_meczow.find_all("tr"):
@@ -282,20 +262,17 @@ try:
                                     ht = statystyki[0] if len(statystyki) > 0 else "-"
                                     wynik_czysty = wynik.replace("*", "").strip().replace(" ", "").replace("-", ":")
                                     ht_czysty = ht.replace("*", "").strip().replace(" ", "").replace("-", ":").replace("(", "").replace(")", "")
-                                    
                                     g_gosp_1h, g_gosc_1h = "-", "-"
                                     if ":" in ht_czysty:
                                         try: p_1h = ht_czysty.split(":"); g_gosp_1h, g_gosc_1h = int(p_1h[0]), int(p_1h[1])
                                         except: pass
-                                    
                                     dane_soccerstats_baza.append([gospodarz, gosc, wynik_czysty, g_gosp_1h, g_gosc_1h])
                                     ss_count += 1
                 scrape_report.append(["SoccerStats", url_ss_clean, f"OK (Pobrano: {ss_count} wierszy)" if ss_count > 0 else "BŁĄD: 0 wierszy"])
             except Exception as e: scrape_report.append(["SoccerStats", url_ss_clean, f"BŁĄD: {str(e)}"])
-        
         if dane_soccerstats_baza: ss_df = pd.DataFrame(dane_soccerstats_baza, columns=["Home", "Away", "Score", "Gole_Gosp_1H", "Gole_Gosc_1H"]).drop_duplicates(subset=["Home", "Away", "Score"])
         else: ss_df = pd.DataFrame()
-except Exception as e: ss_df = pd.DataFrame()
+except Exception: ss_df = pd.DataFrame()
 
 # ==========================================
 # 3. MAPOWANIE I SCALANIE DANYCH 
@@ -319,7 +296,6 @@ if not fd_df.empty and not results_df.empty:
 # ==========================================
 print("Czyszczenie bazy - Złota Struktura...")
 
-# POPRAWKA 1: Deklaracja golden_cols ZANIM zostanie użyta
 golden_cols = {
     'Match_ID': 'Match_ID', 'Date': 'Date', 'Time': 'Time', 'League': 'League', 'Home': 'Home', 'Away': 'Away',
     'FTHG': 'FTHG', 'FTAG': 'FTAG', 'Total_Goals': 'Total_Goals', 'HTHG': 'HTHG', 'HTAG': 'HTAG',
@@ -363,7 +339,6 @@ fixtures_clean = fixtures_df[['Match_ID', 'League', 'Date', 'Time', 'Home', 'Awa
 # 5. GENEROWANIE TABEL LIGOWYCH
 # ==========================================
 print("Generowanie inteligentnych tabel ligowych...")
-
 results_clean['Date_Parsed'] = pd.to_datetime(results_clean['Date'], errors='coerce')
 results_clean = results_clean.sort_values(by='Date_Parsed', ascending=False)
 valid_matches = results_clean.dropna(subset=['FTHG', 'FTAG']).copy()
@@ -416,9 +391,9 @@ for lg in league_tables['League'].unique():
 team_ppg = {(r['League'], r['Team']): float(str(r['PPG']).replace(',', '.')) for _, r in league_tables.iterrows()}
 
 # ==========================================
-# 6a. ENGINE 1X PRO
+# 6a. ENGINE 1X PRO (Baza: 30 meczów)
 # ==========================================
-print("Uruchamiam Engine 1X Pro...")
+print("Uruchamiam Engine 1X Pro (Baza 30 gier)...")
 predictions_1x = []
 
 for idx, row in fixtures_clean.iterrows():
@@ -492,7 +467,7 @@ for idx, row in fixtures_clean.iterrows():
     value_perc = round(((buk_odd_1x / fair_odd) - 1) * 100, 2)
 
     if final_prob >= 0.70:
-        arg = f"Gospodarz stabilny dom ({h_1x_window_cnt}/{len(h_window)} w oknie do 30 gier). "
+        arg = f"Gospodarz stabilny dom ({h_1x_window_cnt}/{len(h_window)} w oknie 30 gier). "
         predictions_1x.append([
             row['Date'], row['Time'], league, f"{home} - {away}", f"{round(final_prob*100)}%", f"{value_perc}%",
             fair_odd, buk_odd_1x, 
@@ -511,11 +486,10 @@ headers_1x = [
 ]
 df_pred_1x = pd.DataFrame(predictions_1x, columns=headers_1x).sort_values(by="Prawdopodobieństwo_1X", ascending=False) if predictions_1x else pd.DataFrame(columns=headers_1x)
 
-
 # ==========================================================
-# 6b. ENGINE BETBUILDER PRO V4
+# 6b. ENGINE BETBUILDER PRO
 # ==========================================================
-print("Uruchamiam Engine BetBuilder Pro V4...")
+print("Uruchamiam Engine BetBuilder Pro...")
 predictions_builder = []
 
 for idx, row in fixtures_clean.iterrows():
@@ -524,30 +498,25 @@ for idx, row in fixtures_clean.iterrows():
     
     h_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == home) | (valid_matches['Away'] == home))]
     a_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == away) | (valid_matches['Away'] == away))]
-    
     if len(h_tot_all) < 10 or len(a_tot_all) < 10: continue
 
     h_tot_curr = h_tot_all[h_tot_all['League'] == league]
     h_tot_past = h_tot_all[h_tot_all['League'] != league]
-    if len(h_tot_curr) >= 30: h_total_all = h_tot_curr
-    else: h_total_all = pd.concat([h_tot_curr, h_tot_past.head(30 - len(h_tot_curr))])
+    h_total_all = h_tot_curr if len(h_tot_curr) >= 30 else pd.concat([h_tot_curr, h_tot_past.head(30 - len(h_tot_curr))])
 
     a_tot_curr = a_tot_all[a_tot_all['League'] == league]
     a_tot_past = a_tot_all[a_tot_all['League'] != league]
-    if len(a_tot_curr) >= 30: a_total_all = a_tot_curr
-    else: a_total_all = pd.concat([a_tot_curr, a_tot_past.head(30 - len(a_tot_curr))])
+    a_total_all = a_tot_curr if len(a_tot_curr) >= 30 else pd.concat([a_tot_curr, a_tot_past.head(30 - len(a_tot_curr))])
 
     h_dom_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Home'] == home)]
     h_dom_curr = h_dom_all[h_dom_all['League'] == league]
     h_dom_past = h_dom_all[h_dom_all['League'] != league]
-    if len(h_dom_curr) >= 30: h_dom = h_dom_curr
-    else: h_dom = pd.concat([h_dom_curr, h_dom_past.head(30 - len(h_dom_curr))])
+    h_dom = h_dom_curr if len(h_dom_curr) >= 30 else pd.concat([h_dom_curr, h_dom_past.head(30 - len(h_dom_curr))])
 
     a_wyj_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Away'] == away)]
     a_wyj_curr = a_wyj_all[a_wyj_all['League'] == league]
     a_wyj_past = a_wyj_all[a_wyj_all['League'] != league]
-    if len(a_wyj_curr) >= 30: a_wyj = a_wyj_curr
-    else: a_wyj = pd.concat([a_wyj_curr, a_wyj_past.head(30 - len(a_wyj_curr))])
+    a_wyj = a_wyj_curr if len(a_wyj_curr) >= 30 else pd.concat([a_wyj_curr, a_wyj_past.head(30 - len(a_wyj_curr))])
 
     if len(h_dom) == 0 or len(a_wyj) == 0: continue
 
@@ -590,7 +559,6 @@ for idx, row in fixtures_clean.iterrows():
         a_u = sum(a_wyj['Total_Goals'] < line) / len(a_wyj)
         h_all_u = sum(h_total_all['Total_Goals'] < line) / len(h_total_all)
         a_all_u = sum(a_total_all['Total_Goals'] < line) / len(a_total_all)
-        
         if h_u >= 0.95 and a_u >= 0.95 and h_all_u >= 0.94 and a_all_u >= 0.94:
             builder_blocks.append(f"Mecz: Under {line} gola")
             avg_prob = (h_u + a_u + h_all_u + a_all_u) / 4
@@ -652,10 +620,8 @@ for idx, row in fixtures_clean.iterrows():
         final_builder_safety = round(np.prod(block_probabilities) * 100, 1)
         if final_builder_safety >= 95.0:
             sugerowany_kupon = " + ".join(builder_blocks)
-            
             estimated_bb_odd = round((1.0 + sum([(o - 1.0) * 0.52 for o in block_estimated_odds])) * 0.95, 2)
             if estimated_bb_odd < 1.05: estimated_bb_odd = 1.05
-            
             uzasadnienie = f"Stabilny zestaw kroczący. "
             if "Over 0.5 gola" in sugerowany_kupon: uzasadnienie += "Wykryto 100% serii bramkowych (brak 0:0 w historii) -> dodano bezpieczny Over 0.5. "
 
@@ -679,15 +645,94 @@ headers_builder = [
 ]
 df_pred_builder = pd.DataFrame(predictions_builder, columns=headers_builder).sort_values(by="Pewność Matematyczna", ascending=False) if predictions_builder else pd.DataFrame(columns=headers_builder)
 
+# ==========================================================
+# 6c. NOWY MODUŁ: MULTIGOL (Przedziały 1-5 i 1-6) z Regresją
+# ==========================================================
+print("Uruchamiam Engine Multigol (Detektor 1-5 / 1-6 z Regresją)...")
+predictions_multigol = []
+
+for idx, row in fixtures_clean.iterrows():
+    league, home, away = row['League'], row['Home'], row['Away']
+    fixture_base = get_base_league(league)
+    
+    # 1. Budowa próbek ogółem i dom/wyjazd (Minimum 10 spotkań w bazie)
+    h_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == home) | (valid_matches['Away'] == home))]
+    a_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == away) | (valid_matches['Away'] == away))]
+    if len(h_tot_all) < 10 or len(a_tot_all) < 10: continue
+
+    h_dom = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Home'] == home)]
+    a_wyj = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Away'] == away)]
+    if len(h_dom) == 0 or len(a_wyj) == 0: continue
+
+    # Ostatnie mecze obu drużyn w lidze (szukanie anomalii)
+    h_last_goals = get_last_match_goals(fixture_base, home)
+    a_last_goals = get_last_match_goals(fixture_base, away)
+    
+    # Warunek Regresji: Przynajmniej jedna drużyna zanotowała w ostatnim meczu anomalię (0 goli lub >5 bramek)
+    has_anomaly = False
+    anom_text = ""
+    if h_last_goals == 0 or h_last_goals > 5:
+        has_anomaly = True
+        anom_text += f"Ostatni mecz Gosp to anomalia ({h_last_goals} goli). "
+    if a_last_goals == 0 or a_last_goals > 5:
+        has_anomaly = True
+        anom_text += f"Ostatni mecz Gościa to anomalia ({a_last_goals} goli). "
+
+    if not has_anomaly:
+        continue # Pomijamy mecze, w których brakuje silnego sygnału na przełamanie (regresję)
+
+    # 2. Obliczanie statystyk Multigol 1-5
+    h_1_5_dom = sum((h_dom['Total_Goals'] >= 1) & (h_dom['Total_Goals'] <= 5)) / len(h_dom)
+    h_1_5_all = sum((h_tot_all['Total_Goals'] >= 1) & (h_tot_all['Total_Goals'] <= 5)) / len(h_tot_all)
+    a_1_5_wyj = sum((a_wyj['Total_Goals'] >= 1) & (a_wyj['Total_Goals'] <= 5)) / len(a_wyj)
+    a_1_5_all = sum((a_tot_all['Total_Goals'] >= 1) & (a_tot_all['Total_Goals'] <= 5)) / len(a_tot_all)
+    
+    prob_1_5 = (h_1_5_dom + h_1_5_all + a_1_5_wyj + a_1_5_all) / 4
+
+    # 3. Obliczanie statystyk Multigol 1-6
+    h_1_6_dom = sum((h_dom['Total_Goals'] >= 1) & (h_dom['Total_Goals'] <= 6)) / len(h_dom)
+    h_1_6_all = sum((h_tot_all['Total_Goals'] >= 1) & (h_tot_all['Total_Goals'] <= 6)) / len(h_tot_all)
+    a_1_6_wyj = sum((a_wyj['Total_Goals'] >= 1) & (a_wyj['Total_Goals'] <= 6)) / len(a_wyj)
+    a_1_6_all = sum((a_tot_all['Total_Goals'] >= 1) & (a_tot_all['Total_Goals'] <= 6)) / len(a_tot_all)
+    
+    prob_1_6 = (h_1_6_dom + h_1_6_all + a_1_6_wyj + a_1_6_all) / 4
+
+    # Jeśli baza jest na tyle mocna (ponad 90%), że pokryje anomalię, wypluj typ
+    if prob_1_5 >= 0.90 or prob_1_6 >= 0.90:
+        if prob_1_5 >= 0.90:
+            typ = "Gole: 1-5"
+            pewnosc = prob_1_5
+        else:
+            typ = "Gole: 1-6"
+            pewnosc = prob_1_6
+            
+        uzasadnienie = anom_text + "Silny sygnał powrotu do normy (regresja do średniej). "
+        uzasadnienie += f"Skuteczność przedziału w sezonie: Gosp Dom ({round(h_1_6_dom*100)}%), Gosp Ogółem ({round(h_1_6_all*100)}%), Gość Wyjazd ({round(a_1_6_wyj*100)}%), Gość Ogółem ({round(a_1_6_all*100)}%)."
+
+        predictions_multigol.append([
+            row['Date'], row['Time'], league, f"{home} - {away}",
+            typ, f"{round(pewnosc*100, 1)}%",
+            f"Dom: {len(h_dom)} (Suma: {len(h_tot_all)})", 
+            f"Wyjazd: {len(a_wyj)} (Suma: {len(a_tot_all)})",
+            h_last_goals, a_last_goals, uzasadnienie
+        ])
+
+headers_multigol = [
+    "Data", "Godzina", "Liga", "Mecz", "Typ Multigol", "Pewność Historyczna",
+    "H_Probka_Meczow", "A_Probka_Meczow", "Gole_Ostatniego_Meczu_H", "Gole_Ostatniego_Meczu_A", "Analiza Anomalii"
+]
+df_pred_multigol = pd.DataFrame(predictions_multigol, columns=headers_multigol).sort_values(by="Pewność Historyczna", ascending=False) if predictions_multigol else pd.DataFrame(columns=headers_multigol)
+
+
 # ==========================================
-# 8. WYSYŁKA GOOGLE SHEETS
+# 7. WYSYŁKA GOOGLE SHEETS
 # ==========================================
 scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 creds = Credentials.from_service_account_file("credentials.json", scopes=scope) if os.path.exists("credentials.json") else Credentials.from_service_account_info(json.loads(os.environ["GOOGLE_CREDENTIALS"]), scopes=scope)
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
-for sheet_name in ["Summary", "Fixtures", "Results", "League_Tables", "Predictions_1X", "Predictions_Builder"]:
+for sheet_name in ["Summary", "Fixtures", "Results", "League_Tables", "Predictions_1X", "Predictions_Builder", "Predictions_Multigol"]:
     try: spreadsheet.worksheet(sheet_name)
     except: spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=30)
 
@@ -696,6 +741,7 @@ try:
     spreadsheet.worksheet("Results").resize(rows=10000, cols=65) 
     spreadsheet.worksheet("Predictions_1X").resize(rows=3000, cols=40)
     spreadsheet.worksheet("Predictions_Builder").resize(rows=3000, cols=35)
+    spreadsheet.worksheet("Predictions_Multigol").resize(rows=1500, cols=20)
 except: pass
 
 print("Wysyłam Czysty Terminarz do Google Sheets...")
@@ -718,6 +764,10 @@ print("Wysyłam Analizy BetBuilder (Predictions Builder)...")
 spreadsheet.worksheet("Predictions_Builder").clear()
 if not df_pred_builder.empty: spreadsheet.worksheet("Predictions_Builder").update(prepare_for_gsheets(df_pred_builder))
 
+print("Wysyłam Analizy Multigol (Predictions Multigol)...")
+spreadsheet.worksheet("Predictions_Multigol").clear()
+if not df_pred_multigol.empty: spreadsheet.worksheet("Predictions_Multigol").update(prepare_for_gsheets(df_pred_multigol))
+
 print("Wysyłam Logi Pobierania (Summary) do Google Sheets...")
 summary_data = [
     ["==== PODSUMOWANIE OGÓLNE ====", "", ""],
@@ -727,6 +777,7 @@ summary_data = [
     ["Tabela Drużyn", len(league_tables), ""],
     ["Wyselekcjonowane Typy 1X Pro", len(df_pred_1x), ""],
     ["Wyselekcjonowane Bloki BetBuilder", len(df_pred_builder), ""],
+    ["Typy Multigol (Regresja do średniej)", len(df_pred_multigol), ""],
     ["", "", ""],
     ["==== RAPORT POBIERANIA Z LINKÓW ====", "", ""],
     ["System", "URL", "Status / Wynik"]
@@ -737,5 +788,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Wyselekcjonowano typów BetBuilder:", len(df_pred_builder))
+print("Wyselekcjonowano typów Multigol:", len(df_pred_multigol))
 print("=" * 60)
