@@ -127,18 +127,26 @@ scrape_report = []
 try:
     with open("slownik_druzyn.json", "r", encoding="utf-8") as f:
         slownik = json.load(f)
-        fd_dict = slownik.get("FootballData_To_BetExplorer", {})
-        ss_dict = slownik.get("SoccerStats_To_BetExplorer", {})
-except FileNotFoundError:
-    print("Brak pliku slownik_druzyn.json. Pobieram dane bez mapowania nazw.")
-    fd_dict = {}
-    ss_dict = {}
+        mapowanie_fd = slownik.get("FootballData_To_BetExplorer", {})
+        mapowanie_ss = slownik.get("SoccerStats_To_BetExplorer", {})
+except Exception as e:
+    print("Brak pliku slownik_druzyn.json lub błąd wczytywania. Pobieram dane bez mapowania nazw.")
+    mapowanie_fd = {}
+    mapowanie_ss = {}
 
 # ==========================================
 # 1. POBIERANIE Z BETEXPLORER 
 # ==========================================
 try: urls = pd.read_excel("ligi.xlsx")["URL"].dropna().tolist()
 except: urls = []
+
+# NAPRAWA 1: Przywrócenie definicji nagłówków dla requests
+headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Cache-Control": "no-cache"
+}
 
 all_data = []
 
@@ -216,17 +224,24 @@ for i, url in enumerate(urls, start=1):
     except Exception as e: scrape_report.append(["BetExplorer", url_clean, f"BŁĄD KRYTYCZNY: {e}"])
 
 df = pd.DataFrame(all_data, columns=["Type", "League", "Date", "Home", "Away", "Score", "Odd1", "OddX", "Odd2"]).drop_duplicates()
-dates, times = zip(*[split_datetime(v) for v in df["Date"]])
-df["Date"], df["Time"] = dates, times
+
+# NAPRAWA 2: Pełne zabezpieczenie przed pustą bazą danych (Empty DataFrame Protection)
+if not df.empty:
+    dates, times = zip(*[split_datetime(v) for v in df["Date"]])
+    df["Date"], df["Time"] = dates, times
+else:
+    df["Time"] = pd.Series(dtype='object')
 
 fixtures_df = df[df["Type"] == "Fixture"].copy()
 results_df = df[df["Type"] == "Result"].copy()
 
-fixtures_df['HasOdds'] = fixtures_df['Odd1'].astype(str).apply(lambda x: 1 if x.strip() not in ["", "-", "nan"] else 0)
-fixtures_df = fixtures_df.sort_values(by=["Date", "Time", "Home", "Away", "HasOdds"], ascending=[True, True, True, True, False]).drop_duplicates(subset=["Date", "Home", "Away"]).drop(columns=["HasOdds"])
+if not fixtures_df.empty:
+    fixtures_df['HasOdds'] = fixtures_df['Odd1'].astype(str).apply(lambda x: 1 if x.strip() not in ["", "-", "nan"] else 0)
+    fixtures_df = fixtures_df.sort_values(by=["Date", "Time", "Home", "Away", "HasOdds"], ascending=[True, True, True, True, False]).drop_duplicates(subset=["Date", "Home", "Away"]).drop(columns=["HasOdds"])
 
-results_df['HasOdds'] = results_df['Odd1'].astype(str).apply(lambda x: 1 if x.strip() not in ["", "-", "nan"] else 0)
-results_df = results_df.sort_values(by=["Date", "Home", "Away", "HasOdds"], ascending=[False, True, True, False]).drop_duplicates(subset=["Date", "Home", "Away"]).drop(columns=["HasOdds"])
+if not results_df.empty:
+    results_df['HasOdds'] = results_df['Odd1'].astype(str).apply(lambda x: 1 if x.strip() not in ["", "-", "nan"] else 0)
+    results_df = results_df.sort_values(by=["Date", "Home", "Away", "HasOdds"], ascending=[False, True, True, False]).drop_duplicates(subset=["Date", "Home", "Away"]).drop(columns=["HasOdds"])
 
 # ==========================================
 # 2. POBIERANIE Z SOCCERSTATS 
@@ -298,48 +313,34 @@ if not fd_df.empty and not results_df.empty:
 # ==========================================
 print("Czyszczenie bazy - Złota Struktura...")
 
-results_df[['FTHG', 'FTAG']] = results_df['Score'].str.split(':', expand=True)
-results_df['FTHG'] = pd.to_numeric(results_df['FTHG'], errors='coerce')
-results_df['FTAG'] = pd.to_numeric(results_df['FTAG'], errors='coerce')
-results_df['Total_Goals'] = results_df['FTHG'] + results_df['FTAG']
+if not results_df.empty:
+    results_df[['FTHG', 'FTAG']] = results_df['Score'].str.split(':', expand=True)
+    results_df['FTHG'] = pd.to_numeric(results_df['FTHG'], errors='coerce')
+    results_df['FTAG'] = pd.to_numeric(results_df['FTAG'], errors='coerce')
+    results_df['Total_Goals'] = results_df['FTHG'] + results_df['FTAG']
 
-if 'HTHG' not in results_df.columns: results_df['HTHG'] = np.nan
-if 'HTAG' not in results_df.columns: results_df['HTAG'] = np.nan
-if 'Gole_Gosp_1H' in results_df.columns:
-    results_df['HTHG'] = results_df['HTHG'].combine_first(pd.to_numeric(results_df['Gole_Gosp_1H'], errors='coerce'))
-    results_df['HTAG'] = results_df['HTAG'].combine_first(pd.to_numeric(results_df['Gole_Gosc_1H'], errors='coerce'))
+    if 'HTHG' not in results_df.columns: results_df['HTHG'] = np.nan
+    if 'HTAG' not in results_df.columns: results_df['HTAG'] = np.nan
+    if 'Gole_Gosp_1H' in results_df.columns:
+        results_df['HTHG'] = results_df['HTHG'].combine_first(pd.to_numeric(results_df['Gole_Gosp_1H'], errors='coerce'))
+        results_df['HTAG'] = results_df['HTAG'].combine_first(pd.to_numeric(results_df['Gole_Gosc_1H'], errors='coerce'))
 
-fd_expected_cols = ['HS', 'AS', 'HST', 'AST', 'HC', 'AC', 'HY', 'AY', 'AvgH', 'AvgD', 'AvgA']
-for col in fd_expected_cols:
-    if col not in results_df.columns: results_df[col] = np.nan
+    fd_expected_cols = ['HS', 'AS', 'HST', 'AST', 'HC', 'AC', 'HY', 'AY', 'AvgH', 'AvgD', 'AvgA']
+    for col in fd_expected_cols:
+        if col not in results_df.columns: results_df[col] = np.nan
 
-results_df['Date_str'] = pd.to_datetime(results_df['Date'], errors='coerce').dt.strftime('%Y%m%d').fillna('99999999')
-results_df['Match_ID'] = results_df['Date_str'] + "_" + results_df['Home'].str[:3].str.upper() + "_" + results_df['Away'].str[:3].str.upper()
-fixtures_df['Date_str'] = pd.to_datetime(fixtures_df['Date'], errors='coerce').dt.strftime('%Y%m%d').fillna('99999999')
-fixtures_df['Match_ID'] = fixtures_df['Date_str'] + "_" + fixtures_df['Home'].str[:3].str.upper() + "_" + fixtures_df['Away'].str[:3].str.upper()
+    results_df['Date_str'] = pd.to_datetime(results_df['Date'], errors='coerce').dt.strftime('%Y%m%d').fillna('99999999')
+    results_df['Match_ID'] = results_df['Date_str'] + "_" + results_df['Home'].str[:3].str.upper() + "_" + results_df['Away'].str[:3].str.upper()
+    
+    for outcome in [('Odd1', 'AvgH', 'Val_1'), ('OddX', 'AvgD', 'Val_X'), ('Odd2', 'AvgA', 'Val_2')]:
+        results_df[outcome[2]] = results_df.apply(lambda row: calc_value(row[outcome[0]], row[outcome[1]]), axis=1)
 
-def calc_value(odd, avg):
-    try:
-        o, a = float(str(odd).replace(',', '.')), float(str(avg).replace(',', '.'))
-        if a > 0: return round(((o / a) - 1) * 100, 2)
-    except: pass
-    return np.nan
+if not fixtures_df.empty:
+    fixtures_df['Date_str'] = pd.to_datetime(fixtures_df['Date'], errors='coerce').dt.strftime('%Y%m%d').fillna('99999999')
+    fixtures_df['Match_ID'] = fixtures_df['Date_str'] + "_" + fixtures_df['Home'].str[:3].str.upper() + "_" + fixtures_df['Away'].str[:3].str.upper()
 
-for outcome in [('Odd1', 'AvgH', 'Val_1'), ('OddX', 'AvgD', 'Val_X'), ('Odd2', 'AvgA', 'Val_2')]:
-    results_df[outcome[2]] = results_df.apply(lambda row: calc_value(row[outcome[0]], row[outcome[1]]), axis=1)
-
-golden_cols = {
-    'Match_ID': 'Match_ID', 'Date': 'Date', 'Time': 'Time', 'League': 'League', 'Home': 'Home', 'Away': 'Away',
-    'FTHG': 'FTHG', 'FTAG': 'FTAG', 'Total_Goals': 'Total_Goals', 'HTHG': 'HTHG', 'HTAG': 'HTAG',
-    'HS': 'Shots_H', 'AS': 'Shots_A', 'HST': 'ShotsTarget_H', 'AST': 'ShotsTarget_A',
-    'HC': 'Corners_H', 'AC': 'Corners_A', 'HY': 'Cards_H', 'AY': 'Cards_A',
-    'Odd1': 'Odd_1', 'OddX': 'Odd_X', 'Odd2': 'Odd_2',
-    'AvgH': 'Avg_1', 'AvgD': 'Avg_X', 'AvgA': 'Avg_2',
-    'Val_1': 'Val_1', 'Val_X': 'Val_X', 'Val_2': 'Val_2'
-}
-
-results_clean = results_df[list(golden_cols.keys())].rename(columns=golden_cols)
-fixtures_clean = fixtures_df[['Match_ID', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd1', 'OddX', 'Odd2']].rename(columns={'Odd1': 'Odd_1', 'OddX': 'Odd_X', 'Odd2': 'Odd_2'})
+results_clean = results_df[list(golden_cols.keys())].rename(columns=golden_cols) if not results_df.empty else pd.DataFrame(columns=golden_cols.values())
+fixtures_clean = fixtures_df[['Match_ID', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd1', 'OddX', 'Odd2']].rename(columns={'Odd1': 'Odd_1', 'OddX': 'Odd_X', 'Odd2': 'Odd_2'}) if not fixtures_df.empty else pd.DataFrame(columns=['Match_ID', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd_1', 'Odd_X', 'Odd_2'])
 
 # ==========================================
 # 5. GENEROWANIE TABEL LIGOWYCH
@@ -350,7 +351,6 @@ results_clean['Date_Parsed'] = pd.to_datetime(results_clean['Date'], errors='coe
 results_clean = results_clean.sort_values(by='Date_Parsed', ascending=False)
 valid_matches = results_clean.dropna(subset=['FTHG', 'FTAG']).copy()
 
-# Przypisujemy Base_League (Gwarantuje dostępność zmiennej w całym skrypcie globalnym)
 valid_matches['Base_League'] = valid_matches['League'].apply(get_base_league)
 
 if not valid_matches.empty:
@@ -486,13 +486,7 @@ for idx, row in fixtures_clean.iterrows():
             f"{a_fts_pct}%", h_unbeaten, a_winless, h_proxy, arg
         ])
 
-headers_1x = [
-    "Data", "Godzina", "Liga", "Mecz", "Prawdopodobieństwo_1X", "Value", "Fair_Odd (Twój)", "Buk_Odd (Rynek)",
-    "H_Probka_Meczow", "H_1X_Wszystkie", "H_1X_OknoKroczace", "H_Porażki_vs_TOP", "H_Porażki_vs_MID", "H_Porażki_vs_BOTTOM",
-    "A_Probka_Meczow", "A_Wygrane_Wszystkie", "A_Wygrane_OknoKroczace", "A_Wygrane_vs_TOP", "A_Wygrane_vs_MID", "A_Wygrane_vs_BOTTOM",
-    "A_FTS_Wyjazd_％", "H_Passa_Bez_Porażki", "A_Passa_Bez_Wygranej", "H_Proxy_xG_Status", "Argumentacja Modelu"
-]
-df_pred_1x = pd.DataFrame(predictions_1x, columns=headers_1x).sort_values(by="Prawdopodobieństwo_1X", ascending=False)
+df_pred_1x = pd.DataFrame(predictions_1x, columns=headers_1x).sort_values(by="Prawdopodobieństwo_1X", ascending=False) if predictions_1x else pd.DataFrame(columns=headers_1x)
 
 
 # ==========================================================
@@ -659,14 +653,7 @@ for idx, row in fixtures_clean.iterrows():
                 uzasadnienie
             ])
 
-headers_builder = [
-    "Data", "Godzina", "Liga", "Mecz", "Sugerowany Zestaw BetBuilder", "Szacowany_Kurs_BetBuilder", "Pewność Matematyczna",
-    "H_Probka_Meczow", "A_Probka_Meczow",
-    "H_Max_Strzelone_Dom", "H_Max_Stracone_Dom", "H_Max_Strzelone_Ogolem", "H_Max_Stracone_Ogolem",
-    "A_Max_Strzelone_Wyjazd", "A_Max_Stracone_Wyjazd", "A_Max_Strzelone_Ogolem", "A_Max_Stracone_Ogolem",
-    "Analiza i Uzasadnienie Statystyczne"
-]
-df_pred_builder = pd.DataFrame(predictions_builder, columns=headers_builder).sort_values(by="Pewność Matematyczna", ascending=False)
+df_pred_builder = pd.DataFrame(predictions_builder, columns=headers_builder).sort_values(by="Pewność Matematyczna", ascending=False) if predictions_builder else pd.DataFrame(columns=headers_builder)
 
 
 # ==========================================
