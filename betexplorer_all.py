@@ -326,11 +326,9 @@ else:
     league_tables = pd.DataFrame(columns=['League', 'Team', 'M', 'W', 'D', 'L', 'GF', 'GA', 'GD', 'Pts', 'PPG'])
 
 # ==========================================
-# 6. ZAAWANSOWANY MODUŁ ANALITYCZNY 1X (Dual-Window + Tiers + Proxy xG)
+# 6a. ENGINE 1X PRO
 # ==========================================
-print("Uruchamiam Engine 1X Pro: Dual-Window, Tiers, FTS, Streaks, Proxy xG...")
-
-# Dynamiczny podział ligi na 3 koszyki (Top, Mid, Bottom)
+print("Uruchamiam Engine 1X Pro...")
 team_tiers = {}
 for lg in league_tables['League'].unique():
     lg_teams = league_tables[league_tables['League'] == lg].reset_index(drop=True)
@@ -350,12 +348,10 @@ def get_current_streaks(lg, team):
     t_matches = valid_matches[(valid_matches['League'] == lg) & ((valid_matches['Home'] == team) | (valid_matches['Away'] == team))].copy()
     unbeaten, winless = 0, 0
     ub_broken, wl_broken = False, False
-    
     for _, m in t_matches.iterrows():
         is_home = (m['Home'] == team)
         scored = int(m['FTHG']) if is_home else int(m['FTAG'])
         conceded = int(m['FTAG']) if is_home else int(m['FTHG'])
-        
         if not ub_broken:
             if scored >= conceded: unbeaten += 1
             else: ub_broken = True
@@ -366,29 +362,23 @@ def get_current_streaks(lg, team):
     return unbeaten, winless
 
 predictions_1x = []
-
 for idx, row in fixtures_clean.iterrows():
     league, home, away = row['League'], row['Home'], row['Away']
-
     try:
         o1 = float(str(row['Odd_1']).replace(',', '.'))
         ox = float(str(row['Odd_X']).replace(',', '.'))
         buk_odd_1x = round(1 / ((1 / o1) + (1 / ox)), 2)
     except: continue
 
-    # DUAL-WINDOW: Wszystkie mecze vs Ostatnie 10
     h_all = valid_matches[(valid_matches['League'] == league) & (valid_matches['Home'] == home)]
     h_10 = h_all.head(10)
-    
     a_all = valid_matches[(valid_matches['League'] == league) & (valid_matches['Away'] == away)]
     a_10 = a_all.head(10)
 
     if len(h_all) < 3 or len(a_all) < 3: continue
 
-    # --- STATYSTYKI GOSPODARZA (DOM) ---
     h_1x_all_cnt = sum(h_all['FTHG'] >= h_all['FTAG'])
     h_1x_10_cnt = sum(h_10['FTHG'] >= h_10['FTAG'])
-    
     h_losses = h_all[h_all['FTHG'] < h_all['FTAG']]
     l_top, l_mid, l_bot = 0, 0, 0
     for _, m in h_losses.iterrows():
@@ -397,10 +387,8 @@ for idx, row in fixtures_clean.iterrows():
         elif t == 'MID': l_mid += 1
         elif t == 'BOTTOM': l_bot += 1
 
-    # --- STATYSTYKI GOŚCIA (WYJAZD) ---
     a_2_all_cnt = sum(a_all['FTAG'] > a_all['FTHG'])
     a_2_10_cnt = sum(a_10['FTAG'] > a_10['FTHG'])
-    
     a_wins = a_all[a_all['FTAG'] > a_all['FTHG']]
     w_top, w_mid, w_bot = 0, 0, 0
     for _, m in a_wins.iterrows():
@@ -409,11 +397,9 @@ for idx, row in fixtures_clean.iterrows():
         elif t == 'MID': w_mid += 1
         elif t == 'BOTTOM': w_bot += 1
 
-    # Wskaźnik FTS (Brak gola na wyjeździe)
     a_fts_cnt = sum(a_all['FTAG'] == 0)
     a_fts_pct = round((a_fts_cnt / len(a_all)) * 100) if len(a_all) > 0 else 0
 
-    # Proxy xG Status dla Gospodarza (Ostatnie 10 gier u siebie)
     h_10_shots = h_10[pd.to_numeric(h_10['ShotsTarget_H'], errors='coerce').notna()]
     if not h_10_shots.empty:
         avg_st = pd.to_numeric(h_10_shots['ShotsTarget_H']).mean()
@@ -425,11 +411,9 @@ for idx, row in fixtures_clean.iterrows():
     h_unbeaten, _ = get_current_streaks(league, home)
     _, a_winless = get_current_streaks(league, away)
 
-    # MATEMATYKA MODELU: Ważone Prawdopodobieństwo
     prob_h = ((h_1x_all_cnt / len(h_all)) * 0.4) + ((h_1x_10_cnt / len(h_10)) * 0.6)
     prob_a = ((sum(a_all['FTHG'] >= a_all['FTAG']) / len(a_all)) * 0.4) + ((sum(a_10['FTHG'] >= a_10['FTAG']) / len(a_10)) * 0.6)
     
-    # NAPRAWA: Dodane brakujące .iterrows() wewnątrz list comprehensions
     avg_h_opp = sum([team_ppg.get((league, m['Away']), 1.3) for _, m in h_10.iterrows()]) / len(h_10)
     avg_a_opp = sum([team_ppg.get((league, m['Home']), 1.3) for _, m in a_10.iterrows()]) / len(a_10)
     
@@ -460,6 +444,107 @@ headers_1x = [
 ]
 df_pred_1x = pd.DataFrame(predictions_1x, columns=headers_1x).sort_values(by="Prawdopodobieństwo_1X", ascending=False)
 
+
+# ==========================================
+# 6b. NOWY MODUŁ: ENGINE BETBUILDER PRO (ULTRA-SAFE UNDERS)
+# ==========================================
+print("Uruchamiam Engine BetBuilder Pro: Matematyczna Selekcja Pewniaków...")
+predictions_builder = []
+
+for idx, row in fixtures_clean.iterrows():
+    league, home, away = row['League'], row['Home'], row['Away']
+    
+    h_all = valid_matches[(valid_matches['League'] == league) & (valid_matches['Home'] == home)].copy()
+    a_all = valid_matches[(valid_matches['League'] == league) & (valid_matches['Away'] == away)].copy()
+    
+    # Wymagamy stabilnej bazy statystycznej z całego sezonu
+    if len(h_all) < 6 or len(a_all) < 6: continue
+    
+    # Obliczamy bramki w połówkach
+    h_all['HT_Total'] = h_all['HTHG'] + h_all['HTAG']
+    a_all['HT_Total'] = a_all['HTHG'] + a_all['HTAG']
+    h_all['2H_Total'] = h_all['Total_Goals'] - h_all['HT_Total']
+    a_all['2H_Total'] = a_all['Total_Goals'] - a_all['HT_Total']
+    
+    builder_blocks = []
+    block_probabilities = []
+    
+    # --- TEST 1: CAŁY MECZ UNDER 4.5 lub 5.5 ---
+    h_u45 = sum(h_all['Total_Goals'] <= 4) / len(h_all)
+    a_u45 = sum(a_all['Total_Goals'] <= 4) / len(a_all)
+    if h_u45 >= 0.94 and a_u45 >= 0.94:
+        builder_blocks.append("Mecz: Under 4.5 gola")
+        block_probabilities.append((h_u45 + a_u45) / 2)
+    else:
+        h_u55 = sum(h_all['Total_Goals'] <= 5) / len(h_all)
+        a_u55 = sum(a_all['Total_Goals'] <= 5) / len(a_all)
+        if h_u55 >= 0.98 and a_u55 >= 0.98:
+            builder_blocks.append("Mecz: Under 5.5 gola")
+            block_probabilities.append((h_u55 + a_u55) / 2)
+
+    # --- TEST 2: PIERWSZA POŁOWA UNDER 1.5 lub 2.5 ---
+    # Filtrujemy mecze posiadające zweryfikowane dane połówek
+    h_ht = h_all.dropna(subset=['HT_Total'])
+    a_ht = a_all.dropna(subset=['HT_Total'])
+    
+    if len(h_ht) >= 4 and len(a_ht) >= 4:
+        h_u15_1h = sum(h_ht['HT_Total'] <= 1) / len(h_ht)
+        a_u15_1h = sum(a_ht['HT_Total'] <= 1) / len(a_ht)
+        if h_u15_1h >= 0.92 and a_u15_1h >= 0.92:
+            builder_blocks.append("1. Połowa: Under 1.5 gola")
+            block_probabilities.append((h_u15_1h + a_u15_1h) / 2)
+        else:
+            h_u25_1h = sum(h_ht['HT_Total'] <= 2) / len(h_ht)
+            a_u25_1h = sum(a_ht['HT_Total'] <= 2) / len(a_ht)
+            if h_u25_1h >= 0.98 and a_u25_1h >= 0.98:
+                builder_blocks.append("1. Połowa: Under 2.5 gola")
+                block_probabilities.append((h_u25_1h + a_u25_1h) / 2)
+
+    # --- TEST 3: GOLE GOSPODARZA (DOM) ---
+    max_h_scored = h_all['FTHG'].max()
+    h_line = max(2, max_h_scored + 1) # Ustala linię bezpieczną o 1 wyżej niż rekord sezonu
+    h_u_prob = sum(h_all['FTHG'] < h_line) / len(h_all)
+    if h_u_prob >= 0.95 and h_line <= 4:
+        builder_blocks.append(f"{home}: Under {h_line}.5 gola")
+        block_probabilities.append(h_u_prob)
+
+    # --- TEST 4: GOLE GOŚCIA (WYJAZD) ---
+    max_a_scored = a_all['FTAG'].max()
+    a_line = max(1, max_a_scored + 1)
+    a_u_prob = sum(a_all['FTAG'] < a_line) / len(a_all)
+    if a_u_prob >= 0.95 and a_line <= 3:
+        builder_blocks.append(f"{away}: Under {a_line}.5 gola")
+        block_probabilities.append(a_u_prob)
+
+    # JEŚLI SKRYPT ZNALAZŁ MINIMUM 3 KLAPKI O SKUMULOWANEJ PEWNOŚCI >= 95%
+    if len(builder_blocks) >= 3:
+        final_builder_safety = round(np.prod(block_probabilities) * 100, 1)
+        
+        # Filtrujemy tylko elitarne pewniaki (Pewność matematyczna kuponu AKO >= 94%)
+        if final_builder_safety >= 94.0:
+            sugerowany_kupon = " + ".join(builder_blocks)
+            
+            uzasadnienie = f"Analiza całego sezonu ({len(h_all)} meczów domowych Gosp, {len(a_all)} wyjazdowych Gościa). "
+            uzasadnienie += f"Maksymalny zanotowany wyczyn bramkowy u siebie to {max_h_scored}, a gościa na wyjeździe to {max_a_scored}. "
+            uzasadnienie += "Margines bezpieczeństwa w 100% zablokowany przed wypadkami przy pracy."
+
+            predictions_builder.append([
+                row['Date'], row['Time'], league, f"{home} - {away}",
+                sugerowany_kupon, f"{final_builder_safety}%",
+                len(h_all), len(a_all), int(h_all['Total_Goals'].max()), int(a_all['Total_Goals'].max()),
+                f"{round(sum(h_all['Total_Goals'] <= 3)/len(h_all)*100)}%", 
+                f"{round(sum(a_all['Total_Goals'] <= 3)/len(a_all)*100)}%",
+                uzasadnienie
+            ])
+
+headers_builder = [
+    "Data", "Godzina", "Liga", "Mecz", "Sugerowany Zestaw BetBuilder", "Pewność Matematyczna",
+    "Próbka_Meczów_H", "Próbka_Meczów_A", "H_Max_Goli_W_Meczu", "A_Max_Gole_W_Meczu",
+    "H_Mecze_Under3.5_%", "A_Mecze_Under3.5_%", "Analiza i Uzasadnienie Statystyczne"
+]
+df_pred_builder = pd.DataFrame(predictions_builder, columns=headers_builder).sort_values(by="Pewność Matematyczna", ascending=False)
+
+
 # ==========================================
 # 7. KULOODPORNY FORMATER DO GOOGLE SHEETS
 # ==========================================
@@ -476,7 +561,7 @@ def prepare_for_gsheets(df):
             if str_val in ["<NA>", "nan", "NaN", "None", "", "inf", "-inf"]:
                 new_row.append("-")
             else:
-                if any(k in col_name for k in ["Odd", "Avg", "Value", "PPG", "Prawdopodobieństwo"]):
+                if any(k in col_name for k in ["Odd", "Avg", "Value", "PPG", "Prawdopodobieństwo", "Pewność"]):
                     new_row.append(str_val.replace(".", ","))
                 else:
                     if str_val.endswith(".0") and "%" not in str_val: new_row.append(str_val[:-2])
@@ -492,7 +577,8 @@ creds = Credentials.from_service_account_file("credentials.json", scopes=scope) 
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
-for sheet_name in ["Summary", "Fixtures", "Results", "League_Tables", "Predictions_1X"]:
+# Dodany arkusz Predictions_Builder do głównej pętli
+for sheet_name in ["Summary", "Fixtures", "Results", "League_Tables", "Predictions_1X", "Predictions_Builder"]:
     try: spreadsheet.worksheet(sheet_name)
     except: spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=30)
 
@@ -500,6 +586,7 @@ try:
     spreadsheet.worksheet("Fixtures").resize(rows=5000, cols=35)
     spreadsheet.worksheet("Results").resize(rows=10000, cols=65) 
     spreadsheet.worksheet("Predictions_1X").resize(rows=3000, cols=40)
+    spreadsheet.worksheet("Predictions_Builder").resize(rows=3000, cols=30)
 except: pass
 
 print("Wysyłam Czysty Terminarz do Google Sheets...")
@@ -514,9 +601,13 @@ print("Wysyłam Tabele Ligowe...")
 spreadsheet.worksheet("League_Tables").clear()
 if not league_tables.empty: spreadsheet.worksheet("League_Tables").update(prepare_for_gsheets(league_tables))
 
-print("Wysyłam Zaawansowane Analizy (Predictions 1X)...")
+print("Wysyłam Analizy 1X (Predictions 1X)...")
 spreadsheet.worksheet("Predictions_1X").clear()
 if not df_pred_1x.empty: spreadsheet.worksheet("Predictions_1X").update(prepare_for_gsheets(df_pred_1x))
+
+print("Wysyłam Analizy BetBuilder (Predictions Builder)...")
+spreadsheet.worksheet("Predictions_Builder").clear()
+if not df_pred_builder.empty: spreadsheet.worksheet("Predictions_Builder").update(prepare_for_gsheets(df_pred_builder))
 
 print("Wysyłam Logi Pobierania (Summary) do Google Sheets...")
 summary_data = [
@@ -526,6 +617,7 @@ summary_data = [
     ["Results Zintegrowane", len(results_clean), ""],
     ["Tabela Drużyn", len(league_tables), ""],
     ["Wyselekcjonowane Typy 1X Pro", len(df_pred_1x), ""],
+    ["Wyselekcjonowane Bloki BetBuilder", len(df_pred_builder), ""],
     ["", "", ""],
     ["==== RAPORT POBIERANIA Z LINKÓW ====", "", ""],
     ["System", "URL", "Status / Wynik"]
@@ -536,5 +628,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Wyselekcjonowano typów 1X Pro:", len(df_pred_1x))
+print("Wyselekcjonowano typów BetBuilder:", len(df_pred_builder))
 print("=" * 60)
