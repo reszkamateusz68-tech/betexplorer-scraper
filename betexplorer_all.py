@@ -293,6 +293,10 @@ fixtures_clean = fixtures_df[['Match_ID', 'League', 'Date', 'Time', 'Home', 'Awa
 # 5. GENEROWANIE TABEL LIGOWYCH
 # ==========================================
 print("Generowanie inteligentnych tabel ligowych...")
+
+# FIX: Sortujemy chronologicznie malejąco PRZED wyliczeniem tabeli, by zachować spójność dat
+results_clean['Date_Parsed'] = pd.to_datetime(results_clean['Date'], errors='coerce')
+results_clean = results_clean.sort_values(by='Date_Parsed', ascending=False)
 valid_matches = results_clean.dropna(subset=['FTHG', 'FTAG']).copy()
 
 if not valid_matches.empty:
@@ -325,10 +329,7 @@ if not valid_matches.empty:
 else:
     league_tables = pd.DataFrame(columns=['League', 'Team', 'M', 'W', 'D', 'L', 'GF', 'GA', 'GD', 'Pts', 'PPG'])
 
-# ==========================================
-# 6a. ENGINE 1X PRO
-# ==========================================
-print("Uruchamiam Engine 1X Pro...")
+# Dynamiczny podział ligi na 3 koszyki (Top, Mid, Bottom)
 team_tiers = {}
 for lg in league_tables['League'].unique():
     lg_teams = league_tables[league_tables['League'] == lg].reset_index(drop=True)
@@ -361,7 +362,12 @@ def get_current_streaks(lg, team):
         if ub_broken and wl_broken: break
     return unbeaten, winless
 
+# ==========================================
+# 6a. ENGINE 1X PRO (Dual-Window + Tiers + Sample Validation)
+# ==========================================
+print("Uruchamiam Engine 1X Pro...")
 predictions_1x = []
+
 for idx, row in fixtures_clean.iterrows():
     league, home, away = row['League'], row['Home'], row['Away']
     try:
@@ -370,15 +376,18 @@ for idx, row in fixtures_clean.iterrows():
         buk_odd_1x = round(1 / ((1 / o1) + (1 / ox)), 2)
     except: continue
 
+    # Chronologiczne okno kroczące: head(15) automatycznie łączy sezony na osi czasu!
     h_all = valid_matches[(valid_matches['League'] == league) & (valid_matches['Home'] == home)]
-    h_10 = h_all.head(10)
+    h_15 = h_all.head(15)
+    
     a_all = valid_matches[(valid_matches['League'] == league) & (valid_matches['Away'] == away)]
-    a_10 = a_all.head(10)
+    a_15 = a_all.head(15)
 
-    if len(h_all) < 3 or len(a_all) < 3: continue
+    # RESTRYKCJA: Minimum 10 rozegranych meczów ogółem w historii (サンプル)
+    if len(h_all) < 10 or len(a_all) < 10: continue
 
     h_1x_all_cnt = sum(h_all['FTHG'] >= h_all['FTAG'])
-    h_1x_10_cnt = sum(h_10['FTHG'] >= h_10['FTAG'])
+    h_1x_15_cnt = sum(h_15['FTHG'] >= h_15['FTAG'])
     h_losses = h_all[h_all['FTHG'] < h_all['FTAG']]
     l_top, l_mid, l_bot = 0, 0, 0
     for _, m in h_losses.iterrows():
@@ -388,7 +397,7 @@ for idx, row in fixtures_clean.iterrows():
         elif t == 'BOTTOM': l_bot += 1
 
     a_2_all_cnt = sum(a_all['FTAG'] > a_all['FTHG'])
-    a_2_10_cnt = sum(a_10['FTAG'] > a_10['FTHG'])
+    a_2_15_cnt = sum(a_15['FTAG'] > a_15['FTHG'])
     a_wins = a_all[a_all['FTAG'] > a_all['FTHG']]
     w_top, w_mid, w_bot = 0, 0, 0
     for _, m in a_wins.iterrows():
@@ -400,10 +409,10 @@ for idx, row in fixtures_clean.iterrows():
     a_fts_cnt = sum(a_all['FTAG'] == 0)
     a_fts_pct = round((a_fts_cnt / len(a_all)) * 100) if len(a_all) > 0 else 0
 
-    h_10_shots = h_10[pd.to_numeric(h_10['ShotsTarget_H'], errors='coerce').notna()]
-    if not h_10_shots.empty:
-        avg_st = pd.to_numeric(h_10_shots['ShotsTarget_H']).mean()
-        avg_g = pd.to_numeric(h_10_shots['FTHG']).mean()
+    h_15_shots = h_15[pd.to_numeric(h_15['ShotsTarget_H'], errors='coerce').notna()]
+    if not h_15_shots.empty:
+        avg_st = pd.to_numeric(h_15_shots['ShotsTarget_H']).mean()
+        avg_g = pd.to_numeric(h_15_shots['FTHG']).mean()
         diff = (avg_st * 0.3) - avg_g
         h_proxy = "PECH (Ukryta Forma)" if diff > 0.4 else ("SZCZĘŚCIE" if diff < -0.4 else "STABILNY")
     else: h_proxy = "Brak Danych"
@@ -411,44 +420,40 @@ for idx, row in fixtures_clean.iterrows():
     h_unbeaten, _ = get_current_streaks(league, home)
     _, a_winless = get_current_streaks(league, away)
 
-    prob_h = ((h_1x_all_cnt / len(h_all)) * 0.4) + ((h_1x_10_cnt / len(h_10)) * 0.6)
-    prob_a = ((sum(a_all['FTHG'] >= a_all['FTAG']) / len(a_all)) * 0.4) + ((sum(a_10['FTHG'] >= a_10['FTAG']) / len(a_10)) * 0.6)
+    prob_h = ((h_1x_all_cnt / len(h_all)) * 0.4) + ((h_1x_15_cnt / len(h_15)) * 0.6)
+    prob_a = ((sum(a_all['FTHG'] >= a_all['FTAG']) / len(a_all)) * 0.4) + ((sum(a_15['FTHG'] >= a_15['FTAG']) / len(a_15)) * 0.6)
     
-    avg_h_opp = sum([team_ppg.get((league, m['Away']), 1.3) for _, m in h_10.iterrows()]) / len(h_10)
-    avg_a_opp = sum([team_ppg.get((league, m['Home']), 1.3) for _, m in a_10.iterrows()]) / len(a_10)
+    avg_h_opp = sum([team_ppg.get((league, m['Away']), 1.3) for _, m in h_15.iterrows()]) / len(h_15)
+    avg_a_opp = sum([team_ppg.get((league, m['Home']), 1.3) for _, m in a_15.iterrows()]) / len(a_15)
     
     final_prob = min(max(((prob_h + prob_a) / 2) + ((avg_h_opp - 1.3) * 0.08) + ((avg_a_opp - 1.3) * 0.08), 0.05), 0.95)
     fair_odd = round(1 / final_prob, 2)
     value_perc = round(((buk_odd_1x / fair_odd) - 1) * 100, 2)
 
     if final_prob >= 0.66 and value_perc > 0:
-        arg = f"Gospodarz stabilny dom ({h_1x_10_cnt}/10 1X). Gość wyjazdy niemoc zwycięstw ({len(a_10)-a_2_10_cnt}/10 strata pkt). "
-        if l_bot > 0: arg += "Ostrzeżenie: Gospodarz wpadł raz na dno tabeli. "
-        if w_top > 0: arg += "Uwaga: Gość potrafił ograć TOP wyjazd. "
-        if h_proxy == "PECH (Ukryta Forma)": arg += "Algorytm wykrył potężny PECH Gospodarza w strzałach - wysokie prawdopodobieństwo przełamania! "
-
+        arg = f"Gospodarz stabilny dom ({h_1x_15_cnt}/15 1X). Próbka chronologiczna automatycznie łączy sezony. "
         predictions_1x.append([
             row['Date'], row['Time'], league, f"{home} - {away}", f"{round(final_prob*100)}%", f"{value_perc}%",
-            fair_odd, buk_odd_1x, len(h_all), f"{h_1x_all_cnt}/{len(h_all)}", f"{h_1x_10_cnt}/10",
+            fair_odd, buk_odd_1x, f"Dom: {len(h_all)}", f"{h_1x_all_cnt}/{len(h_all)}", f"{h_1x_15_cnt}/15",
             f"{l_top} x", f"{l_mid} x", f"{l_bot} x",
-            len(a_all), f"{a_2_all_cnt}/{len(a_all)}", f"{a_2_10_cnt}/10",
+            f"Wyjazd: {len(a_all)}", f"{a_2_all_cnt}/{len(a_all)}", f"{a_2_15_cnt}/15",
             f"{w_top} x", f"{w_mid} x", f"{w_bot} x",
             f"{a_fts_pct}%", h_unbeaten, a_winless, h_proxy, arg
         ])
 
 headers_1x = [
     "Data", "Godzina", "Liga", "Mecz", "Prawdopodobieństwo_1X", "Value", "Fair_Odd (Twój)", "Buk_Odd (Rynek)",
-    "H_Mecze_Dom_Suma", "H_1X_Wszystkie", "H_1X_Ostatnie10", "H_Porażki_vs_TOP", "H_Porażki_vs_MID", "H_Porażki_vs_BOTTOM",
-    "A_Mecze_Wyjazd_Suma", "A_Wygrane_Wszystkie", "A_Wygrane_Ostatnie10", "A_Wygrane_vs_TOP", "A_Wygrane_vs_MID", "A_Wygrane_vs_BOTTOM",
+    "H_Probka_Meczow", "H_1X_Wszystkie", "H_1X_Ostatnie15", "H_Porażki_vs_TOP", "H_Porażki_vs_MID", "H_Porażki_vs_BOTTOM",
+    "A_Probka_Meczow", "A_Wygrane_Wszystkie", "A_Wygrane_Ostatnie15", "A_Wygrane_vs_TOP", "A_Wygrane_vs_MID", "A_Wygrane_vs_BOTTOM",
     "A_FTS_Wyjazd_%", "H_Passa_Bez_Porażki", "A_Passa_Bez_Wygranej", "H_Proxy_xG_Status", "Argumentacja Modelu"
 ]
 df_pred_1x = pd.DataFrame(predictions_1x, columns=headers_1x).sort_values(by="Prawdopodobieństwo_1X", ascending=False)
 
 
 # ==========================================================
-# 6b. ENGINE BETBUILDER PRO V2 (ROZSZERZONE LINIE + OVER 0.5 DETEKTOR)
+# 6b. ENGINE BETBUILDER PRO V3 (KROROCZĄCE SEZONY + KALKULATOR KURSÓW BB)
 # ==========================================================
-print("Uruchamiam Engine BetBuilder Pro: Przetwarzanie rozszerzonych linii i bazy Over 0.5...")
+print("Uruchamiam Engine BetBuilder Pro V3...")
 predictions_builder = []
 
 for idx, row in fixtures_clean.iterrows():
@@ -460,7 +465,8 @@ for idx, row in fixtures_clean.iterrows():
     h_total_all = valid_matches[(valid_matches['League'] == league) & ((valid_matches['Home'] == home) | (valid_matches['Away'] == home))].copy()
     a_total_all = valid_matches[(valid_matches['League'] == league) & ((valid_matches['Home'] == away) | (valid_matches['Away'] == away))].copy()
     
-    if len(h_dom) < 4 or len(a_wyj) < 4 or len(h_total_all) < 8 or len(a_total_all) < 8: continue
+    # RESTRYKCJA SEZONOWA: Wymagamy minimum 10 rozegranych meczów ogółem w historii (łączenie 2 sezonów)
+    if len(h_total_all) < 10 or len(a_total_all) < 10: continue
     
     h_dom['HT_Total'] = h_dom['HTHG'] + h_dom['HTAG']
     a_wyj['HT_Total'] = a_wyj['HTHG'] + a_wyj['HTAG']
@@ -472,113 +478,126 @@ for idx, row in fixtures_clean.iterrows():
     a_total_all['Team_GF'] = np.where(a_total_all['Home'] == away, a_total_all['FTHG'], a_total_all['FTAG'])
     a_total_all['Team_GA'] = np.where(a_total_all['Home'] == away, a_total_all['FTAG'], a_total_all['FTHG'])
 
-    max_h_scored_dom = h_dom['FTHG'].max()
-    max_h_conceded_dom = h_dom['FTAG'].max()
+    max_h_scored_dom = h_dom['FTHG'].max() if len(h_dom)>0 else 0
+    max_h_conceded_dom = h_dom['FTAG'].max() if len(h_dom)>0 else 0
     max_h_scored_all = h_total_all['Team_GF'].max()
     max_h_conceded_all = h_total_all['Team_GA'].max()
     
-    max_a_scored_wyj = a_wyj['FTAG'].max()
-    max_a_conceded_wyj = a_wyj['FTHG'].max()
+    max_a_scored_wyj = a_wyj['FTAG'].max() if len(a_wyj)>0 else 0
+    max_a_conceded_wyj = a_wyj['FTHG'].max() if len(a_wyj)>0 else 0
     max_a_scored_all = a_total_all['Team_GF'].max()
     max_a_conceded_all = a_total_all['Team_GA'].max()
     
     builder_blocks = []
     block_probabilities = []
+    block_estimated_odds = [] # Do kalkulatora BetBuildera
     
-    # --- NOWOŚĆ: TEST 0: DETEKTOR 100% OVER 0.5 GOLA W MECZU ---
-    h_dom_o05 = sum(h_dom['Total_Goals'] >= 1) / len(h_dom)
-    a_wyj_o05 = sum(a_wyj['Total_Goals'] >= 1) / len(a_wyj)
+    # --- TEST 0: DETEKTOR 100% OVER 0.5 GOLA ---
+    h_dom_o05 = sum(h_dom['Total_Goals'] >= 1) / len(h_dom) if len(h_dom)>0 else 1.0
+    a_wyj_o05 = sum(a_wyj['Total_Goals'] >= 1) / len(a_wyj) if len(a_wyj)>0 else 1.0
     h_all_o05 = sum(h_total_all['Total_Goals'] >= 1) / len(h_total_all)
     a_all_o05 = sum(a_total_all['Total_Goals'] >= 1) / len(a_total_all)
     
-    # Warunek: Obie drużyny bezwzględnie kończyły KAŻDY mecz bramką w tym sezonie (brak wyników 0:0)
     if h_dom_o05 == 1.0 and a_wyj_o05 == 1.0 and h_all_o05 == 1.0 and a_all_o05 == 1.0:
         builder_blocks.append("Mecz: Over 0.5 gola")
         block_probabilities.append(1.0)
+        block_estimated_odds.append(1.05) # Stała bezpieczna wycena Over 0.5
 
-    # --- TEST 1: CAŁY MECZ UNDER 4.5 / 5.5 / 6.5 (ROZSZERZONY) ---
-    match_line_found = False
+    # --- TEST 1: MECZ UNDER 4.5 / 5.5 / 6.5 (ROZSZERZONY) ---
     for line in [4.5, 5.5, 6.5]:
-        h_u = sum(h_dom['Total_Goals'] < line) / len(h_dom)
-        a_u = sum(a_wyj['Total_Goals'] < line) / len(a_wyj)
+        h_u = sum(h_dom['Total_Goals'] < line) / len(h_dom) if len(h_dom)>0 else 1.0
+        a_u = sum(a_wyj['Total_Goals'] < line) / len(a_wyj) if len(a_wyj)>0 else 1.0
         h_all_u = sum(h_total_all['Total_Goals'] < line) / len(h_total_all)
         a_all_u = sum(a_total_all['Total_Goals'] < line) / len(a_total_all)
         
         if h_u >= 0.95 and a_u >= 0.95 and h_all_u >= 0.94 and a_all_u >= 0.94:
             builder_blocks.append(f"Mecz: Under {line} gola")
-            block_probabilities.append((h_u + a_u + h_all_u + a_all_u) / 4)
-            match_line_found = True
+            avg_prob = (h_u + a_u + h_all_u + a_all_u) / 4
+            block_probabilities.append(avg_prob)
+            block_estimated_odds.append(round(1 / (avg_prob * 0.92), 2)) # Uwzględnia marżę bukmachera
             break
 
-    # --- TEST 2: PIERWSZA POŁOWA UNDER 1.5 / 2.5 / 3.5 / 4.5 (ROZSZERZONY) ---
+    # --- TEST 2: 1. POŁOWA UNDER 1.5 / 2.5 / 3.5 / 4.5 ---
     h_ht = h_dom.dropna(subset=['HT_Total'])
     a_ht = a_wyj.dropna(subset=['HT_Total'])
-    if len(h_ht) >= 4 and len(a_ht) >= 4:
+    if len(h_ht) >= 3 and len(a_ht) >= 3:
         for line in [1.5, 2.5, 3.5, 4.5]:
             h_u_1h = sum(h_ht['HT_Total'] < line) / len(h_ht)
             a_u_1h = sum(a_ht['HT_Total'] < line) / len(a_ht)
             if h_u_1h >= 0.94 and a_u_1h >= 0.94:
                 builder_blocks.append(f"1. Połowa: Under {line} gola")
-                block_probabilities.append((h_u_1h + a_u_1h) / 2)
+                avg_prob = (h_u_1h + a_u_1h) / 2
+                block_probabilities.append(avg_prob)
+                block_estimated_odds.append(round(1 / (avg_prob * 0.92), 2))
                 break
 
-    # --- TEST 3: DRUGA POŁOWA UNDER 2.5 / 3.5 / 4.5 (ROZSZERZONY) ---
+    # --- TEST 3: 2. POŁOWA UNDER 2.5 / 3.5 / 4.5 ---
     h_2h = h_dom.dropna(subset=['2H_Total'])
     a_2h = a_wyj.dropna(subset=['2H_Total'])
-    if len(h_2h) >= 4 and len(a_2h) >= 4:
+    if len(h_2h) >= 3 and len(a_2h) >= 3:
         for line in [2.5, 3.5, 4.5]:
             h_u_2h = sum(h_2h['2H_Total'] < line) / len(h_2h)
             a_u_2h = sum(a_2h['2H_Total'] < line) / len(a_2h)
             if h_u_2h >= 0.94 and a_u_2h >= 0.94:
                 builder_blocks.append(f"2. Połowa: Under {line} gola")
-                block_probabilities.append((h_u_2h + a_u_2h) / 2)
+                avg_prob = (h_u_2h + a_u_2h) / 2
+                block_probabilities.append(avg_prob)
+                block_estimated_odds.append(round(1 / (avg_prob * 0.92), 2))
                 break
 
-    # --- TEST 4: GOLE GOSPODARZA UNDER 3.5 / 4.5 / 5.5 (Z DUŻYMI FAWORYTAMI) ---
+    # --- TEST 4: GOSPODARZ UNDER 3.5 / 4.5 / 5.5 ---
     highest_h_scored = max(max_h_scored_dom, max_h_scored_all)
     for line in [3.5, 4.5, 5.5]:
         if line > highest_h_scored:
-            h_u_prob = sum(h_dom['FTHG'] < line) / len(h_dom)
+            h_u_prob = sum(h_dom['FTHG'] < line) / len(h_dom) if len(h_dom)>0 else 1.0
             h_all_u_prob = sum(h_total_all['Team_GF'] < line) / len(h_total_all)
             if h_u_prob >= 0.95 and h_all_u_prob >= 0.94:
                 builder_blocks.append(f"{home}: Under {line} gola")
-                block_probabilities.append((h_u_prob + h_all_u_prob) / 2)
+                avg_prob = (h_u_prob + h_all_u_prob) / 2
+                block_probabilities.append(avg_prob)
+                block_estimated_odds.append(round(1 / (avg_prob * 0.92), 2))
                 break
 
-    # --- TEST 5: GOLE GOŚCIA UNDER 3.5 / 4.5 ---
+    # --- TEST 5: GOŚĆ UNDER 3.5 / 4.5 ---
     highest_a_scored = max(max_a_scored_wyj, max_a_scored_all)
     for line in [3.5, 4.5]:
         if line > highest_a_scored:
-            a_u_prob = sum(a_wyj['FTAG'] < line) / len(a_wyj)
+            a_u_prob = sum(a_wyj['FTAG'] < line) / len(a_wyj) if len(a_wyj)>0 else 1.0
             a_all_u_prob = sum(a_total_all['Team_GF'] < line) / len(a_total_all)
             if a_u_prob >= 0.95 and a_all_u_prob >= 0.94:
                 builder_blocks.append(f"{away}: Under {line} gola")
-                block_probabilities.append((a_u_prob + a_all_u_prob) / 2)
+                avg_prob = (a_u_prob + a_all_u_prob) / 2
+                block_probabilities.append(avg_prob)
+                block_estimated_odds.append(round(1 / (avg_prob * 0.92), 2))
                 break
 
-    # AKCEPTACJA KUPONU AKO (Pewność skumulowana podwyższona do minimum 95.0%)
+    # AKCEPTACJA ZESTAWU (Minimum 3 bloki o pewności łącznej >= 95.0%)
     if len(builder_blocks) >= 3:
         final_builder_safety = round(np.prod(block_probabilities) * 100, 1)
         if final_builder_safety >= 95.0:
             sugerowany_kupon = " + ".join(builder_blocks)
             
-            uzasadnienie = f"Maksymalna pewność AKO. Zbadano {len(h_dom)} gier domowych ({len(h_total_all)} ogółem) i {len(a_wyj)} wyjazdowych ({len(a_total_all)} ogółem). "
-            if "Over 0.5 gola" in sugerowany_kupon: uzasadnienie += "Wykryto 100% serii bramkowych (brak 0:0 w sezonie) -> wdrożono bezpieczny Over 0.5. "
-            uzasadnienie += f"Gospodarz max strzelił {max_h_scored_dom} i stracił {max_h_conceded_dom} (w domu), a w sezonie ogółem {max_h_scored_all}/{max_h_conceded_all}. "
-            uzasadnienie += f"Gość max strzelił {max_a_scored_wyj} i stracił {max_a_conceded_wyj} (wyjazd), a w sezonie ogółem {max_a_scored_all}/{max_a_conceded_all}. "
-            uzasadnienie += "Wszystkie górne limity dobrane z zapasem bezpieczeństwa."
+            # NOWOŚĆ: Oficjalny algorytm redukcji kursów skorelowanych dla BetBuildera (0.65 to współczynnik redukcji)
+            estimated_bb_odd = round(1.0 + sum([(o - 1.0) * 0.65 for o in block_estimated_odds]), 2)
+            
+            uzasadnienie = f"Pancerne AKO. Zbadano {len(h_dom)} gier domowych ({len(h_total_all)} ogółem) i {len(a_wyj)} wyjazdowych ({len(a_total_all)} ogółem). "
+            if "Over 0.5 gola" in sugerowany_kupon: uzasadnienie += "Wykryto 100% serii bramkowych (brak 0:0 w historii) -> wdrożono bezpieczny Over 0.5. "
+            uzasadnienie += f"Gospodarz max strzelił {max_h_scored_dom} i stracił {max_h_conceded_dom} (dom). Gość max strzelił {max_a_scored_wyj} i stracił {max_a_conceded_wyj} (wyjazd)."
 
             predictions_builder.append([
-                row['Date'], row['Time'], league, f"{home} - {away}", sugerowany_kupon, f"{final_builder_safety}%",
-                len(h_dom), len(h_total_all), len(a_wyj), len(a_total_all),
+                row['Date'], row['Time'], league, f"{home} - {away}", sugerowany_kupon, 
+                str(estimated_bb_odd).replace('.', ','), # NOWA KOLUMNA Z KURSEM
+                f"{final_builder_safety}%",
+                f"Dom: {len(h_dom)} (Suma: {len(h_total_all)})", 
+                f"Wyjazd: {len(a_wyj)} (Suma: {len(a_total_all)})",
                 int(max_h_scored_dom), int(max_h_conceded_dom), int(max_h_scored_all), int(max_h_conceded_all),
                 int(max_a_scored_wyj), int(max_a_conceded_wyj), int(max_a_scored_all), int(max_a_conceded_all),
                 uzasadnienie
             ])
 
 headers_builder = [
-    "Data", "Godzina", "Liga", "Mecz", "Sugerowany Zestaw BetBuilder", "Pewność Matematyczna",
-    "H_Mecze_Dom", "H_Mecze_Suma_Ogolem", "A_Mecze_Wyjazd", "A_Mecze_Suma_Ogolem",
+    "Data", "Godzina", "Liga", "Mecz", "Sugerowany Zestaw BetBuilder", "Szacowany_Kurs_BetBuilder", "Pewność Matematyczna",
+    "H_Probka_Meczow", "A_Probka_Meczow",
     "H_Max_Strzelone_Dom", "H_Max_Stracone_Dom", "H_Max_Strzelone_Ogolem", "H_Max_Stracone_Ogolem",
     "A_Max_Strzelone_Wyjazd", "A_Max_Stracone_Wyjazd", "A_Max_Strzelone_Ogolem", "A_Max_Stracone_Ogolem",
     "Analiza i Uzasadnienie Statystyczne"
@@ -602,7 +621,7 @@ def prepare_for_gsheets(df):
             if str_val in ["<NA>", "nan", "NaN", "None", "", "inf", "-inf"]:
                 new_row.append("-")
             else:
-                if any(k in col_name for k in ["Odd", "Avg", "Value", "PPG", "Prawdopodobieństwo", "Pewność"]):
+                if any(k in col_name for k in ["Odd", "Avg", "Value", "PPG", "Prawdopodobieństwo", "Pewność", "Kurs"]):
                     new_row.append(str_val.replace(".", ","))
                 else:
                     if str_val.endswith(".0") and "%" not in str_val: new_row.append(str_val[:-2])
