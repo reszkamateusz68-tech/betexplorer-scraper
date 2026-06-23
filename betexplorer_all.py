@@ -296,8 +296,8 @@ print("Generowanie inteligentnych tabel ligowych...")
 valid_matches = results_clean.dropna(subset=['FTHG', 'FTAG']).copy()
 
 if not valid_matches.empty:
-    valid_matches['FTHG'] = pd.to_numeric(valid_matches['FTHG'], errors='coerce')
-    valid_matches['FTAG'] = pd.to_numeric(valid_matches['FTAG'], errors='coerce')
+    valid_matches['FTHG'] = pd.to_numeric(valid_matches['FTHG'], errors='coerce').fillna(0).astype(int)
+    valid_matches['FTAG'] = pd.to_numeric(valid_matches['FTAG'], errors='coerce').fillna(0).astype(int)
     
     home_rec = valid_matches[['League', 'Home', 'FTHG', 'FTAG']].copy()
     home_rec.columns = ['League', 'Team', 'GF', 'GA']
@@ -326,98 +326,142 @@ else:
     league_tables = pd.DataFrame(columns=['League', 'Team', 'M', 'W', 'D', 'L', 'GF', 'GA', 'GD', 'Pts', 'PPG'])
 
 # ==========================================
-# 6. MODUŁ ANALITYCZNY - VALUE BETTING (TYP: 1X)
+# 6. ZAAWANSOWANY MODUŁ ANALITYCZNY 1X (Dual-Window + Tiers + Proxy xG)
 # ==========================================
-print("Uruchamiam Engine: Generowanie Typów (1X) + Strength of Schedule...")
+print("Uruchamiam Engine 1X Pro: Dual-Window, Tiers, FTS, Streaks, Proxy xG...")
 
-# Słownik szybkiego dostępu do siły drużyn (PPG)
-team_ppg = {}
-for _, row in league_tables.iterrows():
-    team_ppg[(row['League'], row['Team'])] = float(str(row['PPG']).replace(',', '.'))
+# Dynamiczny podział ligi na 3 koszyki (Top, Mid, Bottom)
+team_tiers = {}
+for lg in league_tables['League'].unique():
+    lg_teams = league_tables[league_tables['League'] == lg].reset_index(drop=True)
+    n_teams = len(lg_teams)
+    if n_teams >= 3:
+        t_size = max(1, n_teams // 3)
+        for i, t in enumerate(lg_teams['Team']):
+            if i < t_size: team_tiers[(lg, t)] = 'TOP'
+            elif i >= n_teams - t_size: team_tiers[(lg, t)] = 'BOTTOM'
+            else: team_tiers[(lg, t)] = 'MID'
+    else:
+        for t in lg_teams['Team']: team_tiers[(lg, t)] = 'MID'
+
+team_ppg = {(r['League'], r['Team']): float(str(r['PPG']).replace(',', '.')) for _, r in league_tables.iterrows()}
+
+# Pomocnicza funkcja licząca bieżące passy (ze wszystkich meczów, chronologicznie)
+def get_current_streaks(lg, team):
+    t_matches = valid_matches[(valid_matches['League'] == lg) & ((valid_matches['Home'] == team) | (valid_matches['Away'] == team))].copy()
+    unbeaten, winless = 0, 0
+    ub_broken, wl_broken = False, False
+    
+    for _, m in t_matches.iterrows():
+        is_home = (m['Home'] == team)
+        scored = int(m['FTHG']) if is_home else int(m['FTAG'])
+        conceded = int(m['FTAG']) if is_home else int(m['FTHG'])
+        
+        if not ub_broken:
+            if scored >= conceded: unbeaten += 1
+            else: ub_broken = True
+        if not wl_broken:
+            if scored <= conceded: winless += 1
+            else: wl_broken = True
+        if ub_broken and wl_broken: break
+    return unbeaten, winless
 
 predictions_1x = []
 
 for idx, row in fixtures_clean.iterrows():
-    league = row['League']
-    home = row['Home']
-    away = row['Away']
-    match_date = row['Date']
-    match_time = row['Time']
+    league, home, away = row['League'], row['Home'], row['Away']
 
-    # Przeliczanie kursu bukmachera na szansę 1X (Wzór: 1 / ((1/Odd1) + (1/OddX)))
     try:
         o1 = float(str(row['Odd_1']).replace(',', '.'))
         ox = float(str(row['Odd_X']).replace(',', '.'))
         buk_odd_1x = round(1 / ((1 / o1) + (1 / ox)), 2)
-    except:
-        continue # Pomijamy mecze bez kursów
+    except: continue
 
-    # Pobieranie historii (Tylko Dom dla gosp. i Tylko Wyjazd dla gościa) - ostatnie 6 spotkań
-    home_history = valid_matches[(valid_matches['League'] == league) & (valid_matches['Home'] == home)].head(6)
-    away_history = valid_matches[(valid_matches['League'] == league) & (valid_matches['Away'] == away)].head(6)
+    # DUAL-WINDOW: Wszystkie mecze vs Ostatnie 10
+    h_all = valid_matches[(valid_matches['League'] == league) & (valid_matches['Home'] == home)]
+    h_10 = h_all.head(10)
+    
+    a_all = valid_matches[(valid_matches['League'] == league) & (valid_matches['Away'] == away)]
+    a_10 = a_all.head(10)
 
-    # Wymagamy minimum 3 rozegranych meczów w tych warunkach, by próbka była wiarygodna
-    if len(home_history) < 3 or len(away_history) < 3:
-        continue
+    if len(h_all) < 3 or len(a_all) < 3: continue
 
-    # Analiza Gospodarza (Kiedy wygrali lub zremisowali = Sukces dla typu 1X)
-    home_1x_wins = 0
-    home_opp_ppg = []
-    for _, h_match in home_history.iterrows():
-        if int(h_match['FTHG']) >= int(h_match['FTAG']): 
-            home_1x_wins += 1
-        home_opp_ppg.append(team_ppg.get((league, h_match['Away']), 1.0))
+    # --- STATYSTYKI GOSPODARZA (DOM) ---
+    h_1x_all_cnt = sum(h_all['FTHG'] >= h_all['FTAG'])
+    h_1x_10_cnt = sum(h_10['FTHG'] >= h_10['FTAG'])
+    
+    h_losses = h_all[h_all['FTHG'] < h_all['FTAG']]
+    l_top, l_mid, l_bot = 0, 0, 0
+    for _, m in h_losses.iterrows():
+        t = team_tiers.get((league, m['Away']), 'MID')
+        if t == 'TOP': l_top += 1
+        elif t == 'MID': l_mid += 1
+        elif t == 'BOTTOM': l_bot += 1
 
-    base_home_1x_prob = home_1x_wins / len(home_history)
-    avg_home_opp = sum(home_opp_ppg) / len(home_opp_ppg)
+    # --- STATYSTYKI GOŚCIA (WYJAZD) ---
+    a_2_all_cnt = sum(a_all['FTAG'] > a_all['FTHG'])
+    a_2_10_cnt = sum(a_10['FTAG'] > a_10['FTHG'])
+    
+    a_wins = a_all[a_all['FTAG'] > a_all['FTHG']]
+    w_top, w_mid, w_bot = 0, 0, 0
+    for _, m in a_wins.iterrows():
+        t = team_tiers.get((league, m['Home']), 'MID')
+        if t == 'TOP': w_top += 1
+        elif t == 'MID': w_mid += 1
+        elif t == 'BOTTOM': w_bot += 1
 
-    # Analiza Gościa (Kiedy PRZEGRALI lub zremisowali na wyjeździe = Sukces dla typu 1X)
-    away_1x_wins = 0
-    away_opp_ppg = []
-    for _, a_match in away_history.iterrows():
-        if int(a_match['FTHG']) >= int(a_match['FTAG']): 
-            away_1x_wins += 1
-        away_opp_ppg.append(team_ppg.get((league, a_match['Home']), 1.0))
+    # Wskaźnik FTS (Brak gola na wyjeździe)
+    a_fts_cnt = sum(a_all['FTAG'] == 0)
+    a_fts_pct = round((a_fts_cnt / len(a_all)) * 100) if len(a_all) > 0 else 0
 
-    base_away_1x_prob = away_1x_wins / len(away_history)
-    avg_away_opp = sum(away_opp_ppg) / len(away_opp_ppg)
+    # Proxy xG Status dla Gospodarza (Ostatnie 10 gier u siebie)
+    h_10_shots = h_10[pd.to_numeric(h_10['ShotsTarget_H'], errors='coerce').notna()]
+    if not h_10_shots.empty:
+        avg_st = pd.to_numeric(h_10_shots['ShotsTarget_H']).mean()
+        avg_g = pd.to_numeric(h_10_shots['FTHG']).mean()
+        diff = (avg_st * 0.3) - avg_g
+        h_proxy = "PECH (Ukryta Forma)" if diff > 0.4 else ("SZCZĘŚCIE" if diff < -0.4 else "STABILNY")
+    else: h_proxy = "Brak Danych"
 
-    # STRENGTH OF SCHEDULE (Siła Kalendarza)
-    # Średnie PPG w lidze to zazwyczaj 1.3 - 1.4.
-    # Jeśli drużyna grała z czołówką (>1.5), podnosimy jej rating. Z ogórkami (<1.0) - obniżamy.
-    home_sos_mod = (avg_home_opp - 1.3) * 0.10
-    away_sos_mod = (avg_away_opp - 1.3) * 0.10
+    # Pobieranie pass
+    h_unbeaten, _ = get_current_streaks(league, home)
+    _, a_winless = get_current_streaks(league, away)
 
-    adj_home_prob = min(max(base_home_1x_prob + home_sos_mod, 0.05), 0.95)
-    adj_away_prob = min(max(base_away_1x_prob + away_sos_mod, 0.05), 0.95)
+    # MATEMATYKA MODELU: Ważone Prawdopodobieństwo
+    prob_h = ((h_1x_all_cnt / len(h_all)) * 0.4) + ((h_1x_10_cnt / len(h_10)) * 0.6)
+    prob_a = ((sum(a_all['FTHG'] >= a_all['FTAG']) / len(a_all)) * 0.4) + ((sum(a_10['FTHG'] >= a_10['FTAG']) / len(a_10)) * 0.6)
+    
+    # Modyfikator SoS (Siła kalendarza ostatnich 10 rywali)
+    avg_h_opp = sum([team_ppg.get((league, m['Away']), 1.3) for _, m in h_10]) / len(h_10)
+    avg_a_opp = sum([team_ppg.get((league, m['Home']), 1.3) for _, m in a_10]) / len(a_10)
+    
+    final_prob = min(max(((prob_h + prob_a) / 2) + ((avg_h_opp - 1.3) * 0.08) + ((avg_a_opp - 1.3) * 0.08), 0.05), 0.95)
+    fair_odd = round(1 / final_prob, 2)
+    value_perc = round(((buk_odd_1x / fair_odd) - 1) * 100, 2)
 
-    final_prob_1x = (adj_home_prob + adj_away_prob) / 2
-    fair_odd_1x = round(1 / final_prob_1x, 2)
-
-    # Value Check (% przewagi)
-    value_perc = round(((buk_odd_1x / fair_odd_1x) - 1) * 100, 2)
-
-    # FILTR: Pokaż tylko logiczne typy (Szansa min. 68% i dodatnie Value)
-    if final_prob_1x >= 0.68 and value_perc > 0:
-        
-        arg = f"Gosp u siebie: {home_1x_wins}/{len(home_history)} bez porażki. Gość wyjazdy: {away_1x_wins}/{len(away_history)} strata pkt. "
-        if home_sos_mod < -0.05: arg += "Minus: Gospodarz grał tylko z dołem tabeli. "
-        if home_sos_mod > 0.05: arg += "Plus: Gospodarz urywał punkty czołówce. "
-        if away_sos_mod < -0.05: arg += "Plus: Goście gubili punkty z outsiderami. "
+    # SELEKCJA: Kryteria wejścia (Prawdopodobieństwo >= 66% oraz dodatnie Value)
+    if final_prob >= 0.66 and value_perc > 0:
+        arg = f"Gospodarz stabilny dom ({h_1x_10_cnt}/10 1X). Gość wyjazdy niemoc zwycięstw ({len(a_10)-a_2_10_cnt}/10 strata pkt). "
+        if l_bot > 0: arg += "Ostrzeżenie: Gospodarz wpadł raz na dno tabeli. "
+        if w_top > 0: arg += "Uwaga: Gość potrafił ograć TOP wyjazd. "
+        if h_proxy == "PECH (Ukryta Forma)": arg += "Algorytm wykrył potężny PECH Gospodarza w strzałach - wysokie prawdopodobieństwo przełamania! "
 
         predictions_1x.append([
-            match_date, match_time, league, f"{home} - {away}", "1X",
-            str(fair_odd_1x).replace('.', ','),
-            str(buk_odd_1x).replace('.', ','),
-            str(value_perc).replace('.', ',') + "%",
-            f"{round(final_prob_1x*100)}%",
-            arg
+            row['Date'], row['Time'], league, f"{home} - {away}", f"{round(final_prob*100)}%", f"{value_perc}%",
+            fair_odd, buk_odd_1x, len(h_all), f"{h_1x_all_cnt}/{len(h_all)}", f"{h_1x_10_cnt}/10",
+            f"{l_top} x", f"{l_mid} x", f"{l_bot} x",
+            len(a_all), f"{a_2_all_cnt}/{len(a_all)}", f"{a_2_10_cnt}/10",
+            f"{w_top} x", f"{w_mid} x", f"{w_bot} x",
+            f"{a_fts_pct}%", h_unbeaten, a_winless, h_proxy, arg
         ])
 
-df_pred_1x = pd.DataFrame(predictions_1x, columns=[
-    "Data", "Godzina", "Liga", "Mecz", "Typ", "Fair_Odd (Twój)", "Buk_Odd (Rynek)", "Przewaga (Value)", "Prawdopodobienstwo", "Argumentacja Algorytmu"
-])
-df_pred_1x = df_pred_1x.sort_values(by="Prawdopodobienstwo", ascending=False)
+headers_1x = [
+    "Data", "Godzina", "Liga", "Mecz", "Prawdopodobieństwo_1X", "Value", "Fair_Odd (Twój)", "Buk_Odd (Rynek)",
+    "H_Mecze_Dom_Suma", "H_1X_Wszystkie", "H_1X_Ostatnie10", "H_Porażki_vs_TOP", "H_Porażki_vs_MID", "H_Porażki_vs_BOTTOM",
+    "A_Mecze_Wyjazd_Suma", "A_Wygrane_Wszystkie", "A_Wygrane_Ostatnie10", "A_Wygrane_vs_TOP", "A_Wygrane_vs_MID", "A_Wygrane_vs_BOTTOM",
+    "A_FTS_Wyjazd_%", "H_Passa_Bez_Porażki", "A_Passa_Bez_Wygranej", "H_Proxy_xG_Status", "Argumentacja Modelu"
+]
+df_pred_1x = pd.DataFrame(predictions_1x, columns=headers_1x).sort_values(by="Prawdopodobieństwo_1X", ascending=False)
 
 # ==========================================
 # 7. KULOODPORNY FORMATER DO GOOGLE SHEETS
@@ -435,13 +479,11 @@ def prepare_for_gsheets(df):
             if str_val in ["<NA>", "nan", "NaN", "None", "", "inf", "-inf"]:
                 new_row.append("-")
             else:
-                if any(k in col_name for k in ["Odd", "Avg", "Val", "PPG"]):
+                if any(k in col_name for k in ["Odd", "Avg", "Value", "PPG", "Prawdopodobieństwo"]):
                     new_row.append(str_val.replace(".", ","))
                 else:
-                    if str_val.endswith(".0") and "%" not in str_val:
-                        new_row.append(str_val[:-2])
-                    else:
-                        new_row.append(str_val)
+                    if str_val.endswith(".0") and "%" not in str_val: new_row.append(str_val[:-2])
+                    else: new_row.append(str_val)
         output.append(new_row)
     return output
 
@@ -453,7 +495,6 @@ creds = Credentials.from_service_account_file("credentials.json", scopes=scope) 
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
-# Tworzenie arkuszy jeśli nie istnieją (z dodatkiem Predictions)
 for sheet_name in ["Summary", "Fixtures", "Results", "League_Tables", "Predictions_1X"]:
     try: spreadsheet.worksheet(sheet_name)
     except: spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=30)
@@ -461,6 +502,7 @@ for sheet_name in ["Summary", "Fixtures", "Results", "League_Tables", "Predictio
 try:
     spreadsheet.worksheet("Fixtures").resize(rows=5000, cols=35)
     spreadsheet.worksheet("Results").resize(rows=10000, cols=65) 
+    spreadsheet.worksheet("Predictions_1X").resize(rows=3000, cols=40) # Zwiększono rozmiar pod szeroki raport
 except: pass
 
 print("Wysyłam Czysty Terminarz do Google Sheets...")
@@ -475,7 +517,7 @@ print("Wysyłam Tabele Ligowe...")
 spreadsheet.worksheet("League_Tables").clear()
 if not league_tables.empty: spreadsheet.worksheet("League_Tables").update(prepare_for_gsheets(league_tables))
 
-print("Wysyłam Gotowe Typy (Predictions 1X)...")
+print("Wysyłam Zaawansowane Analizy (Predictions 1X)...")
 spreadsheet.worksheet("Predictions_1X").clear()
 if not df_pred_1x.empty: spreadsheet.worksheet("Predictions_1X").update(prepare_for_gsheets(df_pred_1x))
 
@@ -486,7 +528,7 @@ summary_data = [
     ["Fixtures Czyste", len(fixtures_clean), ""],
     ["Results Zintegrowane", len(results_clean), ""],
     ["Tabela Drużyn", len(league_tables), ""],
-    ["Złapane Typy 1X", len(df_pred_1x), ""],
+    ["Wyselekcjonowane Typy 1X Pro", len(df_pred_1x), ""],
     ["", "", ""],
     ["==== RAPORT POBIERANIA Z LINKÓW ====", "", ""],
     ["System", "URL", "Status / Wynik"]
@@ -497,5 +539,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Znaleziono gotowych Typów 1X:", len(df_pred_1x))
+print("Wyselekcjonowano typów 1X Pro:", len(df_pred_1x))
 print("=" * 60)
