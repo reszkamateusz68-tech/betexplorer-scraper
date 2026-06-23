@@ -15,7 +15,7 @@ from google.oauth2.service_account import Credentials
 today = datetime.now()
 
 # ==========================================================
-# GŁÓWNE FUNKCJE POMOCNICZE
+# GŁÓWNE FUNKCJE POMOCNICZE (Zadeklarowane na samej górze)
 # ==========================================================
 def split_datetime(value):
     if pd.isna(value):
@@ -99,7 +99,7 @@ def get_current_streaks(base_lg, team):
     return unbeaten, winless
 
 def prepare_for_gsheets(df):
-    """Zabezpiecza przed błędami JSON i formatuje liczby pod polskie Sheets."""
+    """Zabezpiecza przed błędami JSON i formatuje liczby pod polskie Sheets (przecinki)."""
     output = [df.columns.tolist()]
     for row in df.values.tolist():
         new_row = []
@@ -167,12 +167,19 @@ for i, url in enumerate(urls, start=1):
         time.sleep(random.uniform(2, 5))
         response = requests.get(url_clean, headers=headers, timeout=30)
         
+        # WZMOCNIONY BYPASS 429: Podwójne uderzenie i dłuższy czas chłodzenia serwera
         bypass_used = False
         if response.status_code in [429, 403]:
-            time.sleep(5)
+            print(f"   -> Wykryto limit (Kod {response.status_code}). Chłodzenie serwera i restart przez Cloudscraper...")
+            time.sleep(12) # Wydłużony czas na reset limitów IP
             scraper_be = cloudscraper.create_scraper()
             response = scraper_be.get(url_clean, headers=headers, timeout=30)
             bypass_used = True
+            
+            # Druga próba ratunkowa, jeśli serwer dalej stawia opór
+            if response.status_code in [429, 403]:
+                time.sleep(15)
+                response = scraper_be.get(url_clean, headers=headers, timeout=30)
 
         if response.status_code != 200:
             scrape_report.append(["BetExplorer", url_clean, f"BŁĄD: Kod {response.status_code}"])
@@ -345,16 +352,6 @@ if not fixtures_df.empty:
     fixtures_df['Date_str'] = pd.to_datetime(fixtures_df['Date'], errors='coerce').dt.strftime('%Y%m%d').fillna('99999999')
     fixtures_df['Match_ID'] = fixtures_df['Date_str'] + "_" + fixtures_df['Home'].str[:3].str.upper() + "_" + fixtures_df['Away'].str[:3].str.upper()
 
-golden_cols = {
-    'Match_ID': 'Match_ID', 'Date': 'Date', 'Time': 'Time', 'League': 'League', 'Home': 'Home', 'Away': 'Away',
-    'FTHG': 'FTHG', 'FTAG': 'FTAG', 'Total_Goals': 'Total_Goals', 'HTHG': 'HTHG', 'HTAG': 'HTAG',
-    'HS': 'Shots_H', 'AS': 'Shots_A', 'HST': 'ShotsTarget_H', 'AST': 'ShotsTarget_A',
-    'HC': 'Corners_H', 'AC': 'Corners_A', 'HY': 'Cards_H', 'AY': 'Cards_A',
-    'Odd1': 'Odd_1', 'OddX': 'Odd_X', 'Odd2': 'Odd_2',
-    'AvgH': 'Avg_1', 'AvgD': 'Avg_X', 'AvgA': 'Avg_2',
-    'Val_1': 'Val_1', 'Val_X': 'Val_X', 'Val_2': 'Val_2'
-}
-
 results_clean = results_df[list(golden_cols.keys())].rename(columns=golden_cols) if not results_df.empty else pd.DataFrame(columns=golden_cols.values())
 fixtures_clean = fixtures_df[['Match_ID', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd1', 'OddX', 'Odd2']].rename(columns={'Odd1': 'Odd_1', 'OddX': 'Odd_X', 'Odd2': 'Odd_2'}) if not fixtures_df.empty else pd.DataFrame(columns=['Match_ID', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd_1', 'Odd_X', 'Odd_2'])
 
@@ -490,7 +487,6 @@ for idx, row in fixtures_clean.iterrows():
     fair_odd = round(1 / final_prob, 2)
     value_perc = round(((buk_odd_1x / fair_odd) - 1) * 100, 2)
 
-    # USUNIĘTO WARUNEK "value_perc > 0". Zostawiamy czyste prawdopodobieństwo >= 70%.
     if final_prob >= 0.70:
         arg = f"Gospodarz stabilny dom ({h_1x_window_cnt}/{len(h_window)} w oknie do 30 gier). "
         predictions_1x.append([
@@ -503,12 +499,6 @@ for idx, row in fixtures_clean.iterrows():
             f"{a_fts_pct}%", h_unbeaten, a_winless, h_proxy, arg
         ])
 
-headers_1x = [
-    "Data", "Godzina", "Liga", "Mecz", "Prawdopodobieństwo_1X", "Value", "Fair_Odd (Twój)", "Buk_Odd (Rynek)",
-    "H_Probka_Meczow", "H_1X_Wszystkie", "H_1X_OknoKroczace", "H_Porażki_vs_TOP", "H_Porażki_vs_MID", "H_Porażki_vs_BOTTOM",
-    "A_Probka_Meczow", "A_Wygrane_Wszystkie", "A_Wygrane_OknoKroczace", "A_Wygrane_vs_TOP", "A_Wygrane_vs_MID", "A_Wygrane_vs_BOTTOM",
-    "A_FTS_Wyjazd_%", "H_Passa_Bez_Porażki", "A_Passa_Bez_Wygranej", "H_Proxy_xG_Status", "Argumentacja Modelu"
-]
 df_pred_1x = pd.DataFrame(predictions_1x, columns=headers_1x).sort_values(by="Prawdopodobieństwo_1X", ascending=False) if predictions_1x else pd.DataFrame(columns=headers_1x)
 
 
@@ -670,13 +660,6 @@ for idx, row in fixtures_clean.iterrows():
                 uzasadnienie
             ])
 
-headers_builder = [
-    "Data", "Godzina", "Liga", "Mecz", "Sugerowany Zestaw BetBuilder", "Szacowany_Kurs_BetBuilder", "Pewność Matematyczna",
-    "H_Probka_Meczow", "A_Probka_Meczow",
-    "H_Max_Strzelone_Dom", "H_Max_Stracone_Dom", "H_Max_Strzelone_Ogolem", "H_Max_Stracone_Ogolem",
-    "A_Max_Strzelone_Wyjazd", "A_Max_Stracone_Wyjazd", "A_Max_Strzelone_Ogolem", "A_Max_Stracone_Ogolem",
-    "Analiza i Uzasadnienie Statystyczne"
-]
 df_pred_builder = pd.DataFrame(predictions_builder, columns=headers_builder).sort_values(by="Pewność Matematyczna", ascending=False) if predictions_builder else pd.DataFrame(columns=headers_builder)
 
 # ==========================================
