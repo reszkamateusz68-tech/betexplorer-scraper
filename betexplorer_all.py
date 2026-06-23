@@ -446,36 +446,32 @@ df_pred_1x = pd.DataFrame(predictions_1x, columns=headers_1x).sort_values(by="Pr
 
 
 # ==========================================================
-# 6b. ZAKTUALIZOWANY ENGINE BETBUILDER PRO (ZŁOTA DEFENSYWA I OGÓŁEM)
+# 6b. ENGINE BETBUILDER PRO V2 (ROZSZERZONE LINIE + OVER 0.5 DETEKTOR)
 # ==========================================================
-print("Uruchamiam Engine BetBuilder Pro: Analiza Ataku, Defensywy i Wszystkich Spotkań...")
+print("Uruchamiam Engine BetBuilder Pro: Przetwarzanie rozszerzonych linii i bazy Over 0.5...")
 predictions_builder = []
 
 for idx, row in fixtures_clean.iterrows():
     league, home, away = row['League'], row['Home'], row['Away']
     
-    # 1. Filtrowanie meczów w konkretnych warunkach (Dom / Wyjazd)
     h_dom = valid_matches[(valid_matches['League'] == league) & (valid_matches['Home'] == home)].copy()
     a_wyj = valid_matches[(valid_matches['League'] == league) & (valid_matches['Away'] == away)].copy()
     
-    # 2. NOWOŚĆ: Filtrowanie WSZYSTKICH meczów w sezonie (Niezależnie czy Dom, czy Wyjazd)
     h_total_all = valid_matches[(valid_matches['League'] == league) & ((valid_matches['Home'] == home) | (valid_matches['Away'] == home))].copy()
     a_total_all = valid_matches[(valid_matches['League'] == league) & ((valid_matches['Home'] == away) | (valid_matches['Away'] == away))].copy()
     
     if len(h_dom) < 4 or len(a_wyj) < 4 or len(h_total_all) < 8 or len(a_total_all) < 8: continue
     
-    # Wyliczanie bramek w połówkach dla Dom/Wyjazd
     h_dom['HT_Total'] = h_dom['HTHG'] + h_dom['HTAG']
     a_wyj['HT_Total'] = a_wyj['HTHG'] + a_wyj['HTAG']
+    h_dom['2H_Total'] = h_dom['Total_Goals'] - h_dom['HT_Total']
+    a_wyj['2H_Total'] = a_wyj['Total_Goals'] - a_wyj['HT_Total']
     
-    # NOWOŚĆ: Rozbicie goli strzelonych i straconych OGÓŁEM przez dany zespół w całym sezonie
     h_total_all['Team_GF'] = np.where(h_total_all['Home'] == home, h_total_all['FTHG'], h_total_all['FTAG'])
     h_total_all['Team_GA'] = np.where(h_total_all['Home'] == home, h_total_all['FTAG'], h_total_all['FTHG'])
-    
     a_total_all['Team_GF'] = np.where(a_total_all['Home'] == away, a_total_all['FTHG'], a_total_all['FTAG'])
     a_total_all['Team_GA'] = np.where(a_total_all['Home'] == away, a_total_all['FTAG'], a_total_all['FTHG'])
 
-    # Pobieranie punktów krytycznych (Maksima strzelone i stracone)
     max_h_scored_dom = h_dom['FTHG'].max()
     max_h_conceded_dom = h_dom['FTAG'].max()
     max_h_scored_all = h_total_all['Team_GF'].max()
@@ -489,66 +485,88 @@ for idx, row in fixtures_clean.iterrows():
     builder_blocks = []
     block_probabilities = []
     
-    # --- TEST 1: GLOBALNY UNDER 4.5 lub 5.5 (Na próbce DOM, WYJAZD ORAZ OGÓŁEM) ---
-    h_u45 = sum(h_dom['Total_Goals'] <= 4) / len(h_dom)
-    a_u45 = sum(a_wyj['Total_Goals'] <= 4) / len(a_wyj)
-    h_all_u45 = sum(h_total_all['Total_Goals'] <= 4) / len(h_total_all)
-    a_all_u45 = sum(a_total_all['Total_Goals'] <= 4) / len(a_total_all)
+    # --- NOWOŚĆ: TEST 0: DETEKTOR 100% OVER 0.5 GOLA W MECZU ---
+    h_dom_o05 = sum(h_dom['Total_Goals'] >= 1) / len(h_dom)
+    a_wyj_o05 = sum(a_wyj['Total_Goals'] >= 1) / len(a_wyj)
+    h_all_o05 = sum(h_total_all['Total_Goals'] >= 1) / len(h_total_all)
+    a_all_o05 = sum(a_total_all['Total_Goals'] >= 1) / len(a_total_all)
     
-    if h_u45 >= 0.94 and a_u45 >= 0.94 and h_all_u45 >= 0.92 and a_all_u45 >= 0.92:
-        builder_blocks.append("Mecz: Under 4.5 gola")
-        block_probabilities.append((h_u45 + a_u45 + h_all_u45 + a_all_u45) / 4)
-    else:
-        h_u55 = sum(h_dom['Total_Goals'] <= 5) / len(h_dom)
-        a_u55 = sum(a_wyj['Total_Goals'] <= 5) / len(a_wyj)
-        h_all_u55 = sum(h_total_all['Total_Goals'] <= 5) / len(h_total_all)
-        a_all_u55 = sum(a_total_all['Total_Goals'] <= 5) / len(a_total_all)
-        if h_u55 >= 0.97 and a_u55 >= 0.97 and h_all_u55 >= 0.95 and a_all_u55 >= 0.95:
-            builder_blocks.append("Mecz: Under 5.5 gola")
-            block_probabilities.append((h_u55 + a_u55 + h_all_u55 + a_all_u55) / 4)
+    # Warunek: Obie drużyny bezwzględnie kończyły KAŻDY mecz bramką w tym sezonie (brak wyników 0:0)
+    if h_dom_o05 == 1.0 and a_wyj_o05 == 1.0 and h_all_o05 == 1.0 and a_all_o05 == 1.0:
+        builder_blocks.append("Mecz: Over 0.5 gola")
+        block_probabilities.append(1.0)
 
-    # --- TEST 2: PIERWSZA POŁOWA UNDER 1.5 lub 2.5 ---
+    # --- TEST 1: CAŁY MECZ UNDER 4.5 / 5.5 / 6.5 (ROZSZERZONY) ---
+    match_line_found = False
+    for line in [4.5, 5.5, 6.5]:
+        h_u = sum(h_dom['Total_Goals'] < line) / len(h_dom)
+        a_u = sum(a_wyj['Total_Goals'] < line) / len(a_wyj)
+        h_all_u = sum(h_total_all['Total_Goals'] < line) / len(h_total_all)
+        a_all_u = sum(a_total_all['Total_Goals'] < line) / len(a_total_all)
+        
+        if h_u >= 0.95 and a_u >= 0.95 and h_all_u >= 0.94 and a_all_u >= 0.94:
+            builder_blocks.append(f"Mecz: Under {line} gola")
+            block_probabilities.append((h_u + a_u + h_all_u + a_all_u) / 4)
+            match_line_found = True
+            break
+
+    # --- TEST 2: PIERWSZA POŁOWA UNDER 1.5 / 2.5 / 3.5 / 4.5 (ROZSZERZONY) ---
     h_ht = h_dom.dropna(subset=['HT_Total'])
     a_ht = a_wyj.dropna(subset=['HT_Total'])
     if len(h_ht) >= 4 and len(a_ht) >= 4:
-        h_u15_1h = sum(h_ht['HT_Total'] <= 1) / len(h_ht)
-        a_u15_1h = sum(a_ht['HT_Total'] <= 1) / len(a_ht)
-        if h_u15_1h >= 0.92 and a_u15_1h >= 0.92:
-            builder_blocks.append("1. Połowa: Under 1.5 gola")
-            block_probabilities.append((h_u15_1h + a_u15_1h) / 2)
-        else:
-            h_u25_1h = sum(h_ht['HT_Total'] <= 2) / len(h_ht)
-            a_u25_1h = sum(a_ht['HT_Total'] <= 2) / len(a_ht)
-            if h_u25_1h >= 0.98 and a_u25_1h >= 0.98:
-                builder_blocks.append("1. Połowa: Under 2.5 gola")
-                block_probabilities.append((h_u25_1h + a_u25_1h) / 2)
+        for line in [1.5, 2.5, 3.5, 4.5]:
+            h_u_1h = sum(h_ht['HT_Total'] < line) / len(h_ht)
+            a_u_1h = sum(a_ht['HT_Total'] < line) / len(a_ht)
+            if h_u_1h >= 0.94 and a_u_1h >= 0.94:
+                builder_blocks.append(f"1. Połowa: Under {line} gola")
+                block_probabilities.append((h_u_1h + a_u_1h) / 2)
+                break
 
-    # --- TEST 3: GOLE GOSPODARZA (Uwzględnia max strzelonych u siebie ORAZ w całym sezonie ogółem) ---
+    # --- TEST 3: DRUGA POŁOWA UNDER 2.5 / 3.5 / 4.5 (ROZSZERZONY) ---
+    h_2h = h_dom.dropna(subset=['2H_Total'])
+    a_2h = a_wyj.dropna(subset=['2H_Total'])
+    if len(h_2h) >= 4 and len(a_2h) >= 4:
+        for line in [2.5, 3.5, 4.5]:
+            h_u_2h = sum(h_2h['2H_Total'] < line) / len(h_2h)
+            a_u_2h = sum(a_2h['2H_Total'] < line) / len(a_2h)
+            if h_u_2h >= 0.94 and a_u_2h >= 0.94:
+                builder_blocks.append(f"2. Połowa: Under {line} gola")
+                block_probabilities.append((h_u_2h + a_u_2h) / 2)
+                break
+
+    # --- TEST 4: GOLE GOSPODARZA UNDER 3.5 / 4.5 / 5.5 (Z DUŻYMI FAWORYTAMI) ---
     highest_h_scored = max(max_h_scored_dom, max_h_scored_all)
-    h_line = max(2, int(highest_h_scored) + 1)
-    h_u_prob = sum(h_dom['FTHG'] < h_line) / len(h_dom)
-    if h_u_prob >= 0.95 and h_line <= 4:
-        builder_blocks.append(f"{home}: Under {h_line}.5 gola")
-        block_probabilities.append(h_u_prob)
+    for line in [3.5, 4.5, 5.5]:
+        if line > highest_h_scored:
+            h_u_prob = sum(h_dom['FTHG'] < line) / len(h_dom)
+            h_all_u_prob = sum(h_total_all['Team_GF'] < line) / len(h_total_all)
+            if h_u_prob >= 0.95 and h_all_u_prob >= 0.94:
+                builder_blocks.append(f"{home}: Under {line} gola")
+                block_probabilities.append((h_u_prob + h_all_u_prob) / 2)
+                break
 
-    # --- TEST 4: GOLE GOŚCIA (Uwzględnia max strzelonych wyjazd ORAZ w całym sezonie ogółem) ---
+    # --- TEST 5: GOLE GOŚCIA UNDER 3.5 / 4.5 ---
     highest_a_scored = max(max_a_scored_wyj, max_a_scored_all)
-    a_line = max(1, int(highest_a_scored) + 1)
-    a_u_prob = sum(a_wyj['FTAG'] < a_line) / len(a_wyj)
-    if a_u_prob >= 0.95 and a_line <= 3:
-        builder_blocks.append(f"{away}: Under {a_line}.5 gola")
-        block_probabilities.append(a_u_prob)
+    for line in [3.5, 4.5]:
+        if line > highest_a_scored:
+            a_u_prob = sum(a_wyj['FTAG'] < line) / len(a_wyj)
+            a_all_u_prob = sum(a_total_all['Team_GF'] < line) / len(a_total_all)
+            if a_u_prob >= 0.95 and a_all_u_prob >= 0.94:
+                builder_blocks.append(f"{away}: Under {line} gola")
+                block_probabilities.append((a_u_prob + a_all_u_prob) / 2)
+                break
 
-    # AKCEPTACJA KUPONU AKO (Pewność skumulowana >= 94.5%)
+    # AKCEPTACJA KUPONU AKO (Pewność skumulowana podwyższona do minimum 95.0%)
     if len(builder_blocks) >= 3:
         final_builder_safety = round(np.prod(block_probabilities) * 100, 1)
-        if final_builder_safety >= 94.5:
+        if final_builder_safety >= 95.0:
             sugerowany_kupon = " + ".join(builder_blocks)
             
-            uzasadnienie = f"Pełne pokrycie statystyczne: zbadano {len(h_dom)} gier domowych i {len(h_total_all)} ogółem dla Gospodarza, oraz {len(a_wyj)} wyjazdowych i {len(a_total_all)} ogółem dla Gościa. "
-            uzasadnienie += f"Gospodarz u siebie najwięcej strzelił {max_h_scored_dom} i stracił {max_h_conceded_dom}. Ogółem w sezonie jego rekordy to {max_h_scored_all} (atrak) i {max_h_conceded_all} (defensywa). "
-            uzasadnienie += f"Gość na wyjazdach najwięcej strzelił {max_a_scored_wyj} i stracił {max_a_conceded_wyj}, a jego rekordy ogólne sezonu wynoszą {max_a_scored_all} (atrak) i {max_a_conceded_all} (defensywa). "
-            uzasadnienie += "Linie dobrane z pancernym marginesem bezpieczeństwa pod kupon AKO."
+            uzasadnienie = f"Maksymalna pewność AKO. Zbadano {len(h_dom)} gier domowych ({len(h_total_all)} ogółem) i {len(a_wyj)} wyjazdowych ({len(a_total_all)} ogółem). "
+            if "Over 0.5 gola" in sugerowany_kupon: uzasadnienie += "Wykryto 100% serii bramkowych (brak 0:0 w sezonie) -> wdrożono bezpieczny Over 0.5. "
+            uzasadnienie += f"Gospodarz max strzelił {max_h_scored_dom} i stracił {max_h_conceded_dom} (w domu), a w sezonie ogółem {max_h_scored_all}/{max_h_conceded_all}. "
+            uzasadnienie += f"Gość max strzelił {max_a_scored_wyj} i stracił {max_a_conceded_wyj} (wyjazd), a w sezonie ogółem {max_a_scored_all}/{max_a_conceded_all}. "
+            uzasadnienie += "Wszystkie górne limity dobrane z zapasem bezpieczeństwa."
 
             predictions_builder.append([
                 row['Date'], row['Time'], league, f"{home} - {away}", sugerowany_kupon, f"{final_builder_safety}%",
@@ -608,7 +626,7 @@ try:
     spreadsheet.worksheet("Fixtures").resize(rows=5000, cols=35)
     spreadsheet.worksheet("Results").resize(rows=10000, cols=65) 
     spreadsheet.worksheet("Predictions_1X").resize(rows=3000, cols=40)
-    spreadsheet.worksheet("Predictions_Builder").resize(rows=3000, cols=35) # Rozszerzono kolumny dla Builder Pro
+    spreadsheet.worksheet("Predictions_Builder").resize(rows=3000, cols=35)
 except: pass
 
 print("Wysyłam Czysty Terminarz do Google Sheets...")
