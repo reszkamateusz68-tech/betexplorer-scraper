@@ -109,7 +109,11 @@ for i, url in enumerate(urls, start=1):
 
         html = response.text
         soup = BeautifulSoup(html, "html.parser")
-        league = url_clean.split("/football/")[1].replace("/fixtures/", "").replace("/results/", "")
+        
+        # POPRAWKA 1: Czyszczenie parametrów ?stage=... bezpośrednio przy wyciąganiu nazwy ligi
+        league_raw = url_clean.split("/football/")[1].replace("/fixtures/", "").replace("/results/", "")
+        league = league_raw.split('?')[0].strip('/')
+        
         rows = soup.find_all("tr")
         mecz_count = 0
 
@@ -276,7 +280,6 @@ def calc_value(odd, avg):
 for outcome in [('Odd1', 'AvgH', 'Val_1'), ('OddX', 'AvgD', 'Val_X'), ('Odd2', 'AvgA', 'Val_2')]:
     results_df[outcome[2]] = results_df.apply(lambda row: calc_value(row[outcome[0]], row[outcome[1]]), axis=1)
 
-# NAPRAWA: Usunięty błąd składniowy cudzysłowu i klamry z poprzedniej wiadomości
 golden_cols = {
     'Match_ID': 'Match_ID', 'Date': 'Date', 'Time': 'Time', 'League': 'League', 'Home': 'Home', 'Away': 'Away',
     'FTHG': 'FTHG', 'FTAG': 'FTAG', 'Total_Goals': 'Total_Goals', 'HTHG': 'HTHG', 'HTAG': 'HTAG',
@@ -295,8 +298,11 @@ fixtures_clean = fixtures_df[['Match_ID', 'League', 'Date', 'Time', 'Home', 'Awa
 # ==========================================
 print("Generowanie inteligentnych tabel ligowych...")
 
+# POPRAWKA 2: Bezpieczne czyszczenie lat i linków w funkcji get_base_league
 def get_base_league(l):
-    return re.sub(r'-\d{4}(-\d{4})?$', '', str(l)).strip('/')
+    clean_l = str(l).split('?')[0].strip('/')
+    clean_l = re.sub(r'-\d{4}(-\d{4})?$', '', clean_l)
+    return clean_l
 
 results_clean['Date_Parsed'] = pd.to_datetime(results_clean['Date'], errors='coerce')
 results_clean = results_clean.sort_values(by='Date_Parsed', ascending=False)
@@ -349,25 +355,8 @@ for lg in league_tables['League'].unique():
 
 team_ppg = {(r['League'], r['Team']): float(str(r['PPG']).replace(',', '.')) for _, r in league_tables.iterrows()}
 
-def get_current_streaks(base_lg, team):
-    t_matches = valid_matches[(valid_matches['Base_League'] == base_lg) & ((valid_matches['Home'] == team) | (valid_matches['Away'] == team))].copy()
-    unbeaten, winless = 0, 0
-    ub_broken, wl_broken = False, False
-    for _, m in t_matches.iterrows():
-        is_home = (m['Home'] == team)
-        scored = int(m['FTHG']) if is_home else int(m['FTAG'])
-        conceded = int(m['FTAG']) if is_home else int(m['FTHG'])
-        if not ub_broken:
-            if scored >= conceded: unbeaten += 1
-            else: ub_broken = True
-        if not wl_broken:
-            if scored <= conceded: winless += 1
-            else: wl_broken = True
-        if ub_broken and wl_broken: break
-    return unbeaten, winless
-
 # ==========================================
-# 6a. ENGINE 1X PRO (Zaimplementowane Okno Kroczące 30 Meczów)
+# 6a. ENGINE 1X PRO
 # ==========================================
 print("Uruchamiam Engine 1X Pro...")
 predictions_1x = []
@@ -396,6 +385,7 @@ for idx, row in fixtures_clean.iterrows():
     if len(a_current) >= 30: a_window = a_current
     else: a_window = pd.concat([a_current, a_past.head(30 - len(a_current))])
 
+    # TARCZA OCHRONNA: Minimum 10 meczów ogółem w historii window
     if len(h_window) < 10 or len(a_window) < 10: continue
 
     h_1x_all_cnt = sum(h_all['FTHG'] >= h_all['FTAG'])
@@ -454,7 +444,6 @@ for idx, row in fixtures_clean.iterrows():
             f"{a_fts_pct}%", h_unbeaten, a_winless, h_proxy, arg
         ])
 
-# FIX: Przeniesione i zadeklarowane przed sekcją Builder
 headers_1x = [
     "Data", "Godzina", "Liga", "Mecz", "Prawdopodobieństwo_1X", "Value", "Fair_Odd (Twój)", "Buk_Odd (Rynek)",
     "H_Probka_Meczow", "H_1X_Wszystkie", "H_1X_OknoKroczace", "H_Porażki_vs_TOP", "H_Porażki_vs_MID", "H_Porażki_vs_BOTTOM",
@@ -465,7 +454,7 @@ df_pred_1x = pd.DataFrame(predictions_1x, columns=headers_1x).sort_values(by="Pr
 
 
 # ==========================================================
-# 6b. ENGINE BETBUILDER PRO V4 (Okno Kroczące 30 + Korekta Kursów)
+# 6b. ENGINE BETBUILDER PRO V4
 # ==========================================================
 print("Uruchamiam Engine BetBuilder Pro V4...")
 predictions_builder = []
@@ -615,7 +604,7 @@ for idx, row in fixtures_clean.iterrows():
             if estimated_bb_odd < 1.05: estimated_bb_odd = 1.05
             
             uzasadnienie = f"Stabilny zestaw kroczący (bufor 30 gier). "
-            if "Over 0.5 gola" in sugerowany_kupon: uzasadnienie += "Wykryto 100% serii bramkowych (brak 0:0 w historii) -> dodano bezpieczny Over 0.5. "
+            if "Over 0.5 gola" in sugerowany_kupon: uzasadnienie += "Wykryto 100% serii bramkowych (brak 0:0 in historii) -> dodano bezpieczny Over 0.5. "
 
             predictions_builder.append([
                 row['Date'], row['Time'], league, f"{home} - {away}", sugerowany_kupon, 
@@ -628,7 +617,6 @@ for idx, row in fixtures_clean.iterrows():
                 uzasadnienie
             ])
 
-# FIX: Przeniesione i zadeklarowane przed formaterem gsheets
 headers_builder = [
     "Data", "Godzina", "Liga", "Mecz", "Sugerowany Zestaw BetBuilder", "Szacowany_Kurs_BetBuilder", "Pewność Matematyczna",
     "H_Probka_Meczow", "A_Probka_Meczow",
