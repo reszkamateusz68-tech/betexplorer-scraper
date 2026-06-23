@@ -346,7 +346,6 @@ for lg in league_tables['League'].unique():
 
 team_ppg = {(r['League'], r['Team']): float(str(r['PPG']).replace(',', '.')) for _, r in league_tables.iterrows()}
 
-# Pomocnicza funkcja licząca bieżące passy (ze wszystkich meczów, chronologicznie)
 def get_current_streaks(lg, team):
     t_matches = valid_matches[(valid_matches['League'] == lg) & ((valid_matches['Home'] == team) | (valid_matches['Away'] == team))].copy()
     unbeaten, winless = 0, 0
@@ -423,7 +422,6 @@ for idx, row in fixtures_clean.iterrows():
         h_proxy = "PECH (Ukryta Forma)" if diff > 0.4 else ("SZCZĘŚCIE" if diff < -0.4 else "STABILNY")
     else: h_proxy = "Brak Danych"
 
-    # Pobieranie pass
     h_unbeaten, _ = get_current_streaks(league, home)
     _, a_winless = get_current_streaks(league, away)
 
@@ -431,15 +429,14 @@ for idx, row in fixtures_clean.iterrows():
     prob_h = ((h_1x_all_cnt / len(h_all)) * 0.4) + ((h_1x_10_cnt / len(h_10)) * 0.6)
     prob_a = ((sum(a_all['FTHG'] >= a_all['FTAG']) / len(a_all)) * 0.4) + ((sum(a_10['FTHG'] >= a_10['FTAG']) / len(a_10)) * 0.6)
     
-    # Modyfikator SoS (Siła kalendarza ostatnich 10 rywali)
-    avg_h_opp = sum([team_ppg.get((league, m['Away']), 1.3) for _, m in h_10]) / len(h_10)
-    avg_a_opp = sum([team_ppg.get((league, m['Home']), 1.3) for _, m in a_10]) / len(a_10)
+    # NAPRAWA: Dodane brakujące .iterrows() wewnątrz list comprehensions
+    avg_h_opp = sum([team_ppg.get((league, m['Away']), 1.3) for _, m in h_10.iterrows()]) / len(h_10)
+    avg_a_opp = sum([team_ppg.get((league, m['Home']), 1.3) for _, m in a_10.iterrows()]) / len(a_10)
     
     final_prob = min(max(((prob_h + prob_a) / 2) + ((avg_h_opp - 1.3) * 0.08) + ((avg_a_opp - 1.3) * 0.08), 0.05), 0.95)
     fair_odd = round(1 / final_prob, 2)
     value_perc = round(((buk_odd_1x / fair_odd) - 1) * 100, 2)
 
-    # SELEKCJA: Kryteria wejścia (Prawdopodobieństwo >= 66% oraz dodatnie Value)
     if final_prob >= 0.66 and value_perc > 0:
         arg = f"Gospodarz stabilny dom ({h_1x_10_cnt}/10 1X). Gość wyjazdy niemoc zwycięstw ({len(a_10)-a_2_10_cnt}/10 strata pkt). "
         if l_bot > 0: arg += "Ostrzeżenie: Gospodarz wpadł raz na dno tabeli. "
@@ -502,7 +499,7 @@ for sheet_name in ["Summary", "Fixtures", "Results", "League_Tables", "Predictio
 try:
     spreadsheet.worksheet("Fixtures").resize(rows=5000, cols=35)
     spreadsheet.worksheet("Results").resize(rows=10000, cols=65) 
-    spreadsheet.worksheet("Predictions_1X").resize(rows=3000, cols=40) # Zwiększono rozmiar pod szeroki raport
+    spreadsheet.worksheet("Predictions_1X").resize(rows=3000, cols=40)
 except: pass
 
 print("Wysyłam Czysty Terminarz do Google Sheets...")
