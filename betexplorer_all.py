@@ -120,6 +120,14 @@ def prepare_for_gsheets(df):
         output.append(new_row)
     return output
 
+def calc_value(odd, avg):
+    """Oblicza procentowe Value (Przewagę nad rynkiem) dla zakładów 1X2."""
+    try:
+        o, a = float(str(odd).replace(',', '.')), float(str(avg).replace(',', '.'))
+        if a > 0: return round(((o / a) - 1) * 100, 2)
+    except: pass
+    return np.nan
+
 # LISTA NA LOGI DO ZAKŁADKI SUMMARY
 scrape_report = []
 
@@ -140,7 +148,6 @@ except Exception as e:
 try: urls = pd.read_excel("ligi.xlsx")["URL"].dropna().tolist()
 except: urls = []
 
-# NAPRAWA 1: Przywrócenie definicji nagłówków dla requests
 headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -225,7 +232,6 @@ for i, url in enumerate(urls, start=1):
 
 df = pd.DataFrame(all_data, columns=["Type", "League", "Date", "Home", "Away", "Score", "Odd1", "OddX", "Odd2"]).drop_duplicates()
 
-# NAPRAWA 2: Pełne zabezpieczenie przed pustą bazą danych (Empty DataFrame Protection)
 if not df.empty:
     dates, times = zip(*[split_datetime(v) for v in df["Date"]])
     df["Date"], df["Time"] = dates, times
@@ -339,6 +345,16 @@ if not fixtures_df.empty:
     fixtures_df['Date_str'] = pd.to_datetime(fixtures_df['Date'], errors='coerce').dt.strftime('%Y%m%d').fillna('99999999')
     fixtures_df['Match_ID'] = fixtures_df['Date_str'] + "_" + fixtures_df['Home'].str[:3].str.upper() + "_" + fixtures_df['Away'].str[:3].str.upper()
 
+golden_cols = {
+    'Match_ID': 'Match_ID', 'Date': 'Date', 'Time': 'Time', 'League': 'League', 'Home': 'Home', 'Away': 'Away',
+    'FTHG': 'FTHG', 'FTAG': 'FTAG', 'Total_Goals': 'Total_Goals', 'HTHG': 'HTHG', 'HTAG': 'HTAG',
+    'HS': 'Shots_H', 'AS': 'Shots_A', 'HST': 'ShotsTarget_H', 'AST': 'ShotsTarget_A',
+    'HC': 'Corners_H', 'AC': 'Corners_A', 'HY': 'Cards_H', 'AY': 'Cards_A',
+    'Odd1': 'Odd_1', 'OddX': 'Odd_X', 'Odd2': 'Odd_2',
+    'AvgH': 'Avg_1', 'AvgD': 'Avg_X', 'AvgA': 'Avg_2',
+    'Val_1': 'Val_1', 'Val_X': 'Val_X', 'Val_2': 'Val_2'
+}
+
 results_clean = results_df[list(golden_cols.keys())].rename(columns=golden_cols) if not results_df.empty else pd.DataFrame(columns=golden_cols.values())
 fixtures_clean = fixtures_df[['Match_ID', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd1', 'OddX', 'Odd2']].rename(columns={'Odd1': 'Odd_1', 'OddX': 'Odd_X', 'Odd2': 'Odd_2'}) if not fixtures_df.empty else pd.DataFrame(columns=['Match_ID', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd_1', 'Odd_X', 'Odd_2'])
 
@@ -397,6 +413,7 @@ for lg in league_tables['League'].unique():
         for t in lg_teams['Team']: team_tiers[(lg, t)] = 'MID'
 
 team_ppg = {(r['League'], r['Team']): float(str(r['PPG']).replace(',', '.')) for _, r in league_tables.iterrows()}
+
 
 # ==========================================
 # 6a. ENGINE 1X PRO
@@ -475,7 +492,7 @@ for idx, row in fixtures_clean.iterrows():
     value_perc = round(((buk_odd_1x / fair_odd) - 1) * 100, 2)
 
     if final_prob >= 0.66 and value_perc > 0:
-        arg = f"Gospodarz stabilny dom ({h_1x_window_cnt}/{len(h_window)} w oknie 30 gier). "
+        arg = f"Gospodarz stabilny dom ({h_1x_window_cnt}/{len(h_window)} w oknie do 30 gier). "
         predictions_1x.append([
             row['Date'], row['Time'], league, f"{home} - {away}", f"{round(final_prob*100)}%", f"{value_perc}%",
             fair_odd, buk_odd_1x, 
@@ -486,6 +503,12 @@ for idx, row in fixtures_clean.iterrows():
             f"{a_fts_pct}%", h_unbeaten, a_winless, h_proxy, arg
         ])
 
+headers_1x = [
+    "Data", "Godzina", "Liga", "Mecz", "Prawdopodobieństwo_1X", "Value", "Fair_Odd (Twój)", "Buk_Odd (Rynek)",
+    "H_Probka_Meczow", "H_1X_Wszystkie", "H_1X_OknoKroczace", "H_Porażki_vs_TOP", "H_Porażki_vs_MID", "H_Porażki_vs_BOTTOM",
+    "A_Probka_Meczow", "A_Wygrane_Wszystkie", "A_Wygrane_OknoKroczace", "A_Wygrane_vs_TOP", "A_Wygrane_vs_MID", "A_Wygrane_vs_BOTTOM",
+    "A_FTS_Wyjazd_%", "H_Passa_Bez_Porażki", "A_Passa_Bez_Wygranej", "H_Proxy_xG_Status", "Argumentacja Modelu"
+]
 df_pred_1x = pd.DataFrame(predictions_1x, columns=headers_1x).sort_values(by="Prawdopodobieństwo_1X", ascending=False) if predictions_1x else pd.DataFrame(columns=headers_1x)
 
 
@@ -639,7 +662,7 @@ for idx, row in fixtures_clean.iterrows():
             estimated_bb_odd = round((1.0 + sum([(o - 1.0) * 0.52 for o in block_estimated_odds])) * 0.95, 2)
             if estimated_bb_odd < 1.05: estimated_bb_odd = 1.05
             
-            uzasadnienie = f"Stabilny zestaw kroczący (bufor 30 gier). "
+            uzasadnienie = f"Stabilny zestaw kroczący. "
             if "Over 0.5 gola" in sugerowany_kupon: uzasadnienie += "Wykryto 100% serii bramkowych (brak 0:0 w historii) -> dodano bezpieczny Over 0.5. "
 
             predictions_builder.append([
@@ -653,8 +676,14 @@ for idx, row in fixtures_clean.iterrows():
                 uzasadnienie
             ])
 
+headers_builder = [
+    "Data", "Godzina", "Liga", "Mecz", "Sugerowany Zestaw BetBuilder", "Szacowany_Kurs_BetBuilder", "Pewność Matematyczna",
+    "H_Probka_Meczow", "A_Probka_Meczow",
+    "H_Max_Strzelone_Dom", "H_Max_Stracone_Dom", "H_Max_Strzelone_Ogolem", "H_Max_Stracone_Ogolem",
+    "A_Max_Strzelone_Wyjazd", "A_Max_Stracone_Wyjazd", "A_Max_Strzelone_Ogolem", "A_Max_Stracone_Ogolem",
+    "Analiza i Uzasadnienie Statystyczne"
+]
 df_pred_builder = pd.DataFrame(predictions_builder, columns=headers_builder).sort_values(by="Pewność Matematyczna", ascending=False) if predictions_builder else pd.DataFrame(columns=headers_builder)
-
 
 # ==========================================
 # 8. WYSYŁKA GOOGLE SHEETS
