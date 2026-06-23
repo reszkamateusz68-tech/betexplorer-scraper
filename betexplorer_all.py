@@ -15,7 +15,7 @@ from google.oauth2.service_account import Credentials
 today = datetime.now()
 
 # ==========================================================
-# GŁÓWNE FUNKCJE POMOCNICZE (Zadeklarowane na samej górze)
+# GŁÓWNE FUNKCJE POMOCNICZE
 # ==========================================================
 def split_datetime(value):
     if pd.isna(value):
@@ -99,7 +99,7 @@ def get_current_streaks(base_lg, team):
     return unbeaten, winless
 
 def prepare_for_gsheets(df):
-    """Zabezpiecza przed błędami JSON i formatuje liczby pod polskie Sheets (przecinki)."""
+    """Zabezpiecza przed błędami JSON i formatuje liczby pod polskie Sheets."""
     output = [df.columns.tolist()]
     for row in df.values.tolist():
         new_row = []
@@ -414,7 +414,6 @@ for lg in league_tables['League'].unique():
 
 team_ppg = {(r['League'], r['Team']): float(str(r['PPG']).replace(',', '.')) for _, r in league_tables.iterrows()}
 
-
 # ==========================================
 # 6a. ENGINE 1X PRO
 # ==========================================
@@ -491,7 +490,8 @@ for idx, row in fixtures_clean.iterrows():
     fair_odd = round(1 / final_prob, 2)
     value_perc = round(((buk_odd_1x / fair_odd) - 1) * 100, 2)
 
-    if final_prob >= 0.66 and value_perc > 0:
+    # USUNIĘTO WARUNEK "value_perc > 0". Zostawiamy czyste prawdopodobieństwo >= 70%.
+    if final_prob >= 0.70:
         arg = f"Gospodarz stabilny dom ({h_1x_window_cnt}/{len(h_window)} w oknie do 30 gier). "
         predictions_1x.append([
             row['Date'], row['Time'], league, f"{home} - {away}", f"{round(final_prob*100)}%", f"{value_perc}%",
@@ -575,7 +575,6 @@ for idx, row in fixtures_clean.iterrows():
     block_probabilities = []
     block_estimated_odds = []
     
-    # --- TEST 0: OVER 0.5 GOLA ---
     h_dom_o05 = sum(h_dom['Total_Goals'] >= 1) / len(h_dom)
     a_wyj_o05 = sum(a_wyj['Total_Goals'] >= 1) / len(a_wyj)
     h_all_o05 = sum(h_total_all['Total_Goals'] >= 1) / len(h_total_all)
@@ -586,7 +585,6 @@ for idx, row in fixtures_clean.iterrows():
         block_probabilities.append(1.0)
         block_estimated_odds.append(1.04)
 
-    # --- TEST 1: MECZ UNDER 4.5 / 5.5 / 6.5 ---
     for line in [4.5, 5.5, 6.5]:
         h_u = sum(h_dom['Total_Goals'] < line) / len(h_dom)
         a_u = sum(a_wyj['Total_Goals'] < line) / len(a_wyj)
@@ -600,7 +598,6 @@ for idx, row in fixtures_clean.iterrows():
             block_estimated_odds.append(round(1 / (avg_prob * 0.91), 2))
             break
 
-    # --- TEST 2: 1. POŁOWA UNDER 1.5 / 2.5 / 3.5 / 4.5 ---
     h_ht = h_dom.dropna(subset=['HT_Total'])
     a_ht = a_wyj.dropna(subset=['HT_Total'])
     if len(h_ht) >= 3 and len(a_ht) >= 3:
@@ -614,7 +611,6 @@ for idx, row in fixtures_clean.iterrows():
                 block_estimated_odds.append(round(1 / (avg_prob * 0.91), 2))
                 break
 
-    # --- TEST 3: 2. POŁOWA UNDER 2.5 / 3.5 / 4.5 ---
     h_2h = h_dom.dropna(subset=['2H_Total'])
     a_2h = a_wyj.dropna(subset=['2H_Total'])
     if len(h_2h) >= 3 and len(a_2h) >= 3:
@@ -628,7 +624,6 @@ for idx, row in fixtures_clean.iterrows():
                 block_estimated_odds.append(round(1 / (avg_prob * 0.91), 2))
                 break
 
-    # --- TEST 4: GOSPODARZ UNDER 3.5 / 4.5 / 5.5 ---
     highest_h_scored = max(max_h_scored_dom, max_h_scored_all)
     for line in [3.5, 4.5, 5.5]:
         if line > highest_h_scored:
@@ -641,7 +636,6 @@ for idx, row in fixtures_clean.iterrows():
                 block_estimated_odds.append(round(1 / (avg_prob * 0.91), 2))
                 break
 
-    # --- TEST 5: GOŚĆ UNDER 3.5 / 4.5 ---
     highest_a_scored = max(max_a_scored_wyj, max_a_scored_all)
     for line in [3.5, 4.5]:
         if line > highest_a_scored:
