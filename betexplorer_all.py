@@ -819,12 +819,11 @@ headers_corners = [
 df_pred_corners = pd.DataFrame(predictions_corners, columns=headers_corners).sort_values(by="Pewność Historyczna", ascending=False) if predictions_corners else pd.DataFrame(columns=headers_corners)
 
 # ==========================================================
-# 6e. ENGINE SHOTS PRO (Strzały i Strzały Celne H2H)
+# 6e. ENGINE SHOTS PRO (Gospodarz: Strzały i Strzały Celne)
 # ==========================================================
-print("Uruchamiam Engine Shots Pro (Strzały i Strzały Celne)...")
+print("Uruchamiam Engine Shots Pro (Dominacja Gospodarzy)...")
 predictions_shots = []
 
-# Baza meczów z dostępnymi danymi o strzałach
 valid_shots = valid_matches.dropna(subset=['Shots_H', 'Shots_A', 'ShotsTarget_H', 'ShotsTarget_A']).copy()
 
 if not valid_shots.empty:
@@ -838,117 +837,74 @@ for idx, row in fixtures_clean.iterrows():
     league, home, away = row['League'], row['Home'], row['Away']
     fixture_base = get_base_league(league)
 
-    h_all_s = valid_shots[(valid_shots['Base_League'] == fixture_base) & ((valid_shots['Home'] == home) | (valid_shots['Away'] == home))].copy()
-    a_all_s = valid_shots[(valid_shots['Base_League'] == fixture_base) & ((valid_shots['Home'] == away) | (valid_shots['Away'] == away))].copy()
-
-    # Potrzebujemy min. 5 meczów w sezonie danej drużyny, aby statystyki były miarodajne
-    if len(h_all_s) < 5 or len(a_all_s) < 5: continue
-
     h_dom_s = valid_shots[(valid_shots['Base_League'] == fixture_base) & (valid_shots['Home'] == home)].copy()
     a_wyj_s = valid_shots[(valid_shots['Base_League'] == fixture_base) & (valid_shots['Away'] == away)].copy()
 
-    if len(h_dom_s) < 3 or len(a_wyj_s) < 3: continue
+    # Model wymaga chociaż minimalnej próbki dla meczów dom/wyjazd
+    if len(h_dom_s) < 2 or len(a_wyj_s) < 2: continue
 
-    # Obliczenia różnic dla Gospodarza
-    h_all_s['S_Diff'] = np.where(h_all_s['Home'] == home, h_all_s['Shots_H'] - h_all_s['Shots_A'], h_all_s['Shots_A'] - h_all_s['Shots_H'])
-    h_all_s['ST_Diff'] = np.where(h_all_s['Home'] == home, h_all_s['ShotsTarget_H'] - h_all_s['ShotsTarget_A'], h_all_s['ShotsTarget_A'] - h_all_s['ShotsTarget_H'])
+    # STRZAŁY OGÓŁEM: Obliczenia zwycięstw (kto miał więcej)
     h_dom_s['S_Diff'] = h_dom_s['Shots_H'] - h_dom_s['Shots_A']
-    h_dom_s['ST_Diff'] = h_dom_s['ShotsTarget_H'] - h_dom_s['ShotsTarget_A']
+    a_wyj_s['S_Diff'] = a_wyj_s['Shots_A'] - a_wyj_s['Shots_H'] # Różnica z perspektywy gościa
 
-    h_s_win_all = sum(h_all_s['S_Diff'] > 0)
     h_s_win_dom = sum(h_dom_s['S_Diff'] > 0)
-    h_st_win_all = sum(h_all_s['ST_Diff'] > 0)
-    h_st_win_dom = sum(h_dom_s['ST_Diff'] > 0)
+    a_s_lose_wyj = sum(a_wyj_s['S_Diff'] < 0) # Ile razy Gość na wyjeździe pozwolił rywalowi na więcej strzałów
 
-    # Obliczenia różnic dla Gościa
-    a_all_s['S_Diff'] = np.where(a_all_s['Home'] == away, a_all_s['Shots_H'] - a_all_s['Shots_A'], a_all_s['Shots_A'] - a_all_s['Shots_H'])
-    a_all_s['ST_Diff'] = np.where(a_all_s['Home'] == away, a_all_s['ShotsTarget_H'] - a_all_s['ShotsTarget_A'], a_all_s['ShotsTarget_A'] - a_all_s['ShotsTarget_H'])
-    a_wyj_s['S_Diff'] = a_wyj_s['Shots_A'] - a_wyj_s['Shots_H']
+    # STRZAŁY CELNE: Obliczenia zwycięstw
+    h_dom_s['ST_Diff'] = h_dom_s['ShotsTarget_H'] - h_dom_s['ShotsTarget_A']
     a_wyj_s['ST_Diff'] = a_wyj_s['ShotsTarget_A'] - a_wyj_s['ShotsTarget_H']
 
-    a_s_win_all = sum(a_all_s['S_Diff'] > 0)
-    a_s_win_wyj = sum(a_wyj_s['S_Diff'] > 0)
-    a_st_win_all = sum(a_all_s['ST_Diff'] > 0)
-    a_st_win_wyj = sum(a_wyj_s['ST_Diff'] > 0)
+    h_st_win_dom = sum(h_dom_s['ST_Diff'] > 0)
+    a_st_lose_wyj = sum(a_wyj_s['ST_Diff'] < 0)
 
     # -----------------------------------------------------
-    # SZACUNEK PRAWDOPODOBIEŃSTWA (KTO ZDOMINUJE)
-    # Zderzamy siłę ataku jednej z podatnością na strzały drugiej
+    # WAGI: 4 dla Gospodarza w Domu, 1 dla Gościa na Wyjeździe
     # -----------------------------------------------------
+    waga_dom = 4.0
+    waga_wyj = 1.0
+    suma_wag = waga_dom + waga_wyj
+
+    # Prawdopodobieństwo: Strzały (Więcej dla Gospodarza)
+    prob_h_s = ((h_s_win_dom / len(h_dom_s)) * waga_dom + (a_s_lose_wyj / len(a_wyj_s)) * waga_wyj) / suma_wag
     
-    # 1. Prawdopodobieństwo, że Gospodarz odda więcej strzałów ogółem
-    prob_h_more_s = ( (h_s_win_dom / len(h_dom_s)) + (h_s_win_all / len(h_all_s)) + (sum(a_wyj_s['S_Diff'] < 0) / len(a_wyj_s)) + (sum(a_all_s['S_Diff'] < 0) / len(a_all_s)) ) / 4
-    
-    # 2. Prawdopodobieństwo, że Gość odda więcej strzałów ogółem
-    prob_a_more_s = ( (a_s_win_wyj / len(a_wyj_s)) + (a_s_win_all / len(a_all_s)) + (sum(h_dom_s['S_Diff'] < 0) / len(h_dom_s)) + (sum(h_all_s['S_Diff'] < 0) / len(h_all_s)) ) / 4
+    # Prawdopodobieństwo: Strzały Celne (Więcej dla Gospodarza)
+    prob_h_st = ((h_st_win_dom / len(h_dom_s)) * waga_dom + (a_st_lose_wyj / len(a_wyj_s)) * waga_wyj) / suma_wag
 
-    # 3. Prawdopodobieństwo, że Gospodarz odda więcej celnych
-    prob_h_more_st = ( (h_st_win_dom / len(h_dom_s)) + (h_st_win_all / len(h_all_s)) + (sum(a_wyj_s['ST_Diff'] < 0) / len(a_wyj_s)) + (sum(a_all_s['ST_Diff'] < 0) / len(a_all_s)) ) / 4
-    
-    # 4. Prawdopodobieństwo, że Gość odda więcej celnych
-    prob_a_more_st = ( (a_st_win_wyj / len(a_wyj_s)) + (a_st_win_all / len(a_all_s)) + (sum(h_dom_s['ST_Diff'] < 0) / len(h_dom_s)) + (sum(h_all_s['ST_Diff'] < 0) / len(h_all_s)) ) / 4
+    # -----------------------------------------------------
+    # SZACUNEK KURSU Z REDUKCJĄ NADWYŻKI O 50%
+    # -----------------------------------------------------
+    raw_odd_s = (1 / prob_h_s) if prob_h_s > 0 else 99.0
+    est_odd_s = round(1.0 + ((raw_odd_s - 1.0) / 1.5), 2) if raw_odd_s > 1.0 else 1.01
 
-    # Wybór najbardziej pewnego typu (Tolerancja bezpieczeństwa to minimum 80%)
-    best_prob = 0
-    best_type = ""
-    category = ""
+    raw_odd_st = (1 / prob_h_st) if prob_h_st > 0 else 99.0
+    est_odd_st = round(1.0 + ((raw_odd_st - 1.0) / 1.5), 2) if raw_odd_st > 1.0 else 1.01
 
-    if prob_h_more_s > 0.80: best_prob, best_type, category = prob_h_more_s, f"Więcej Strzałów: {home} (1)", "Strzały"
-    elif prob_a_more_s > 0.80: best_prob, best_type, category = prob_a_more_s, f"Więcej Strzałów: {away} (2)", "Strzały"
+    # Średnie różnice do analizy
+    avg_diff_s_dom = round(h_dom_s['S_Diff'].mean(), 1)
+    avg_diff_s_wyj = round(a_wyj_s['S_Diff'].mean(), 1) # Na minusie oznacza przewagę rywali
+    avg_diff_st_dom = round(h_dom_s['ST_Diff'].mean(), 1)
+    avg_diff_st_wyj = round(a_wyj_s['ST_Diff'].mean(), 1)
 
-    if prob_h_more_st > 0.80 and prob_h_more_st > best_prob: best_prob, best_type, category = prob_h_more_st, f"Więcej Celnych: {home} (1)", "Celne"
-    elif prob_a_more_st > 0.80 and prob_a_more_st > best_prob: best_prob, best_type, category = prob_a_more_st, f"Więcej Celnych: {away} (2)", "Celne"
+    predictions_shots.append([
+        row['Date'], row['Time'], league, f"{home} - {away}",
+        
+        # Sekcja Strzałów
+        f"{round(prob_h_s * 100, 1)}%", str(est_odd_s).replace('.', ','),
+        f"{h_s_win_dom}/{len(h_dom_s)}", str(avg_diff_s_dom).replace('.', ','),
+        f"{a_s_lose_wyj}/{len(a_wyj_s)}", str(avg_diff_s_wyj).replace('.', ','),
 
-    if best_prob > 0.80:
-        # Obliczenie szacowanego kursu u bukmachera (z marżą bukmachera ~8-10%)
-        est_odd = round(1 / (best_prob * 0.91), 2)
-        if est_odd < 1.05: est_odd = 1.05
-
-        h_s_diff_dom_avg = round(h_dom_s['S_Diff'].mean(), 1)
-        h_s_diff_all_avg = round(h_all_s['S_Diff'].mean(), 1)
-        a_s_diff_wyj_avg = round(a_wyj_s['S_Diff'].mean(), 1)
-        a_s_diff_all_avg = round(a_all_s['S_Diff'].mean(), 1)
-
-        h_st_diff_dom_avg = round(h_dom_s['ST_Diff'].mean(), 1)
-        h_st_diff_all_avg = round(h_all_s['ST_Diff'].mean(), 1)
-        a_st_diff_wyj_avg = round(a_wyj_s['ST_Diff'].mean(), 1)
-        a_st_diff_all_avg = round(a_all_s['ST_Diff'].mean(), 1)
-
-        if category == "Strzały":
-            uzasadnienie = f"Różnica strzałów śr: Gosp Dom ({h_s_diff_dom_avg}), Gość Wyj ({a_s_diff_wyj_avg}). "
-            uzasadnienie += f"Dominuje rywali: Gosp w Domu ({h_s_win_dom}/{len(h_dom_s)}), Gość na Wyj ({a_s_win_wyj}/{len(a_wyj_s)} meczów)."
-        else:
-            uzasadnienie = f"Różnica celnych śr: Gosp Dom ({h_st_diff_dom_avg}), Gość Wyj ({a_st_diff_wyj_avg}). "
-            uzasadnienie += f"Dominuje rywali: Gosp w Domu ({h_st_win_dom}/{len(h_dom_s)}), Gość na Wyj ({a_st_win_wyj}/{len(a_wyj_s)} meczów)."
-
-        predictions_shots.append([
-            row['Date'], row['Time'], league, f"{home} - {away}",
-            best_type, str(est_odd).replace('.', ','), f"{round(best_prob*100, 1)}%",
-            f"{h_s_win_dom}/{len(h_dom_s)} ({round((h_s_win_dom/len(h_dom_s))*100)}%)",
-            f"{h_s_win_all}/{len(h_all_s)} ({round((h_s_win_all/len(h_all_s))*100)}%)",
-            str(h_s_diff_dom_avg).replace('.', ','), str(h_s_diff_all_avg).replace('.', ','),
-            f"{a_s_win_wyj}/{len(a_wyj_s)} ({round((a_s_win_wyj/len(a_wyj_s))*100)}%)",
-            f"{a_s_win_all}/{len(a_all_s)} ({round((a_s_win_all/len(a_all_s))*100)}%)",
-            str(a_s_diff_wyj_avg).replace('.', ','), str(a_s_diff_all_avg).replace('.', ','),
-            
-            f"{h_st_win_dom}/{len(h_dom_s)} ({round((h_st_win_dom/len(h_dom_s))*100)}%)",
-            f"{h_st_win_all}/{len(h_all_s)} ({round((h_st_win_all/len(h_all_s))*100)}%)",
-            str(h_st_diff_dom_avg).replace('.', ','), str(h_st_diff_all_avg).replace('.', ','),
-            f"{a_st_win_wyj}/{len(a_wyj_s)} ({round((a_st_win_wyj/len(a_wyj_s))*100)}%)",
-            f"{a_st_win_all}/{len(a_all_s)} ({round((a_st_win_all/len(a_all_s))*100)}%)",
-            str(a_st_diff_wyj_avg).replace('.', ','), str(a_st_diff_all_avg).replace('.', ','),
-            uzasadnienie
-        ])
+        # Sekcja Strzałów Celnych
+        f"{round(prob_h_st * 100, 1)}%", str(est_odd_st).replace('.', ','),
+        f"{h_st_win_dom}/{len(h_dom_s)}", str(avg_diff_st_dom).replace('.', ','),
+        f"{a_st_lose_wyj}/{len(a_wyj_s)}", str(avg_diff_st_wyj).replace('.', ',')
+    ])
 
 headers_shots = [
-    "Data", "Godzina", "Liga", "Mecz", "Sugerowany Typ (H2H Strzały/Celne)", "Szacowany_Kurs", "Prawdopodobieństwo",
-    "Gosp: Więcej_Strzałów_Dom", "Gosp: Więcej_Strzałów_Ogółem", "Gosp: Śr_Różnica_Strzałów_Dom", "Gosp: Śr_Różnica_Strzałów_Ogółem",
-    "Gość: Więcej_Strzałów_Wyjazd", "Gość: Więcej_Strzałów_Ogółem", "Gość: Śr_Różnica_Strzałów_Wyjazd", "Gość: Śr_Różnica_Strzałów_Ogółem",
-    "Gosp: Więcej_Celnych_Dom", "Gosp: Więcej_Celnych_Ogółem", "Gosp: Śr_Różnica_Celnych_Dom", "Gosp: Śr_Różnica_Celnych_Ogółem",
-    "Gość: Więcej_Celnych_Wyjazd", "Gość: Więcej_Celnych_Ogółem", "Gość: Śr_Różnica_Celnych_Wyjazd", "Gość: Śr_Różnica_Celnych_Ogółem",
-    "Analiza Statystyczna"
+    "Data", "Godzina", "Liga", "Mecz", 
+    "S: Szansa Gosp", "S: Kurs Szac.", "S: Gosp Wygrane Dom", "S: Gosp Śr Różnica Dom", "S: Gość Przegrane Wyjazd", "S: Gość Śr Różnica Wyjazd",
+    "ST: Szansa Gosp", "ST: Kurs Szac.", "ST: Gosp Wygrane Dom", "ST: Gosp Śr Różnica Dom", "ST: Gość Przegrane Wyjazd", "ST: Gość Śr Różnica Wyjazd"
 ]
-df_pred_shots = pd.DataFrame(predictions_shots, columns=headers_shots).sort_values(by="Prawdopodobieństwo", ascending=False) if predictions_shots else pd.DataFrame(columns=headers_shots)
+df_pred_shots = pd.DataFrame(predictions_shots, columns=headers_shots).sort_values(by="S: Szansa Gosp", ascending=False) if predictions_shots else pd.DataFrame(columns=headers_shots)
 
 # ==========================================
 # 7. WYSYŁKA GOOGLE SHEETS
@@ -969,7 +925,7 @@ try:
     spreadsheet.worksheet("Predictions_Builder").resize(rows=3000, cols=35)
     spreadsheet.worksheet("Predictions_Multigol").resize(rows=1500, cols=20)
     spreadsheet.worksheet("Predictions_Corners").resize(rows=1500, cols=20)
-    spreadsheet.worksheet("Predictions_Shots").resize(rows=1500, cols=25)
+    spreadsheet.worksheet("Predictions_Shots").resize(rows=3000, cols=25)
 except: pass
 
 print("Wysyłam Czysty Terminarz do Google Sheets...")
