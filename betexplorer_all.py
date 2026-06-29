@@ -39,28 +39,40 @@ def split_datetime(value):
     return value, ""
 
 def categorize_date(d_str):
+    # 1. Zabezpieczenie przed pustymi wartościami z arkusza
+    if pd.isna(d_str) or str(d_str).strip() in ["", "nan", "NaT", "None"]:
+        return "Nieznany"
+        
     try:
-        d = pd.to_datetime(d_str, format='%d.%m.%Y').date()
-    except:
-        try:
-            d = pd.to_datetime(d_str).date()
-        except:
+        # 2. Bezpieczne parsowanie (errors='coerce' zamieni błędy na NaT)
+        d = pd.to_datetime(str(d_str), format='%d.%m.%Y', errors='coerce')
+        if pd.isna(d):
+            d = pd.to_datetime(str(d_str), errors='coerce')
+            
+        # 3. Jeśli ostatecznie wyszło NaT, przerywamy
+        if pd.isna(d):
             return "Nieznany"
             
-    today_date = datetime.now().date()
-    delta = (d - today_date).days
-    
-    if delta < 0: return "Przeszłość"
-    if delta == 0: return "Dziś"
-    if delta == 1: return "Jutro"
-    
-    # Jeśli to w ciągu najbliższych 7 dni i jest to Piątek(4), Sobota(5) lub Niedziela(6)
-    if 2 <= delta <= 7 and d.weekday() >= 4:
-        return "Ten Weekend"
-    elif 2 <= delta <= 7:
-        return "Ten Tydzień"
-    else:
-        return "Przyszłość"
+        d_date = d.date()
+        today_date = datetime.now().date()
+        
+        # 4. Bezpieczna matematyka
+        delta = (d_date - today_date).days
+        
+        if delta < 0: return "Przeszłość"
+        if delta == 0: return "Dziś"
+        if delta == 1: return "Jutro"
+        
+        # Jeśli to w ciągu najbliższych 7 dni i jest to Piątek(4), Sobota(5) lub Niedziela(6)
+        if 2 <= delta <= 7 and d_date.weekday() >= 4:
+            return "Ten Weekend"
+        elif 2 <= delta <= 7:
+            return "Ten Tydzień"
+        else:
+            return "Przyszłość"
+            
+    except Exception:
+        return "Nieznany"
 
 def get_base_league(l):
     clean_l = str(l).split('?')[0].strip('/')
