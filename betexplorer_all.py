@@ -1064,7 +1064,6 @@ if all_generated_predictions:
             for idx in df_historia[w_oczek_mask].index:
                 klucz = df_historia.at[idx, 'Unikalny_Klucz']
                 if klucz in map_szansa:
-                    # Rzutujemy absolutnie WSZYSTKO na tekst (str)
                     df_historia.at[idx, 'Szansa'] = str(map_szansa[klucz])
                     df_historia.at[idx, 'Kurs_Szac'] = str(map_kurs[klucz])
                     df_historia.at[idx, 'Argumentacja'] = str(map_arg[klucz])
@@ -1073,6 +1072,18 @@ if all_generated_predictions:
                     if pd.notna(odd_val) and str(odd_val).strip() not in ["-", ""]:
                         df_historia.at[idx, 'Odds'] = str(odd_val)
         # ---------------------------------
+
+        # --- ZAUTOMATYZOWANE CZYSZCZENIE (GARBAGE COLLECTOR) ---
+        # Usuwa stare "duchy", które straciły opłacalność matematyczną (algorytm ich już nie generuje),
+        # mają puste kolumny Szansy i nie zostały przez Ciebie ręcznie zaakceptowane.
+        ghost_mask = (df_historia['Status'] == "W OCZEKIWANIU") & \
+                     (df_historia['Szansa'] == "") & \
+                     (df_historia['Akceptacja'] == "") & \
+                     (~df_historia['Unikalny_Klucz'].isin(nowe_typy_df['Unikalny_Klucz']))
+        
+        if ghost_mask.any():
+            df_historia = df_historia[~ghost_mask]
+        # -------------------------------------------------------
         
         do_dodania = nowe_typy_df[~nowe_typy_df['Unikalny_Klucz'].isin(df_historia['Unikalny_Klucz'])].copy()
         do_dodania = do_dodania.drop(columns=['Unikalny_Klucz'])
@@ -1081,7 +1092,6 @@ if all_generated_predictions:
         do_dodania = nowe_typy_df.copy()
         
     df_historia = pd.concat([df_historia, do_dodania], ignore_index=True)
-
 def evaluate_bet(bet_type, row_data):
     bet = str(bet_type).upper().strip()
     
