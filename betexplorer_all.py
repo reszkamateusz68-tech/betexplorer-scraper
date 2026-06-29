@@ -38,6 +38,30 @@ def split_datetime(value):
     except: pass
     return value, ""
 
+def categorize_date(d_str):
+    try:
+        d = pd.to_datetime(d_str, format='%d.%m.%Y').date()
+    except:
+        try:
+            d = pd.to_datetime(d_str).date()
+        except:
+            return "Nieznany"
+            
+    today_date = datetime.now().date()
+    delta = (d - today_date).days
+    
+    if delta < 0: return "Przeszłość"
+    if delta == 0: return "Dziś"
+    if delta == 1: return "Jutro"
+    
+    # Jeśli to w ciągu najbliższych 7 dni i jest to Piątek(4), Sobota(5) lub Niedziela(6)
+    if 2 <= delta <= 7 and d.weekday() >= 4:
+        return "Ten Weekend"
+    elif 2 <= delta <= 7:
+        return "Ten Tydzień"
+    else:
+        return "Przyszłość"
+
 def get_base_league(l):
     clean_l = str(l).split('?')[0].strip('/')
     clean_l = re.sub(r'-\d{4}(-\d{4})?$', '', clean_l)
@@ -286,7 +310,6 @@ if not fd_df.empty and not results_df.empty:
 # ==========================================
 print("Czyszczenie bazy - Złota Struktura...")
 
-# Oczyszczony słownik - usunięte bezużyteczne średnie kursy i kartki
 golden_cols = {
     'Match_ID': 'Match_ID', 'Date': 'Date', 'Time': 'Time', 'League': 'League', 'Home': 'Home', 'Away': 'Away',
     'FTHG': 'FTHG', 'FTAG': 'FTAG', 'Total_Goals': 'Total_Goals', 'HTHG': 'HTHG', 'HTAG': 'HTAG',
@@ -307,7 +330,6 @@ if not results_df.empty:
         results_df['HTHG'] = results_df['HTHG'].combine_first(pd.to_numeric(results_df['Gole_Gosp_1H'], errors='coerce'))
         results_df['HTAG'] = results_df['HTAG'].combine_first(pd.to_numeric(results_df['Gole_Gosc_1H'], errors='coerce'))
 
-    # Ujednolicona weryfikacja kluczowych kolumn piłkarskich
     fd_expected_cols = ['HS', 'AS', 'HST', 'AST', 'HC', 'AC']
     for col in fd_expected_cols:
         if col not in results_df.columns: results_df[col] = np.nan
@@ -318,9 +340,13 @@ if not results_df.empty:
 if not fixtures_df.empty:
     fixtures_df['Date_str'] = pd.to_datetime(fixtures_df['Date'], errors='coerce').dt.strftime('%Y%m%d').fillna('99999999')
     fixtures_df['Match_ID'] = fixtures_df['Date_str'] + "_" + fixtures_df['Home'].str[:3].str.upper() + "_" + fixtures_df['Away'].str[:3].str.upper()
+    fixtures_df['Termin'] = fixtures_df['Date'].apply(categorize_date)
+    
+    # ODRZUCAMY mecze, które nie mają jeszcze kursów (usuwamy śmieci z końca sezonu)
+    fixtures_df = fixtures_df[~fixtures_df['Odd1'].astype(str).str.strip().isin(["", "-", "nan"])]
 
 results_clean = results_df[list(golden_cols.keys())].rename(columns=golden_cols) if not results_df.empty else pd.DataFrame(columns=golden_cols.values())
-fixtures_clean = fixtures_df[['Match_ID', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd1', 'OddX', 'Odd2']].rename(columns={'Odd1': 'Odd_1', 'OddX': 'Odd_X', 'Odd2': 'Odd_2'}) if not fixtures_df.empty else pd.DataFrame(columns=['Match_ID', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd_1', 'Odd_X', 'Odd_2'])
+fixtures_clean = fixtures_df[['Match_ID', 'Termin', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd1', 'OddX', 'Odd2']].rename(columns={'Odd1': 'Odd_1', 'OddX': 'Odd_X', 'Odd2': 'Odd_2'}) if not fixtures_df.empty else pd.DataFrame(columns=['Match_ID', 'Termin', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd_1', 'Odd_X', 'Odd_2'])
 
 # ==========================================
 # 5. GENEROWANIE TABEL LIGOWYCH
@@ -385,8 +411,8 @@ team_ppg = {(r['League'], r['Team']): float(str(r['PPG']).replace(',', '.')) for
 # ==========================================================
 all_generated_predictions = []
 
-# ŻELAZNY STANDARD NAGŁÓWKÓW PREDYKCYJNYCH (9 Kolumn Startowych dla Data Blendingu)
-STANDARD_HEADERS = ["Match_ID", "Data", "Godzina", "Liga", "Mecz", "Sugerowany Typ", "Szansa", "Kurs Szac.", "Argumentacja"]
+# ŻELAZNY STANDARD NAGŁÓWKÓW PREDYKCYJNYCH (Teraz 10 Kolumn Startowych)
+STANDARD_HEADERS = ["Match_ID", "Termin", "Data", "Godzina", "Liga", "Mecz", "Sugerowany Typ", "Szansa", "Kurs Szac.", "Argumentacja"]
 
 # ==========================================
 # 6a. ENGINE 1X PRO
@@ -465,7 +491,7 @@ for idx, row in fixtures_clean.iterrows():
         arg = f"Gospodarz stabilny dom ({h_1x_window_cnt}/{len(h_window)} w oknie 30 gier)."
         
         predictions_1x.append([
-            row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}", 
+            row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}", 
             "1X", f"{round(final_prob*100)}%", str(fair_odd).replace('.', ','), arg,
             f"{value_perc}%", str(buk_odd_1x).replace('.', ','), 
             f"Baza: {len(h_window)} (bieżący: {len(h_current)})", f"{h_1x_all_cnt}/{len(h_all)}", f"{h_1x_window_cnt}/{len(h_window)}",
@@ -624,7 +650,7 @@ for idx, row in fixtures_clean.iterrows():
             uzasadnienie = f"Stabilny zestaw w kroczącym oknie."
 
             predictions_builder.append([
-                row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}", 
+                row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}", 
                 sugerowany_kupon, f"{final_builder_safety}%", str(estimated_bb_odd).replace('.', ','), uzasadnienie,
                 f"Dom: {len(h_dom)} (Suma: {len(h_total_all)})", 
                 f"Wyjazd: {len(a_wyj)} (Suma: {len(a_total_all)})",
@@ -697,7 +723,7 @@ for idx, row in fixtures_clean.iterrows():
         uzasadnienie = anom_text + "Regresja do średniej."
 
         predictions_multigol.append([
-            row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}",
+            row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}",
             typ_kod, f"{round(pewnosc*100, 1)}%", str(est_odd).replace('.', ','), uzasadnienie,
             f"D: {len(h_dom)}", f"W: {len(a_wyj)}", h_last_goals, a_last_goals
         ])
@@ -792,7 +818,7 @@ for idx, row in fixtures_clean.iterrows():
         uzasadnienie = "Stabilny zakres linii rożnych."
 
         predictions_corners.append([
-            row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}",
+            row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}",
             typ_kod, f"{final_safety}%", str(est_odd).replace('.', ','), uzasadnienie,
             len(h_tot_all_c), len(a_tot_all_c),
             int(max_match_all), int(highest_h), int(highest_a)
@@ -859,7 +885,7 @@ for idx, row in fixtures_clean.iterrows():
     if prob_h_s > 0.80:
         uzasadnienie_s = f"Przewaga w strzałach: Gosp wygrywa w {h_s_win_dom}/{len(h_dom_s)} (Śr. dom: +{avg_diff_s_dom})"
         predictions_shots.append([
-            row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}",
+            row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}",
             "S_1", f"{round(prob_h_s * 100, 1)}%", str(est_odd_s).replace('.', ','), uzasadnienie_s,
             "Strzały Ogółem", f"{h_s_win_dom}/{len(h_dom_s)}", str(avg_diff_s_dom).replace('.', ','), f"{a_s_lose_wyj}/{len(a_wyj_s)}", str(avg_diff_s_wyj).replace('.', ',')
         ])
@@ -868,7 +894,7 @@ for idx, row in fixtures_clean.iterrows():
     if prob_h_st > 0.80:
         uzasadnienie_st = f"Przewaga w celnych: Gosp wygrywa w {h_st_win_dom}/{len(h_dom_s)} (Śr. dom: +{avg_diff_st_dom})"
         predictions_shots.append([
-            row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}",
+            row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}",
             "ST_1", f"{round(prob_h_st * 100, 1)}%", str(est_odd_st).replace('.', ','), uzasadnienie_st,
             "Strzały Celne", f"{h_st_win_dom}/{len(h_dom_s)}", str(avg_diff_st_dom).replace('.', ','), f"{a_st_lose_wyj}/{len(a_wyj_s)}", str(avg_diff_st_wyj).replace('.', ',')
         ])
@@ -903,7 +929,7 @@ for idx, row in fixtures_clean.iterrows():
             uzasadnienie = "Reakcja TOP drużyny na potknięcie z dołem tabeli."
             
             predictions_coldshower.append([
-                row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}",
+                row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}",
                 "1", f"{round(prob_bounce*100)}%", str(est_odd).replace('.', ','), uzasadnienie,
                 f"{last_m['Home']} {last_m['FTHG']}:{last_m['FTAG']} {home}"
             ])
@@ -945,7 +971,7 @@ for idx, row in fixtures_clean.iterrows():
                 uzasadnienie = f"Wysokie xG ze strzałów celnych ({int(st_for)}) bez poparcia w wynikach ({int(g_for)} goli)."
                 
                 predictions_hiddenform.append([
-                    row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}",
+                    row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}",
                     typ_kod, f"{round(prob*100)}%", str(est_odd).replace('.', ','), uzasadnienie,
                     f"Celne Zespół: {int(st_for)} | Rywale: {int(st_agg)}", f"{int(g_for)} goli w 3 meczach"
                 ])
@@ -981,7 +1007,7 @@ for idx, row in fixtures_clean.iterrows():
             uzasadnienie = f"Pęknięta seria rożnych. Średnia z sezonu: {round(season_avg, 2)}, ostatnio: {round(last_2_avg, 2)}"
             
             predictions_corner_anomalies.append([
-                row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}",
+                row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}",
                 typ_kod, f"{round(prob*100)}%", str(est_odd).replace('.', ','), uzasadnienie,
                 str(round(season_avg, 2)).replace('.', ','), str(round(last_2_avg, 2)).replace('.', ',')
             ])
@@ -1013,7 +1039,7 @@ for idx, row in fixtures_clean.iterrows():
         est_odd = round(1.0 + (((1/prob) - 1.0) / 1.5), 2)
         uzasadnienie = f"Anomalia overowa. Sezon: {round(season_avg, 2)}, ost. 2 mecze: {round(last_2_avg, 2)}"
         predictions_goal_anomalies.append([
-            row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}", 
+            row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}", 
             typ_kod, f"{round(prob*100)}%", str(est_odd).replace('.', ','), uzasadnienie,
             str(round(season_avg, 2)).replace('.', ','), str(round(last_2_avg, 2)).replace('.', ',')
         ])
@@ -1025,7 +1051,7 @@ for idx, row in fixtures_clean.iterrows():
         est_odd = round(1.0 + (((1/prob) - 1.0) / 1.5), 2)
         uzasadnienie = f"Anomalia underowa. Sezon: {round(season_avg, 2)}, ost. 2 mecze: {round(last_2_avg, 2)}"
         predictions_goal_anomalies.append([
-            row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}", 
+            row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}", 
             typ_kod, f"{round(prob*100)}%", str(est_odd).replace('.', ','), uzasadnienie,
             str(round(season_avg, 2)).replace('.', ','), str(round(last_2_avg, 2)).replace('.', ',')
         ])
@@ -1045,21 +1071,29 @@ creds = Credentials.from_service_account_file("credentials.json", scopes=scope) 
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
+# Dodana kolumna "Akceptacja" na początku struktury backtestera
+cols_historia = ["Match_ID", "Akceptacja", "Date", "Home", "Away", "Engine", "Bet_Type", "Odds", "Status", "Profit", "Yield_Wplyw"]
+
 try:
     ws_historia = spreadsheet.worksheet("Historia_Typow")
     historia_dane = ws_historia.get_all_values()
     if len(historia_dane) > 0:
         df_historia = pd.DataFrame(historia_dane[1:], columns=historia_dane[0])
     else:
-        df_historia = pd.DataFrame(columns=["Match_ID", "Date", "Home", "Away", "Engine", "Bet_Type", "Odds", "Status", "Profit", "Yield_Wplyw"])
+        df_historia = pd.DataFrame(columns=cols_historia)
 except gspread.exceptions.WorksheetNotFound:
-    spreadsheet.add_worksheet(title="Historia_Typow", rows=10000, cols=15)
+    spreadsheet.add_worksheet(title="Historia_Typow", rows=10000, cols=16)
     ws_historia = spreadsheet.worksheet("Historia_Typow")
-    df_historia = pd.DataFrame(columns=["Match_ID", "Date", "Home", "Away", "Engine", "Bet_Type", "Odds", "Status", "Profit", "Yield_Wplyw"])
+    df_historia = pd.DataFrame(columns=cols_historia)
+
+# Uzupełnienie braku kolumny "Akceptacja" w starych arkuszach, żeby uniknąć błędu łączenia
+if "Akceptacja" not in df_historia.columns:
+    df_historia.insert(1, "Akceptacja", "-")
 
 # Dodawanie NOWYCH typów z ominięciem duplikatów
 if all_generated_predictions:
     nowe_typy_df = pd.DataFrame(all_generated_predictions, columns=["Match_ID", "Date", "Home", "Away", "Engine", "Bet_Type", "Odds"])
+    nowe_typy_df.insert(1, "Akceptacja", "-") # Oczekuje na ludzką decyzję ("-")
     nowe_typy_df["Status"] = "W OCZEKIWANIU"
     nowe_typy_df["Profit"] = "-"
     nowe_typy_df["Yield_Wplyw"] = "-"
@@ -1176,7 +1210,6 @@ all_sheets = [
     "Predictions_HiddenForm", "Predictions_CornerAnomalies", "Predictions_GoalAnomalies"
 ]
 
-# Zmiana formatu kolumn - teraz elastyczne "cols=45" uchroni przed błędami braku miejsca
 for sheet_name in all_sheets:
     try: spreadsheet.worksheet(sheet_name)
     except: spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=45)
@@ -1184,7 +1217,7 @@ for sheet_name in all_sheets:
 try:
     spreadsheet.worksheet("Fixtures").resize(rows=5000, cols=35)
     spreadsheet.worksheet("Results").resize(rows=10000, cols=45) 
-    spreadsheet.worksheet("Historia_Typow").resize(rows=10000, cols=15)
+    spreadsheet.worksheet("Historia_Typow").resize(rows=10000, cols=16) # cols=16 pod kolumnę Akceptacja
     for name in ["Predictions_1X", "Predictions_Builder", "Predictions_Multigol", "Predictions_Corners", "Predictions_Shots", "Predictions_ColdShower", "Predictions_HiddenForm", "Predictions_CornerAnomalies", "Predictions_GoalAnomalies"]:
         spreadsheet.worksheet(name).resize(rows=3000, cols=45)
 except: pass
