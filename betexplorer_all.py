@@ -1054,20 +1054,17 @@ if all_generated_predictions:
         nowe_typy_df['Unikalny_Klucz'] = nowe_typy_df['Match_ID'] + nowe_typy_df['Engine'] + nowe_typy_df['Bet_Type']
         
         # --- INTELIGENTNA AKTUALIZACJA ---
-        # Znajdujemy mecze w historii, które jeszcze się nie odbyły ("W OCZEKIWANIU")
         w_oczek_mask = df_historia['Status'] == "W OCZEKIWANIU"
         if w_oczek_mask.any():
-            # Przygotowujemy słowniki z najświeższymi danymi z silników Poissona
             map_szansa = nowe_typy_df.set_index('Unikalny_Klucz')['Szansa'].to_dict()
             map_kurs = nowe_typy_df.set_index('Unikalny_Klucz')['Kurs_Szac'].to_dict()
             map_arg = nowe_typy_df.set_index('Unikalny_Klucz')['Argumentacja'].to_dict()
             map_odds = nowe_typy_df.set_index('Unikalny_Klucz')['Odds'].to_dict()
             
-# Aktualizujemy wyliczenia analityczne dla starych (nierozegranych) typów w arkuszu
             for idx in df_historia[w_oczek_mask].index:
                 klucz = df_historia.at[idx, 'Unikalny_Klucz']
                 if klucz in map_szansa:
-                    # Rzutujemy wszystko na tekst (str), aby pandas nie rzucał błędem typu
+                    # Rzutujemy absolutnie WSZYSTKO na tekst (str)
                     df_historia.at[idx, 'Szansa'] = str(map_szansa[klucz])
                     df_historia.at[idx, 'Kurs_Szac'] = str(map_kurs[klucz])
                     df_historia.at[idx, 'Argumentacja'] = str(map_arg[klucz])
@@ -1075,11 +1072,8 @@ if all_generated_predictions:
                     odd_val = map_odds[klucz]
                     if pd.notna(odd_val) and str(odd_val).strip() not in ["-", ""]:
                         df_historia.at[idx, 'Odds'] = str(odd_val)
-                    if map_odds[klucz] not in ["-", "", np.nan]:
-                        df_historia.at[idx, 'Odds'] = map_odds[klucz] # Podmienia też rynkowy kurs, jeśli bukmacher go zmienił
         # ---------------------------------
         
-        # Dodajemy tylko CAŁKOWICIE NOWE predykcje, których jeszcze w ogóle nie było w systemie
         do_dodania = nowe_typy_df[~nowe_typy_df['Unikalny_Klucz'].isin(df_historia['Unikalny_Klucz'])].copy()
         do_dodania = do_dodania.drop(columns=['Unikalny_Klucz'])
         df_historia = df_historia.drop(columns=['Unikalny_Klucz'])
