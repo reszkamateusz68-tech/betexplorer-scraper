@@ -39,31 +39,26 @@ def split_datetime(value):
     return value, ""
 
 def categorize_date(d_str):
-    # 1. Zabezpieczenie przed pustymi wartościami z arkusza
     if pd.isna(d_str) or str(d_str).strip() in ["", "nan", "NaT", "None"]:
         return "Nieznany"
         
     try:
-        # 2. Bezpieczne parsowanie (errors='coerce' zamieni błędy na NaT)
         d = pd.to_datetime(str(d_str), format='%d.%m.%Y', errors='coerce')
         if pd.isna(d):
             d = pd.to_datetime(str(d_str), errors='coerce')
             
-        # 3. Jeśli ostatecznie wyszło NaT, przerywamy
         if pd.isna(d):
             return "Nieznany"
             
         d_date = d.date()
         today_date = datetime.now().date()
         
-        # 4. Bezpieczna matematyka
         delta = (d_date - today_date).days
         
         if delta < 0: return "Przeszłość"
         if delta == 0: return "Dziś"
         if delta == 1: return "Jutro"
         
-        # Jeśli to w ciągu najbliższych 7 dni i jest to Piątek(4), Sobota(5) lub Niedziela(6)
         if 2 <= delta <= 7 and d_date.weekday() >= 4:
             return "Ten Weekend"
         elif 2 <= delta <= 7:
@@ -353,12 +348,10 @@ if not fixtures_df.empty:
     fixtures_df['Date_str'] = pd.to_datetime(fixtures_df['Date'], errors='coerce').dt.strftime('%Y%m%d').fillna('99999999')
     fixtures_df['Match_ID'] = fixtures_df['Date_str'] + "_" + fixtures_df['Home'].str[:3].str.upper() + "_" + fixtures_df['Away'].str[:3].str.upper()
     fixtures_df['Termin'] = fixtures_df['Date'].apply(categorize_date)
-    
-    # ODRZUCAMY mecze, które nie mają jeszcze kursów (usuwamy śmieci z końca sezonu)
-    fixtures_df = fixtures_df[~fixtures_df['Odd1'].astype(str).str.strip().isin(["", "-", "nan"])]
+    fixtures_df['Status_Kursów'] = np.where(fixtures_df['Odd1'].astype(str).str.strip().isin(["", "-", "nan"]), "Brak Kursów", "Są Kursy")
 
 results_clean = results_df[list(golden_cols.keys())].rename(columns=golden_cols) if not results_df.empty else pd.DataFrame(columns=golden_cols.values())
-fixtures_clean = fixtures_df[['Match_ID', 'Termin', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd1', 'OddX', 'Odd2']].rename(columns={'Odd1': 'Odd_1', 'OddX': 'Odd_X', 'Odd2': 'Odd_2'}) if not fixtures_df.empty else pd.DataFrame(columns=['Match_ID', 'Termin', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd_1', 'Odd_X', 'Odd_2'])
+fixtures_clean = fixtures_df[['Match_ID', 'Termin', 'Status_Kursów', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd1', 'OddX', 'Odd2']].rename(columns={'Odd1': 'Odd_1', 'OddX': 'Odd_X', 'Odd2': 'Odd_2'}) if not fixtures_df.empty else pd.DataFrame(columns=['Match_ID', 'Termin', 'Status_Kursów', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd_1', 'Odd_X', 'Odd_2'])
 
 # ==========================================
 # 5. GENEROWANIE TABEL LIGOWYCH
@@ -423,8 +416,8 @@ team_ppg = {(r['League'], r['Team']): float(str(r['PPG']).replace(',', '.')) for
 # ==========================================================
 all_generated_predictions = []
 
-# ŻELAZNY STANDARD NAGŁÓWKÓW PREDYKCYJNYCH (Teraz 10 Kolumn Startowych)
-STANDARD_HEADERS = ["Match_ID", "Termin", "Data", "Godzina", "Liga", "Mecz", "Sugerowany Typ", "Szansa", "Kurs Szac.", "Argumentacja"]
+# ŻELAZNY STANDARD NAGŁÓWKÓW PREDYKCYJNYCH (Teraz 11 Kolumn z Tagi)
+STANDARD_HEADERS = ["Match_ID", "Termin", "Data", "Godzina", "Liga", "Mecz", "Status_Kursów", "Sugerowany Typ", "Szansa", "Kurs Szac.", "Argumentacja"]
 
 # ==========================================
 # 6a. ENGINE 1X PRO
@@ -435,12 +428,18 @@ predictions_1x = []
 for idx, row in fixtures_clean.iterrows():
     league, home, away = row['League'], row['Home'], row['Away']
     fixture_base = get_base_league(league)
+    status_k = row['Status_Kursów']
     
-    try:
-        o1 = float(str(row['Odd_1']).replace(',', '.'))
-        ox = float(str(row['Odd_X']).replace(',', '.'))
-        buk_odd_1x = round(1 / ((1 / o1) + (1 / ox)), 2)
-    except: continue
+    o1_raw = row['Odd_1']
+    ox_raw = row['Odd_X']
+    buk_odd_1x = "-"
+    
+    if str(o1_raw).strip() not in ["", "-", "nan"] and str(ox_raw).strip() not in ["", "-", "nan"]:
+        try:
+            o1 = float(str(o1_raw).replace(',', '.'))
+            ox = float(str(ox_raw).replace(',', '.'))
+            buk_odd_1x = round(1 / ((1 / o1) + (1 / ox)), 2)
+        except: pass
 
     h_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Home'] == home)]
     a_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Away'] == away)]
@@ -497,15 +496,22 @@ for idx, row in fixtures_clean.iterrows():
     
     final_prob = min(max(((prob_h + prob_a) / 2) + ((avg_h_opp - 1.3) * 0.08) + ((avg_a_opp - 1.3) * 0.08), 0.05), 0.95)
     fair_odd = round(1 / final_prob, 2)
-    value_perc = round(((buk_odd_1x / fair_odd) - 1) * 100, 2)
+    
+    if buk_odd_1x != "-":
+        value_perc = round(((buk_odd_1x / fair_odd) - 1) * 100, 2)
+        val_str = f"{value_perc}%"
+        buk_str = str(buk_odd_1x).replace('.', ',')
+    else:
+        val_str = "-"
+        buk_str = "-"
 
     if final_prob >= 0.70:
         arg = f"Gospodarz stabilny dom ({h_1x_window_cnt}/{len(h_window)} w oknie 30 gier)."
         
         predictions_1x.append([
-            row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}", 
+            row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}", status_k,
             "1X", f"{round(final_prob*100)}%", str(fair_odd).replace('.', ','), arg,
-            f"{value_perc}%", str(buk_odd_1x).replace('.', ','), 
+            val_str, buk_str, 
             f"Baza: {len(h_window)} (bieżący: {len(h_current)})", f"{h_1x_all_cnt}/{len(h_all)}", f"{h_1x_window_cnt}/{len(h_window)}",
             f"{l_top} x", f"{l_mid} x", f"{l_bot} x",
             f"Baza: {len(a_window)} (bieżący: {len(a_current)})", f"{a_2_all_cnt}/{len(a_all)}", f"{a_2_window_cnt}/{len(a_window)}",
@@ -532,6 +538,7 @@ predictions_builder = []
 for idx, row in fixtures_clean.iterrows():
     league, home, away = row['League'], row['Home'], row['Away']
     fixture_base = get_base_league(league)
+    status_k = row['Status_Kursów']
     
     h_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == home) | (valid_matches['Away'] == home))]
     a_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == away) | (valid_matches['Away'] == away))]
@@ -662,7 +669,7 @@ for idx, row in fixtures_clean.iterrows():
             uzasadnienie = f"Stabilny zestaw w kroczącym oknie."
 
             predictions_builder.append([
-                row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}", 
+                row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}", status_k,
                 sugerowany_kupon, f"{final_builder_safety}%", str(estimated_bb_odd).replace('.', ','), uzasadnienie,
                 f"Dom: {len(h_dom)} (Suma: {len(h_total_all)})", 
                 f"Wyjazd: {len(a_wyj)} (Suma: {len(a_total_all)})",
@@ -688,6 +695,7 @@ predictions_multigol = []
 for idx, row in fixtures_clean.iterrows():
     league, home, away = row['League'], row['Home'], row['Away']
     fixture_base = get_base_league(league)
+    status_k = row['Status_Kursów']
     
     h_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == home) | (valid_matches['Away'] == home))]
     a_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == away) | (valid_matches['Away'] == away))]
@@ -735,7 +743,7 @@ for idx, row in fixtures_clean.iterrows():
         uzasadnienie = anom_text + "Regresja do średniej."
 
         predictions_multigol.append([
-            row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}",
+            row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}", status_k,
             typ_kod, f"{round(pewnosc*100, 1)}%", str(est_odd).replace('.', ','), uzasadnienie,
             f"D: {len(h_dom)}", f"W: {len(a_wyj)}", h_last_goals, a_last_goals
         ])
@@ -756,6 +764,7 @@ valid_corners = valid_matches.dropna(subset=['Corners_H', 'Corners_A']).copy()
 for idx, row in fixtures_clean.iterrows():
     league, home, away = row['League'], row['Home'], row['Away']
     fixture_base = get_base_league(league)
+    status_k = row['Status_Kursów']
 
     h_tot_all_c = valid_corners[(valid_corners['Base_League'] == fixture_base) & ((valid_corners['Home'] == home) | (valid_corners['Away'] == home))].copy()
     a_tot_all_c = valid_corners[(valid_corners['Base_League'] == fixture_base) & ((valid_corners['Home'] == away) | (valid_corners['Away'] == away))].copy()
@@ -830,7 +839,7 @@ for idx, row in fixtures_clean.iterrows():
         uzasadnienie = "Stabilny zakres linii rożnych."
 
         predictions_corners.append([
-            row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}",
+            row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}", status_k,
             typ_kod, f"{final_safety}%", str(est_odd).replace('.', ','), uzasadnienie,
             len(h_tot_all_c), len(a_tot_all_c),
             int(max_match_all), int(highest_h), int(highest_a)
@@ -859,6 +868,7 @@ if not valid_shots.empty:
 for idx, row in fixtures_clean.iterrows():
     league, home, away = row['League'], row['Home'], row['Away']
     fixture_base = get_base_league(league)
+    status_k = row['Status_Kursów']
 
     h_dom_s = valid_shots[(valid_shots['Base_League'] == fixture_base) & (valid_shots['Home'] == home)].copy()
     a_wyj_s = valid_shots[(valid_shots['Base_League'] == fixture_base) & (valid_shots['Away'] == away)].copy()
@@ -897,7 +907,7 @@ for idx, row in fixtures_clean.iterrows():
     if prob_h_s > 0.80:
         uzasadnienie_s = f"Przewaga w strzałach: Gosp wygrywa w {h_s_win_dom}/{len(h_dom_s)} (Śr. dom: +{avg_diff_s_dom})"
         predictions_shots.append([
-            row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}",
+            row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}", status_k,
             "S_1", f"{round(prob_h_s * 100, 1)}%", str(est_odd_s).replace('.', ','), uzasadnienie_s,
             "Strzały Ogółem", f"{h_s_win_dom}/{len(h_dom_s)}", str(avg_diff_s_dom).replace('.', ','), f"{a_s_lose_wyj}/{len(a_wyj_s)}", str(avg_diff_s_wyj).replace('.', ',')
         ])
@@ -906,7 +916,7 @@ for idx, row in fixtures_clean.iterrows():
     if prob_h_st > 0.80:
         uzasadnienie_st = f"Przewaga w celnych: Gosp wygrywa w {h_st_win_dom}/{len(h_dom_s)} (Śr. dom: +{avg_diff_st_dom})"
         predictions_shots.append([
-            row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}",
+            row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}", status_k,
             "ST_1", f"{round(prob_h_st * 100, 1)}%", str(est_odd_st).replace('.', ','), uzasadnienie_st,
             "Strzały Celne", f"{h_st_win_dom}/{len(h_dom_s)}", str(avg_diff_st_dom).replace('.', ','), f"{a_st_lose_wyj}/{len(a_wyj_s)}", str(avg_diff_st_wyj).replace('.', ',')
         ])
@@ -924,6 +934,7 @@ predictions_coldshower = []
 for idx, row in fixtures_clean.iterrows():
     league, home, away = row['League'], row['Home'], row['Away']
     fixture_base = get_base_league(league)
+    status_k = row['Status_Kursów']
     
     h_tier = team_tiers.get((league, home), 'MID')
     if h_tier != 'TOP': continue 
@@ -941,7 +952,7 @@ for idx, row in fixtures_clean.iterrows():
             uzasadnienie = "Reakcja TOP drużyny na potknięcie z dołem tabeli."
             
             predictions_coldshower.append([
-                row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}",
+                row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}", status_k,
                 "1", f"{round(prob_bounce*100)}%", str(est_odd).replace('.', ','), uzasadnienie,
                 f"{last_m['Home']} {last_m['FTHG']}:{last_m['FTAG']} {home}"
             ])
@@ -959,6 +970,7 @@ predictions_hiddenform = []
 for idx, row in fixtures_clean.iterrows():
     league, home, away = row['League'], row['Home'], row['Away']
     fixture_base = get_base_league(league)
+    status_k = row['Status_Kursów']
     
     for team, is_home in [(home, True), (away, False)]:
         t_past = valid_shots[(valid_shots['Base_League'] == fixture_base) & ((valid_shots['Home'] == team) | (valid_shots['Away'] == team))]
@@ -983,7 +995,7 @@ for idx, row in fixtures_clean.iterrows():
                 uzasadnienie = f"Wysokie xG ze strzałów celnych ({int(st_for)}) bez poparcia w wynikach ({int(g_for)} goli)."
                 
                 predictions_hiddenform.append([
-                    row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}",
+                    row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}", status_k,
                     typ_kod, f"{round(prob*100)}%", str(est_odd).replace('.', ','), uzasadnienie,
                     f"Celne Zespół: {int(st_for)} | Rywale: {int(st_agg)}", f"{int(g_for)} goli w 3 meczach"
                 ])
@@ -1001,6 +1013,7 @@ predictions_corner_anomalies = []
 for idx, row in fixtures_clean.iterrows():
     league, home, away = row['League'], row['Home'], row['Away']
     fixture_base = get_base_league(league)
+    status_k = row['Status_Kursów']
     
     for team, is_home in [(home, True), (away, False)]:
         t_past = valid_corners[(valid_corners['Base_League'] == fixture_base) & ((valid_corners['Home'] == team) | (valid_corners['Away'] == team))].copy()
@@ -1019,7 +1032,7 @@ for idx, row in fixtures_clean.iterrows():
             uzasadnienie = f"Pęknięta seria rożnych. Średnia z sezonu: {round(season_avg, 2)}, ostatnio: {round(last_2_avg, 2)}"
             
             predictions_corner_anomalies.append([
-                row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}",
+                row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}", status_k,
                 typ_kod, f"{round(prob*100)}%", str(est_odd).replace('.', ','), uzasadnienie,
                 str(round(season_avg, 2)).replace('.', ','), str(round(last_2_avg, 2)).replace('.', ',')
             ])
@@ -1037,6 +1050,7 @@ predictions_goal_anomalies = []
 for idx, row in fixtures_clean.iterrows():
     league, home, away = row['League'], row['Home'], row['Away']
     fixture_base = get_base_league(league)
+    status_k = row['Status_Kursów']
     
     t_past = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == home) | (valid_matches['Away'] == away))]
     if len(t_past) < 10: continue
@@ -1051,7 +1065,7 @@ for idx, row in fixtures_clean.iterrows():
         est_odd = round(1.0 + (((1/prob) - 1.0) / 1.5), 2)
         uzasadnienie = f"Anomalia overowa. Sezon: {round(season_avg, 2)}, ost. 2 mecze: {round(last_2_avg, 2)}"
         predictions_goal_anomalies.append([
-            row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}", 
+            row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}", status_k,
             typ_kod, f"{round(prob*100)}%", str(est_odd).replace('.', ','), uzasadnienie,
             str(round(season_avg, 2)).replace('.', ','), str(round(last_2_avg, 2)).replace('.', ',')
         ])
@@ -1063,7 +1077,7 @@ for idx, row in fixtures_clean.iterrows():
         est_odd = round(1.0 + (((1/prob) - 1.0) / 1.5), 2)
         uzasadnienie = f"Anomalia underowa. Sezon: {round(season_avg, 2)}, ost. 2 mecze: {round(last_2_avg, 2)}"
         predictions_goal_anomalies.append([
-            row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}", 
+            row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}", status_k,
             typ_kod, f"{round(prob*100)}%", str(est_odd).replace('.', ','), uzasadnienie,
             str(round(season_avg, 2)).replace('.', ','), str(round(last_2_avg, 2)).replace('.', ',')
         ])
@@ -1083,7 +1097,6 @@ creds = Credentials.from_service_account_file("credentials.json", scopes=scope) 
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
-# Dodana kolumna "Akceptacja" na początku struktury backtestera
 cols_historia = ["Match_ID", "Akceptacja", "Date", "Home", "Away", "Engine", "Bet_Type", "Odds", "Status", "Profit", "Yield_Wplyw"]
 
 try:
@@ -1098,14 +1111,12 @@ except gspread.exceptions.WorksheetNotFound:
     ws_historia = spreadsheet.worksheet("Historia_Typow")
     df_historia = pd.DataFrame(columns=cols_historia)
 
-# Uzupełnienie braku kolumny "Akceptacja" w starych arkuszach, żeby uniknąć błędu łączenia
 if "Akceptacja" not in df_historia.columns:
     df_historia.insert(1, "Akceptacja", "-")
 
-# Dodawanie NOWYCH typów z ominięciem duplikatów
 if all_generated_predictions:
     nowe_typy_df = pd.DataFrame(all_generated_predictions, columns=["Match_ID", "Date", "Home", "Away", "Engine", "Bet_Type", "Odds"])
-    nowe_typy_df.insert(1, "Akceptacja", "-") # Oczekuje na ludzką decyzję ("-")
+    nowe_typy_df.insert(1, "Akceptacja", "-") # Oczekuje na ocenę typera
     nowe_typy_df["Status"] = "W OCZEKIWANIU"
     nowe_typy_df["Profit"] = "-"
     nowe_typy_df["Yield_Wplyw"] = "-"
@@ -1122,7 +1133,6 @@ if all_generated_predictions:
         
     df_historia = pd.concat([df_historia, do_dodania], ignore_index=True)
 
-# Ewaluator Typów Giełdowych 
 def evaluate_bet(bet_type, row_data):
     bet = str(bet_type).upper().strip()
     
@@ -1189,7 +1199,6 @@ def evaluate_bet(bet_type, row_data):
 
     return "DO RĘCZNEJ KONTROLI"
 
-# Rozliczanie historycznych spotkań
 if not df_historia.empty and not results_clean.empty:
     for idx, row in df_historia.iterrows():
         if row["Status"] == "W OCZEKIWANIU":
@@ -1229,7 +1238,7 @@ for sheet_name in all_sheets:
 try:
     spreadsheet.worksheet("Fixtures").resize(rows=5000, cols=35)
     spreadsheet.worksheet("Results").resize(rows=10000, cols=45) 
-    spreadsheet.worksheet("Historia_Typow").resize(rows=10000, cols=16) # cols=16 pod kolumnę Akceptacja
+    spreadsheet.worksheet("Historia_Typow").resize(rows=10000, cols=16) 
     for name in ["Predictions_1X", "Predictions_Builder", "Predictions_Multigol", "Predictions_Corners", "Predictions_Shots", "Predictions_ColdShower", "Predictions_HiddenForm", "Predictions_CornerAnomalies", "Predictions_GoalAnomalies"]:
         spreadsheet.worksheet(name).resize(rows=3000, cols=45)
 except: pass
