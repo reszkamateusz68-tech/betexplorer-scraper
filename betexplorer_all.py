@@ -1063,13 +1063,18 @@ if all_generated_predictions:
             map_arg = nowe_typy_df.set_index('Unikalny_Klucz')['Argumentacja'].to_dict()
             map_odds = nowe_typy_df.set_index('Unikalny_Klucz')['Odds'].to_dict()
             
-            # Aktualizujemy wyliczenia analityczne dla starych (nierozegranych) typów w arkuszu
+# Aktualizujemy wyliczenia analityczne dla starych (nierozegranych) typów w arkuszu
             for idx in df_historia[w_oczek_mask].index:
                 klucz = df_historia.at[idx, 'Unikalny_Klucz']
                 if klucz in map_szansa:
-                    df_historia.at[idx, 'Szansa'] = map_szansa[klucz]
-                    df_historia.at[idx, 'Kurs_Szac'] = map_kurs[klucz]
-                    df_historia.at[idx, 'Argumentacja'] = map_arg[klucz]
+                    # Rzutujemy wszystko na tekst (str), aby pandas nie rzucał błędem typu
+                    df_historia.at[idx, 'Szansa'] = str(map_szansa[klucz])
+                    df_historia.at[idx, 'Kurs_Szac'] = str(map_kurs[klucz])
+                    df_historia.at[idx, 'Argumentacja'] = str(map_arg[klucz])
+                    
+                    odd_val = map_odds[klucz]
+                    if pd.notna(odd_val) and str(odd_val).strip() not in ["-", ""]:
+                        df_historia.at[idx, 'Odds'] = str(odd_val)
                     if map_odds[klucz] not in ["-", "", np.nan]:
                         df_historia.at[idx, 'Odds'] = map_odds[klucz] # Podmienia też rynkowy kurs, jeśli bukmacher go zmienił
         # ---------------------------------
