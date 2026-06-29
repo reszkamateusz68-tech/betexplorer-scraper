@@ -155,23 +155,24 @@ except Exception:
 
 import math
 
-def get_poisson_prob(lam, k, calc_type="exact"):
+def get_poisson_match_prob(lam_h, lam_a, max_val=35):
     """
-    Oblicza Prawdopodobieństwo z Rozkładu Poissona.
-    lam - oczekiwana średnia (np. średnia goli 2.4)
-    k - linia (np. dla Under 2.5 wpisujemy k=2)
-    calc_type - "exact", "under" (<=k), "over" (>k)
+    Krzyżowa macierz Poissona. 
+    Zwraca Prawdopodobieństwo (1, X, 2) dla Strzałów, Rożnych lub Goli.
     """
-    if pd.isna(lam) or lam <= 0: return 0.0
-    try:
-        if calc_type == "exact":
-            return (math.exp(-lam) * (lam**k)) / math.factorial(int(k))
-        elif calc_type == "under":
-            return sum((math.exp(-lam) * (lam**i)) / math.factorial(i) for i in range(int(k) + 1))
-        elif calc_type == "over":
-            return 1.0 - sum((math.exp(-lam) * (lam**i)) / math.factorial(i) for i in range(int(k) + 1))
-    except:
-        return 0.0
+    if pd.isna(lam_h) or pd.isna(lam_a) or lam_h <= 0 or lam_a <= 0: return 0.0, 0.0, 0.0
+    p_1, p_x, p_2 = 0.0, 0.0, 0.0
+    
+    for i in range(max_val):
+        prob_i = get_poisson_prob(lam_h, i, "exact")
+        for j in range(max_val):
+            prob_j = get_poisson_prob(lam_a, j, "exact")
+            prob_ij = prob_i * prob_j
+            if i > j: p_1 += prob_ij
+            elif i == j: p_x += prob_ij
+            else: p_2 += prob_ij
+            
+    return p_1, p_x, p_2
 
 def calc_betbuilder_odd(probs, correlation_factor=0.65, margin=0.92):
     """
@@ -482,10 +483,10 @@ all_generated_predictions = []
 # ŻELAZNY STANDARD NAGŁÓWKÓW PREDYKCYJNYCH
 STANDARD_HEADERS = ["Match_ID", "Termin", "Data", "Godzina", "Liga", "Mecz", "Status_Kursów", "Sugerowany Typ", "Szansa", "Kurs Szac.", "Argumentacja"]
 
-# ==========================================
-# 6a. ENGINE 1X PRO
-# ==========================================
-print("Uruchamiam Engine 1X Pro (Baza 30 gier)...")
+# ==========================================================
+# 6a. ENGINE 1X PRO (Model: Poisson + Kroczące Okno)
+# ==========================================================
+print("Uruchamiam Engine 1X Pro (Baza 30 gier + Rozkład Poissona)...")
 predictions_1x = []
 
 for idx, row in fixtures_clean.iterrows():
@@ -496,7 +497,6 @@ for idx, row in fixtures_clean.iterrows():
     o1_raw = row['Odd_1']
     ox_raw = row['Odd_X']
     buk_odd_1x = "-"
-    
     if str(o1_raw).strip() not in ["", "-", "nan"] and str(ox_raw).strip() not in ["", "-", "nan"]:
         try:
             o1 = float(str(o1_raw).replace(',', '.'))
@@ -507,91 +507,51 @@ for idx, row in fixtures_clean.iterrows():
     h_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Home'] == home)]
     a_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Away'] == away)]
 
-    h_current = h_all[h_all['League'] == league]
-    h_past = h_all[h_all['League'] != league]
-    a_current = a_all[a_all['League'] == league]
-    a_past = a_all[a_all['League'] != league]
-
-    h_window = h_current if len(h_current) >= 30 else pd.concat([h_current, h_past.head(30 - len(h_current))])
-    a_window = a_current if len(a_current) >= 30 else pd.concat([a_current, a_past.head(30 - len(a_current))])
-
+    h_window = h_all.head(30)
+    a_window = a_all.head(30)
     if len(h_window) < 10 or len(a_window) < 10: continue
 
-    h_1x_all_cnt = sum(h_all['FTHG'] >= h_all['FTAG'])
+    # 1. Obliczenia Poissona
+    # Średnio gole strzelane/tracone przez Gosp u siebie i Gości na wyjeździe
+    h_gf, h_ga = h_window['FTHG'].mean(), h_window['FTAG'].mean()
+    a_gf, a_ga = a_window['FTAG'].mean(), a_window['FTHG'].mean()
+    
+    lam_h_goals = (h_gf + a_ga) / 2
+    lam_a_goals = (a_gf + h_ga) / 2
+    
+    p1_g, px_g, p2_g = get_poisson_match_prob(lam_h_goals, lam_a_goals, max_val=15)
+    poisson_1x = p1_g + px_g
+
+    # 2. Prawdopodobieństwo Historyczne
     h_1x_window_cnt = sum(h_window['FTHG'] >= h_window['FTAG'])
-    h_losses = h_all[h_all['FTHG'] < h_all['FTAG']]
-    l_top, l_mid, l_bot = 0, 0, 0
-    for _, m in h_losses.iterrows():
-        t = team_tiers.get((m['League'], m['Away']), 'MID')
-        if t == 'TOP': l_top += 1
-        elif t == 'MID': l_mid += 1
-        elif t == 'BOTTOM': l_bot += 1
+    a_lose_window_cnt = sum(a_window['FTHG'] >= a_window['FTAG'])
+    hist_1x = (h_1x_window_cnt / len(h_window) + a_lose_window_cnt / len(a_window)) / 2
 
-    a_2_all_cnt = sum(a_all['FTAG'] > a_all['FTHG'])
-    a_2_window_cnt = sum(a_window['FTAG'] > a_window['FTHG'])
-    a_wins = a_all[a_all['FTAG'] > a_all['FTHG']]
-    w_top, w_mid, w_bot = 0, 0, 0
-    for _, m in a_wins.iterrows():
-        t = team_tiers.get((m['League'], m['Home']), 'MID')
-        if t == 'TOP': w_top += 1
-        elif t == 'MID': w_mid += 1
-        elif t == 'BOTTOM': w_bot += 1
-
-    a_fts_cnt = sum(a_all['FTAG'] == 0)
-    a_fts_pct = round((a_fts_cnt / len(a_all)) * 100) if len(a_all) > 0 else 0
-
-    h_window_shots = h_window[pd.to_numeric(h_window['ShotsTarget_H'], errors='coerce').notna()]
-    if not h_window_shots.empty:
-        avg_st = pd.to_numeric(h_window_shots['ShotsTarget_H']).mean()
-        avg_g = pd.to_numeric(h_window_shots['FTHG']).mean()
-        diff = (avg_st * 0.3) - avg_g
-        h_proxy = "PECH (Ukryta Forma)" if diff > 0.4 else ("SZCZĘŚCIE" if diff < -0.4 else "STABILNY")
-    else: h_proxy = "Brak Danych"
-
-    h_unbeaten, _ = get_current_streaks(fixture_base, home)
-    _, a_winless = get_current_streaks(fixture_base, away)
-
-    prob_h = ((h_1x_all_cnt / len(h_all)) * 0.4) + ((h_1x_window_cnt / len(h_window)) * 0.6)
-    prob_a = ((sum(a_all['FTHG'] >= a_all['FTAG']) / len(a_all)) * 0.4) + ((sum(a_window['FTHG'] >= a_window['FTAG']) / len(a_window)) * 0.6)
-    
-    avg_h_opp = sum([team_ppg.get((m['League'], m['Away']), 1.3) for _, m in h_window.iterrows()]) / len(h_window)
-    avg_a_opp = sum([team_ppg.get((m['League'], m['Home']), 1.3) for _, m in a_window.iterrows()]) / len(a_window)
-    
-    final_prob = min(max(((prob_h + prob_a) / 2) + ((avg_h_opp - 1.3) * 0.08) + ((avg_a_opp - 1.3) * 0.08), 0.05), 0.95)
-    fair_odd = round(1 / final_prob, 2)
-    szansa_str = f"{round(final_prob*100)}%"
+    # 3. Zblendowanie (Klucz do ominięcia bukmachera - Math + Historia)
+    final_prob = min(max((poisson_1x * 0.5) + (hist_1x * 0.5), 0.05), 0.95)
+    fair_odd = round((1 / final_prob) * 0.93, 2) # Szacujemy kurs uwzględniający marżę buka
+    szansa_str = f"{round(final_prob*100, 1)}%"
     
     if buk_odd_1x != "-":
         value_perc = round(((buk_odd_1x / fair_odd) - 1) * 100, 2)
         val_str = f"{value_perc}%"
         buk_str = str(buk_odd_1x).replace('.', ',')
     else:
-        val_str = "-"
-        buk_str = "-"
+        val_str, buk_str = "-", "-"
 
     if final_prob >= 0.70:
-        arg = f"Gospodarz stabilny dom ({h_1x_window_cnt}/{len(h_window)} w oknie 30 gier)."
+        arg = f"Poisson (λ_H={round(lam_h_goals,2)}, λ_A={round(lam_a_goals,2)}) zblendowany z historią."
         
         predictions_1x.append([
             row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}", status_k,
             "1X", szansa_str, str(fair_odd).replace('.', ','), arg,
             val_str, buk_str, 
-            f"Baza: {len(h_window)} (bieżący: {len(h_current)})", f"{h_1x_all_cnt}/{len(h_all)}", f"{h_1x_window_cnt}/{len(h_window)}",
-            f"{l_top} x", f"{l_mid} x", f"{l_bot} x",
-            f"Baza: {len(a_window)} (bieżący: {len(a_current)})", f"{a_2_all_cnt}/{len(a_all)}", f"{a_2_window_cnt}/{len(a_window)}",
-            f"{w_top} x", f"{w_mid} x", f"{w_bot} x",
-            f"{a_fts_pct}%", h_unbeaten, a_winless, h_proxy
+            f"Baza H: {len(h_window)}", f"{h_1x_window_cnt}/{len(h_window)}",
+            f"Baza A: {len(a_window)}", f"{a_lose_window_cnt}/{len(a_window)}"
         ])
-        
-        # Przekazanie pełnego uzasadnienia do Historii Typów
         all_generated_predictions.append([row['Match_ID'], row['Termin'], row['Date'], home, away, "1X Pro", "1X", buk_odd_1x, szansa_str, str(fair_odd).replace('.', ','), arg])
 
-headers_1x = STANDARD_HEADERS + [
-    "Value %", "Buk_Odd (Rynek)",
-    "H_Probka_Meczow", "H_1X_Wszystkie", "H_1X_OknoKroczace", "H_Porażki_vs_TOP", "H_Porażki_vs_MID", "H_Porażki_vs_BOTTOM",
-    "A_Probka_Meczow", "A_Wygrane_Wszystkie", "A_Wygrane_OknoKroczace", "A_Wygrane_vs_TOP", "A_Wygrane_vs_MID", "A_Wygrane_vs_BOTTOM",
-    "A_FTS_Wyjazd_%", "H_Passa_Bez_Porażki", "A_Passa_Bez_Wygranej", "H_Proxy_xG_Status"
-]
+headers_1x = STANDARD_HEADERS + ["Value %", "Buk_Odd (Rynek)", "H_Probka", "H_1X_Okno", "A_Probka", "A_NieWygra_Okno"]
 df_pred_1x = pd.DataFrame(predictions_1x, columns=headers_1x).sort_values(by="Szansa", ascending=False) if predictions_1x else pd.DataFrame(columns=headers_1x)
 
 # ==========================================================
@@ -737,11 +697,10 @@ headers_multigol = STANDARD_HEADERS + ["H_Próbka", "A_Próbka", "Ostatnie_Gole_
 df_pred_multigol = pd.DataFrame(predictions_multigol, columns=headers_multigol).sort_values(by="Szansa", ascending=False) if predictions_multigol else pd.DataFrame(columns=headers_multigol)
 
 # ==========================================================
-# 6d. ENGINE CORNERS PRO (Undery Rzutów Rożnych)
+# 6d. ENGINE CORNERS PRO (Undery Rzutów Rożnych z Poissonem)
 # ==========================================================
-print("Uruchamiam Engine Corners Pro (Undery Rzutów Rożnych)...")
+print("Uruchamiam Engine Corners Pro (Model Poissona dla Rzutów Rożnych)...")
 predictions_corners = []
-
 valid_corners = valid_matches.dropna(subset=['Corners_H', 'Corners_A']).copy()
 
 for idx, row in fixtures_clean.iterrows():
@@ -749,95 +708,78 @@ for idx, row in fixtures_clean.iterrows():
     fixture_base = get_base_league(league)
     status_k = row['Status_Kursów']
 
-    h_tot_all_c = valid_corners[(valid_corners['Base_League'] == fixture_base) & ((valid_corners['Home'] == home) | (valid_corners['Away'] == home))].copy()
-    a_tot_all_c = valid_corners[(valid_corners['Base_League'] == fixture_base) & ((valid_corners['Home'] == away) | (valid_corners['Away'] == away))].copy()
-
-    if len(h_tot_all_c) < 8 or len(a_tot_all_c) < 8: continue
-
     h_dom_c = valid_corners[(valid_corners['Base_League'] == fixture_base) & (valid_corners['Home'] == home)].copy()
     a_wyj_c = valid_corners[(valid_corners['Base_League'] == fixture_base) & (valid_corners['Away'] == away)].copy()
+    if len(h_dom_c) < 5 or len(a_wyj_c) < 5: continue
 
-    if len(h_dom_c) < 3 or len(a_wyj_c) < 3: continue
+    # Średnie zdobywanych rzutów rożnych (Wartości Lamda Poissona)
+    h_c_for = h_dom_c['Corners_H'].mean()
+    h_c_ag = h_dom_c['Corners_A'].mean()
+    a_c_for = a_wyj_c['Corners_A'].mean()
+    a_c_ag = a_wyj_c['Corners_H'].mean()
 
-    h_tot_all_c['Team_C_For'] = np.where(h_tot_all_c['Home'] == home, h_tot_all_c['Corners_H'], h_tot_all_c['Corners_A'])
-    a_tot_all_c['Team_C_For'] = np.where(a_tot_all_c['Home'] == away, a_tot_all_c['Corners_H'], a_tot_all_c['Corners_A'])
-
-    max_match_h = h_dom_c['Total_Corners'].max()
-    max_match_a = a_wyj_c['Total_Corners'].max()
-    max_match_all = max(h_tot_all_c['Total_Corners'].max(), a_tot_all_c['Total_Corners'].max())
-
-    max_team_h_dom = h_dom_c['Corners_H'].max()
-    max_team_h_all = h_tot_all_c['Team_C_For'].max()
-
-    max_team_a_wyj = a_wyj_c['Corners_A'].max()
-    max_team_a_all = a_tot_all_c['Team_C_For'].max()
+    # Oczekiwana liczba rożnych w meczu = Średnia z tego, co Gosp. nabija w domu + to, co Gość nabija na wyjeździe
+    lam_match = (h_c_for + h_c_ag + a_c_for + a_c_ag) / 2
+    lam_h = (h_c_for + a_c_ag) / 2
+    lam_a = (a_c_for + h_c_ag) / 2
 
     c_blocks_code = []
     c_probs = []
-    c_odds = []
 
-    highest_match = max(max_match_h, max_match_a, max_match_all)
-    for line in [8.5, 9.5, 10.5, 11.5, 12.5, 13.5, 14.5]:
-        if line > highest_match - 2:
-            p_hd = sum(h_dom_c['Total_Corners'] < line) / len(h_dom_c)
-            p_aw = sum(a_wyj_c['Total_Corners'] < line) / len(a_wyj_c)
-            p_ha = sum(h_tot_all_c['Total_Corners'] < line) / len(h_tot_all_c)
-            p_aa = sum(a_tot_all_c['Total_Corners'] < line) / len(a_tot_all_c)
-            if p_hd >= 0.90 and p_aw >= 0.90 and p_ha >= 0.90 and p_aa >= 0.90:
-                c_blocks_code.append(f"C_U{line}")
-                avg_p = (p_hd + p_aw + p_ha + p_aa) / 4
-                c_probs.append(avg_p)
-                c_odds.append(round(1 / (avg_p * 0.90), 2))
-                break
+    # Linie meczowe - Matematyka + Historia
+    for line in [8.5, 9.5, 10.5, 11.5]:
+        poisson_u = get_poisson_prob(lam_match, int(line), "under")
+        hist_u = (sum(h_dom_c['Total_Corners'] < line)/len(h_dom_c) + sum(a_wyj_c['Total_Corners'] < line)/len(a_wyj_c)) / 2
+        prob_u = (poisson_u + hist_u) / 2
+        
+        if prob_u >= 0.88:
+            c_blocks_code.append(f"C_U{line}")
+            c_probs.append(prob_u)
+            break # Bierzemy tylko najniższą (najbardziej opłacalną) linię powyżej 88%
 
-    highest_h = max(max_team_h_dom, max_team_h_all)
-    for line in [4.5, 5.5, 6.5, 7.5, 8.5]:
-        if line > highest_h - 1:
-            p_hd = sum(h_dom_c['Corners_H'] < line) / len(h_dom_c)
-            p_ha = sum(h_tot_all_c['Team_C_For'] < line) / len(h_tot_all_c)
-            if p_hd >= 0.92 and p_ha >= 0.92:
-                c_blocks_code.append(f"HC_U{line}")
-                avg_p = (p_hd + p_ha) / 2
-                c_probs.append(avg_p)
-                c_odds.append(round(1 / (avg_p * 0.90), 2))
-                break
+    # Linie drużynowe (Gospodarz)
+    for line in [4.5, 5.5, 6.5, 7.5]:
+        p_u = get_poisson_prob(lam_h, int(line), "under")
+        h_u = sum(h_dom_c['Corners_H'] < line) / len(h_dom_c)
+        prob = (p_u + h_u) / 2
+        if prob >= 0.90:
+            c_blocks_code.append(f"HC_U{line}")
+            c_probs.append(prob)
+            break
 
-    highest_a = max(max_team_a_wyj, max_team_a_all)
-    for line in [3.5, 4.5, 5.5, 6.5, 7.5]:
-        if line > highest_a - 1:
-            p_aw = sum(a_wyj_c['Corners_A'] < line) / len(a_wyj_c)
-            p_aa = sum(a_tot_all_c['Team_C_For'] < line) / len(a_tot_all_c)
-            if p_aw >= 0.92 and p_aa >= 0.92:
-                c_blocks_code.append(f"AC_U{line}")
-                avg_p = (p_aw + p_aa) / 2
-                c_probs.append(avg_p)
-                c_odds.append(round(1 / (avg_p * 0.90), 2))
-                break
+    # Linie drużynowe (Gość)
+    for line in [3.5, 4.5, 5.5, 6.5]:
+        p_u = get_poisson_prob(lam_a, int(line), "under")
+        h_u = sum(a_wyj_c['Corners_A'] < line) / len(a_wyj_c)
+        prob = (p_u + h_u) / 2
+        if prob >= 0.90:
+            c_blocks_code.append(f"AC_U{line}")
+            c_probs.append(prob)
+            break
 
     if len(c_blocks_code) >= 1:
-        est_odd = round((1.0 + sum([(o - 1.0) * 0.60 for o in c_odds])) * 0.95, 2) if len(c_blocks_code) > 1 else c_odds[0]
-        if est_odd < 1.05: est_odd = 1.05
+        # Obliczanie skorelowanego kursu BetBuildera (jeśli grają podwójnego undera)
+        est_odd = calc_betbuilder_odd(c_probs, correlation_factor=0.60, margin=0.92)
         final_safety = round(np.mean(c_probs) * 100, 1)
         szansa_str = f"{final_safety}%"
         typ_kod = "+".join(c_blocks_code)
-        uzasadnienie = "Stabilny zakres linii rożnych."
+        uzasadnienie = f"Poisson Rzutów Rożnych (Mecz λ={round(lam_match,1)}, H={round(lam_h,1)}, A={round(lam_a,1)})"
 
         predictions_corners.append([
             row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}", status_k,
             typ_kod, szansa_str, str(est_odd).replace('.', ','), uzasadnienie,
-            len(h_tot_all_c), len(a_tot_all_c),
-            int(max_match_all), int(highest_h), int(highest_a)
+            round(lam_match, 1), round(lam_h, 1), round(lam_a, 1)
         ])
         
         all_generated_predictions.append([row['Match_ID'], row['Termin'], row['Date'], home, away, "Corners Pro", typ_kod, "-", szansa_str, str(est_odd).replace('.', ','), uzasadnienie])
 
-headers_corners = STANDARD_HEADERS + ["H_Próbka", "A_Próbka", "Max_Mecz", "Max_Gosp", "Max_Gość"]
+headers_corners = STANDARD_HEADERS + ["Oczekiwane Rożne (Mecz)", "Oczekiwane Rożne H", "Oczekiwane Rożne A"]
 df_pred_corners = pd.DataFrame(predictions_corners, columns=headers_corners).sort_values(by="Szansa", ascending=False) if predictions_corners else pd.DataFrame(columns=headers_corners)
 
 # ==========================================================
-# 6e. ENGINE SHOTS PRO (Gospodarz: Strzały i Strzały Celne)
+# 6e. ENGINE SHOTS PRO (1X2 dla Strzałów z Poissona)
 # ==========================================================
-print("Uruchamiam Engine Shots Pro (Dominacja Gospodarzy)...")
+print("Uruchamiam Engine Shots Pro (Poisson dla Strzałów/Celnych)...")
 predictions_shots = []
 
 valid_shots = valid_matches.dropna(subset=['Shots_H', 'Shots_A', 'ShotsTarget_H', 'ShotsTarget_A']).copy()
@@ -856,59 +798,53 @@ for idx, row in fixtures_clean.iterrows():
 
     h_dom_s = valid_shots[(valid_shots['Base_League'] == fixture_base) & (valid_shots['Home'] == home)].copy()
     a_wyj_s = valid_shots[(valid_shots['Base_League'] == fixture_base) & (valid_shots['Away'] == away)].copy()
+    if len(h_dom_s) < 5 or len(a_wyj_s) < 5: continue
 
-    if len(h_dom_s) < 2 or len(a_wyj_s) < 2: continue
-
-    h_dom_s['S_Diff'] = h_dom_s['Shots_H'] - h_dom_s['Shots_A']
-    a_wyj_s['S_Diff'] = a_wyj_s['Shots_A'] - a_wyj_s['Shots_H']
-
-    h_s_win_dom = sum(h_dom_s['S_Diff'] > 0)
-    a_s_lose_wyj = sum(a_wyj_s['S_Diff'] < 0)
-
-    h_dom_s['ST_Diff'] = h_dom_s['ShotsTarget_H'] - h_dom_s['ShotsTarget_A']
-    a_wyj_s['ST_Diff'] = a_wyj_s['ShotsTarget_A'] - a_wyj_s['ShotsTarget_H']
-
-    h_st_win_dom = sum(h_dom_s['ST_Diff'] > 0)
-    a_st_lose_wyj = sum(a_wyj_s['ST_Diff'] < 0)
-
-    waga_dom, waga_wyj = 4.0, 1.0
-    suma_wag = waga_dom + waga_wyj
-
-    prob_h_s = ((h_s_win_dom / len(h_dom_s)) * waga_dom + (a_s_lose_wyj / len(a_wyj_s)) * waga_wyj) / suma_wag
-    prob_h_st = ((h_st_win_dom / len(h_dom_s)) * waga_dom + (a_st_lose_wyj / len(a_wyj_s)) * waga_wyj) / suma_wag
-
-    raw_odd_s = (1 / prob_h_s) if prob_h_s > 0 else 99.0
-    est_odd_s = round(1.0 + ((raw_odd_s - 1.0) / 1.5), 2) if raw_odd_s > 1.0 else 1.01
-
-    raw_odd_st = (1 / prob_h_st) if prob_h_st > 0 else 99.0
-    est_odd_st = round(1.0 + ((raw_odd_st - 1.0) / 1.5), 2) if raw_odd_st > 1.0 else 1.01
-
-    avg_diff_s_dom = round(h_dom_s['S_Diff'].mean(), 1)
-    avg_diff_s_wyj = round(a_wyj_s['S_Diff'].mean(), 1)
-    avg_diff_st_dom = round(h_dom_s['ST_Diff'].mean(), 1)
-    avg_diff_st_wyj = round(a_wyj_s['ST_Diff'].mean(), 1)
+    # -- STRZAŁY OGÓŁEM --
+    lam_h_shots = (h_dom_s['Shots_H'].mean() + a_wyj_s['Shots_H'].mean()) / 2
+    lam_a_shots = (a_wyj_s['Shots_A'].mean() + h_dom_s['Shots_A'].mean()) / 2
     
+    # Przez macierz z max_val = 35 (bo tyle strzałów pada max w meczach)
+    p1_s, px_s, p2_s = get_poisson_match_prob(lam_h_shots, lam_a_shots, max_val=35)
+    
+    # Historia 
+    hist_h_s = (sum(h_dom_s['Shots_H'] > h_dom_s['Shots_A'])/len(h_dom_s) + sum(a_wyj_s['Shots_H'] > a_wyj_s['Shots_A'])/len(a_wyj_s)) / 2
+    prob_h_s = (p1_s + hist_h_s) / 2
+
+    # -- STRZAŁY CELNE --
+    lam_h_st = (h_dom_s['ShotsTarget_H'].mean() + a_wyj_s['ShotsTarget_H'].mean()) / 2
+    lam_a_st = (a_wyj_s['ShotsTarget_A'].mean() + h_dom_s['ShotsTarget_A'].mean()) / 2
+    
+    p1_st, px_st, p2_st = get_poisson_match_prob(lam_h_st, lam_a_st, max_val=25)
+    
+    hist_h_st = (sum(h_dom_s['ShotsTarget_H'] > h_dom_s['ShotsTarget_A'])/len(h_dom_s) + sum(a_wyj_s['ShotsTarget_H'] > a_wyj_s['ShotsTarget_A'])/len(a_wyj_s)) / 2
+    prob_h_st = (p1_st + hist_h_st) / 2
+
     if prob_h_s > 0.80:
+        est_odd_s = max(1.05, round((1 / prob_h_s) * 0.93, 2))
         szansa_str = f"{round(prob_h_s * 100, 1)}%"
-        uzasadnienie_s = f"Przewaga w strzałach: Gosp wygrywa w {h_s_win_dom}/{len(h_dom_s)} (Śr. dom: +{avg_diff_s_dom})"
+        uzasadnienie_s = f"Przewaga strzałów (Poisson H: {round(lam_h_shots,1)}, A: {round(lam_a_shots,1)})"
+        
         predictions_shots.append([
             row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}", status_k,
             "S_1", szansa_str, str(est_odd_s).replace('.', ','), uzasadnienie_s,
-            "Strzały Ogółem", f"{h_s_win_dom}/{len(h_dom_s)}", str(avg_diff_s_dom).replace('.', ','), f"{a_s_lose_wyj}/{len(a_wyj_s)}", str(avg_diff_s_wyj).replace('.', ',')
+            "Strzały Ogółem", round(lam_h_shots,1), round(lam_a_shots,1)
         ])
         all_generated_predictions.append([row['Match_ID'], row['Termin'], row['Date'], home, away, "Shots Pro", "S_1", "-", szansa_str, str(est_odd_s).replace('.', ','), uzasadnienie_s])
         
     if prob_h_st > 0.80:
+        est_odd_st = max(1.05, round((1 / prob_h_st) * 0.93, 2))
         szansa_str = f"{round(prob_h_st * 100, 1)}%"
-        uzasadnienie_st = f"Przewaga w celnych: Gosp wygrywa w {h_st_win_dom}/{len(h_dom_s)} (Śr. dom: +{avg_diff_st_dom})"
+        uzasadnienie_st = f"Przewaga celnych (Poisson H: {round(lam_h_st,1)}, A: {round(lam_a_st,1)})"
+        
         predictions_shots.append([
             row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}", status_k,
             "ST_1", szansa_str, str(est_odd_st).replace('.', ','), uzasadnienie_st,
-            "Strzały Celne", f"{h_st_win_dom}/{len(h_dom_s)}", str(avg_diff_st_dom).replace('.', ','), f"{a_st_lose_wyj}/{len(a_wyj_s)}", str(avg_diff_st_wyj).replace('.', ',')
+            "Strzały Celne", round(lam_h_st,1), round(lam_a_st,1)
         ])
         all_generated_predictions.append([row['Match_ID'], row['Termin'], row['Date'], home, away, "Shots Pro", "ST_1", "-", szansa_str, str(est_odd_st).replace('.', ','), uzasadnienie_st])
 
-headers_shots = STANDARD_HEADERS + ["Typ Statystyki", "Gosp Wygrywa Dom", "Śr Różnica D", "Gość Przegrywa Wyj", "Śr Różnica W"]
+headers_shots = STANDARD_HEADERS + ["Typ Statystyki", "Oczekiwane Strz H", "Oczekiwane Strz A"]
 df_pred_shots = pd.DataFrame(predictions_shots, columns=headers_shots).sort_values(by="Szansa", ascending=False) if predictions_shots else pd.DataFrame(columns=headers_shots)
 
 # ==========================================================
