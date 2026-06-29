@@ -157,12 +157,14 @@ except Exception:
 try: urls = pd.read_excel("ligi.xlsx")["URL"].dropna().tolist()
 except: urls = []
 
-headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Cache-Control": "no-cache"
-}
+# Konfiguracja twardego scrapera imitującego przeglądarkę z PC
+scraper_be = cloudscraper.create_scraper(
+    browser={
+        'browser': 'chrome',
+        'platform': 'windows',
+        'desktop': True
+    }
+)
 
 all_data = []
 for i, url in enumerate(urls, start=1):
@@ -170,24 +172,35 @@ for i, url in enumerate(urls, start=1):
     print(f"[{i}/{len(urls)}] Pobieram BetExplorer: {url_clean}")
     if "/fixtures/" not in url_clean and "/results/" not in url_clean: continue
 
-    try:
-        time.sleep(random.uniform(2, 5))
-        response = requests.get(url_clean, headers=headers, timeout=30)
+    max_retries = 3
+    response = None
+    bypass_used = False
+    success = False
+
+    for attempt in range(max_retries):
+        wait_time = random.uniform(2, 5) if attempt == 0 else random.uniform(15, 25) + (attempt * 10)
+        time.sleep(wait_time)
         
-        bypass_used = False
-        if response.status_code in [429, 403]:
-            time.sleep(12)
-            scraper_be = cloudscraper.create_scraper()
-            response = scraper_be.get(url_clean, headers=headers, timeout=30)
-            bypass_used = True
-            if response.status_code in [429, 403]:
-                time.sleep(15)
-                response = scraper_be.get(url_clean, headers=headers, timeout=30)
+        try:
+            response = scraper_be.get(url_clean, timeout=30)
+            if response.status_code == 200:
+                success = True
+                break
+            elif response.status_code in [429, 403]:
+                bypass_used = True
+                print(f"  -> Kod {response.status_code}. Blokada serwera. Próba {attempt+1}/{max_retries}. Chłodzenie...")
+            else:
+                break
+        except Exception as e:
+            print(f"  -> Błąd żądania: {e}")
+            time.sleep(10)
 
-        if response.status_code != 200:
-            scrape_report.append(["BetExplorer", url_clean, f"BŁĄD: Kod {response.status_code}"])
-            continue
+    if not success or response is None or response.status_code != 200:
+        final_code = response.status_code if response else "Brak odpowiedzi"
+        scrape_report.append(["BetExplorer", url_clean, f"BŁĄD: Kod {final_code} po {max_retries} próbach"])
+        continue
 
+    try:
         html = response.text
         soup = BeautifulSoup(html, "html.parser")
         league_raw = url_clean.split("/football/")[1].replace("/fixtures/", "").replace("/results/", "")
@@ -231,7 +244,7 @@ for i, url in enumerate(urls, start=1):
                 
         status_msg = f"OK (Pobrano: {mecz_count} meczów)" + (" [Zadziałał Bypass 429]" if bypass_used else "")
         scrape_report.append(["BetExplorer", url_clean, status_msg if mecz_count > 0 else "BŁĄD: Znaleziono 0 meczów"])
-    except Exception as e: scrape_report.append(["BetExplorer", url_clean, f"BŁĄD KRYTYCZNY: {e}"])
+    except Exception as e: scrape_report.append(["BetExplorer", url_clean, f"BŁĄD PARSOWANIA: {e}"])
 
 df = pd.DataFrame(all_data, columns=["Type", "League", "Date", "Home", "Away", "Score", "Odd1", "OddX", "Odd2"]).drop_duplicates()
 
@@ -264,7 +277,7 @@ try:
             url_ss_clean = str(url_ss).strip()
             time.sleep(random.uniform(1, 3))
             try:
-                soup_ss = BeautifulSoup(skaner_ss.get(url_ss_clean, headers=headers, timeout=30).text, "html.parser")
+                soup_ss = BeautifulSoup(skaner_ss.get(url_ss_clean, timeout=30).text, "html.parser")
                 tabela_meczow = next((t for t in soup_ss.find_all("table") if "HT" in t.get_text() and "BTS" in t.get_text() and len(t.find_all("tr")) > 15), None)
                 ss_count = 0
                 if tabela_meczow:
