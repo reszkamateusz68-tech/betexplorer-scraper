@@ -153,6 +153,44 @@ try:
 except Exception:
     mapowanie_fd, mapowanie_ss = {}, {}
 
+import math
+
+def get_poisson_prob(lam, k, calc_type="exact"):
+    """
+    Oblicza Prawdopodobieństwo z Rozkładu Poissona.
+    lam - oczekiwana średnia (np. średnia goli 2.4)
+    k - linia (np. dla Under 2.5 wpisujemy k=2)
+    calc_type - "exact", "under" (<=k), "over" (>k)
+    """
+    if pd.isna(lam) or lam <= 0: return 0.0
+    try:
+        if calc_type == "exact":
+            return (math.exp(-lam) * (lam**k)) / math.factorial(int(k))
+        elif calc_type == "under":
+            return sum((math.exp(-lam) * (lam**i)) / math.factorial(i) for i in range(int(k) + 1))
+        elif calc_type == "over":
+            return 1.0 - sum((math.exp(-lam) * (lam**i)) / math.factorial(i) for i in range(int(k) + 1))
+    except:
+        return 0.0
+
+def calc_betbuilder_odd(probs, correlation_factor=0.65, margin=0.92):
+    """
+    Kalkulator kursów BetBuilder (Same Game Parlay).
+    correlation_factor: 0 = brak korelacji (czyste AKO), 1 = pełna korelacja.
+    margin: marża bukmachera (0.92 to ok. 8% marży).
+    """
+    if not probs: return 1.0
+    probs.sort(reverse=True) # Zaczynamy od zdarzenia z najwyższym prawodopodobieństwem
+    combined_p = probs[0]
+    
+    # Pozostałe prawdopodobieństwa potęgujemy przez (1 - korelacja),
+    # co sprawia, że silnie skorelowane typy mniej obniżają ostateczny kurs.
+    for p in probs[1:]:
+        combined_p *= (p ** (1 - correlation_factor))
+        
+    fair_odd = 1 / combined_p if combined_p > 0 else 99.0
+    return max(1.05, round(fair_odd * margin, 2))
+
 # ==========================================
 # 1. POBIERANIE Z BETEXPLORER 
 # ==========================================
@@ -557,7 +595,7 @@ headers_1x = STANDARD_HEADERS + [
 df_pred_1x = pd.DataFrame(predictions_1x, columns=headers_1x).sort_values(by="Szansa", ascending=False) if predictions_1x else pd.DataFrame(columns=headers_1x)
 
 # ==========================================================
-# 6b. ENGINE BETBUILDER PRO
+# 6b. ENGINE BETBUILDER PRO (Zestaw Skorelowany)
 # ==========================================================
 print("Uruchamiam Engine BetBuilder Pro...")
 predictions_builder = []
@@ -567,157 +605,68 @@ for idx, row in fixtures_clean.iterrows():
     fixture_base = get_base_league(league)
     status_k = row['Status_Kursów']
     
-    h_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == home) | (valid_matches['Away'] == home))]
-    a_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == away) | (valid_matches['Away'] == away))]
-    if len(h_tot_all) < 10 or len(a_tot_all) < 10: continue
+    h_dom = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Home'] == home)].copy()
+    a_wyj = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Away'] == away)].copy()
+    if len(h_dom) < 10 or len(a_wyj) < 10: continue
 
-    h_tot_curr = h_tot_all[h_tot_all['League'] == league]
-    h_tot_past = h_tot_all[h_tot_all['League'] != league]
-    h_total_all = h_tot_curr if len(h_tot_curr) >= 30 else pd.concat([h_tot_curr, h_tot_past.head(30 - len(h_tot_curr))])
-
-    a_tot_curr = a_tot_all[a_tot_all['League'] == league]
-    a_tot_past = a_tot_all[a_tot_all['League'] != league]
-    a_total_all = a_tot_curr if len(a_tot_curr) >= 30 else pd.concat([a_tot_curr, a_tot_past.head(30 - len(a_tot_curr))])
-
-    h_dom_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Home'] == home)]
-    h_dom_curr = h_dom_all[h_dom_all['League'] == league]
-    h_dom_past = h_dom_all[h_dom_all['League'] != league]
-    h_dom = h_dom_curr if len(h_dom_curr) >= 30 else pd.concat([h_dom_curr, h_dom_past.head(30 - len(h_dom_curr))])
-
-    a_wyj_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Away'] == away)]
-    a_wyj_curr = a_wyj_all[a_wyj_all['League'] == league]
-    a_wyj_past = a_wyj_all[a_wyj_all['League'] != league]
-    a_wyj = a_wyj_curr if len(a_wyj_curr) >= 30 else pd.concat([a_wyj_curr, a_wyj_past.head(30 - len(a_wyj_curr))])
-
-    if len(h_dom) == 0 or len(a_wyj) == 0: continue
-
-    h_dom['HT_Total'] = h_dom['HTHG'] + h_dom['HTAG']
-    a_wyj['HT_Total'] = a_wyj['HTHG'] + a_wyj['HTAG']
-    h_dom['2H_Total'] = h_dom['Total_Goals'] - h_dom['HT_Total']
-    a_wyj['2H_Total'] = a_wyj['Total_Goals'] - a_wyj['HT_Total']
-    
-    h_total_all['Team_GF'] = np.where(h_total_all['Home'] == home, h_total_all['FTHG'], h_total_all['FTAG'])
-    h_total_all['Team_GA'] = np.where(h_total_all['Home'] == home, h_total_all['FTAG'], h_total_all['FTHG'])
-    a_total_all['Team_GF'] = np.where(a_total_all['Home'] == away, a_total_all['FTHG'], a_total_all['FTAG'])
-    a_total_all['Team_GA'] = np.where(a_total_all['Home'] == away, a_total_all['FTAG'], a_total_all['FTHG'])
-
-    max_h_scored_dom = h_dom['FTHG'].max()
-    max_h_conceded_dom = h_dom['FTAG'].max()
-    max_h_scored_all = h_total_all['Team_GF'].max()
-    max_h_conceded_all = h_total_all['Team_GA'].max()
-    
-    max_a_scored_wyj = a_wyj['FTAG'].max()
-    max_a_conceded_wyj = a_wyj['FTHG'].max()
-    max_a_scored_all = a_total_all['Team_GF'].max()
-    max_a_conceded_all = a_total_all['Team_GA'].max()
+    h_dom['HT_Total'] = pd.to_numeric(h_dom['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(h_dom['HTAG'], errors='coerce').fillna(0)
+    a_wyj['HT_Total'] = pd.to_numeric(a_wyj['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(a_wyj['HTAG'], errors='coerce').fillna(0)
     
     builder_blocks_code = []
     block_probabilities = []
-    block_estimated_odds = []
     
+    # Blok 1: Over 0.5 Gola
     h_dom_o05 = sum(h_dom['Total_Goals'] >= 1) / len(h_dom)
     a_wyj_o05 = sum(a_wyj['Total_Goals'] >= 1) / len(a_wyj)
-    h_all_o05 = sum(h_total_all['Total_Goals'] >= 1) / len(h_total_all)
-    a_all_o05 = sum(a_total_all['Total_Goals'] >= 1) / len(a_total_all)
-    
-    if h_dom_o05 == 1.0 and a_wyj_o05 == 1.0 and h_all_o05 == 1.0 and a_all_o05 == 1.0:
+    prob_o05 = (h_dom_o05 + a_wyj_o05) / 2
+    if prob_o05 >= 0.95:
         builder_blocks_code.append("O0.5")
-        block_probabilities.append(1.0)
-        block_estimated_odds.append(1.04)
+        block_probabilities.append(prob_o05)
 
+    # Blok 2: Undery meczowe (szukamy najlepszej krawędzi)
     for line in [4.5, 5.5, 6.5]:
         h_u = sum(h_dom['Total_Goals'] < line) / len(h_dom)
         a_u = sum(a_wyj['Total_Goals'] < line) / len(a_wyj)
-        h_all_u = sum(h_total_all['Total_Goals'] < line) / len(h_total_all)
-        a_all_u = sum(a_total_all['Total_Goals'] < line) / len(a_total_all)
-        if h_u >= 0.95 and a_u >= 0.95 and h_all_u >= 0.94 and a_all_u >= 0.94:
+        prob_u = (h_u + a_u) / 2
+        if prob_u >= 0.94:
             builder_blocks_code.append(f"U{line}")
-            avg_prob = (h_u + a_u + h_all_u + a_all_u) / 4
-            block_probabilities.append(avg_prob)
-            block_estimated_odds.append(round(1 / (avg_prob * 0.91), 2))
+            block_probabilities.append(prob_u)
             break
 
-    h_ht = h_dom.dropna(subset=['HT_Total'])
-    a_ht = a_wyj.dropna(subset=['HT_Total'])
-    if len(h_ht) >= 3 and len(a_ht) >= 3:
-        for line in [1.5, 2.5, 3.5, 4.5]:
-            h_u_1h = sum(h_ht['HT_Total'] < line) / len(h_ht)
-            a_u_1h = sum(a_ht['HT_Total'] < line) / len(a_ht)
-            if h_u_1h >= 0.94 and a_u_1h >= 0.94:
-                builder_blocks_code.append(f"HT_U{line}")
-                avg_prob = (h_u_1h + a_u_1h) / 2
-                block_probabilities.append(avg_prob)
-                block_estimated_odds.append(round(1 / (avg_prob * 0.91), 2))
-                break
-
-    h_2h = h_dom.dropna(subset=['2H_Total'])
-    a_2h = a_wyj.dropna(subset=['2H_Total'])
-    if len(h_2h) >= 3 and len(a_2h) >= 3:
-        for line in [2.5, 3.5, 4.5]:
-            h_u_2h = sum(h_2h['2H_Total'] < line) / len(h_2h)
-            a_u_2h = sum(a_2h['2H_Total'] < line) / len(a_2h)
-            if h_u_2h >= 0.94 and a_u_2h >= 0.94:
-                builder_blocks_code.append(f"2H_U{line}")
-                avg_prob = (h_u_2h + a_u_2h) / 2
-                block_probabilities.append(avg_prob)
-                block_estimated_odds.append(round(1 / (avg_prob * 0.91), 2))
-                break
-
-    highest_h_scored = max(max_h_scored_dom, max_h_scored_all)
-    for line in [3.5, 4.5, 5.5]:
-        if line > highest_h_scored:
-            h_u_prob = sum(h_dom['FTHG'] < line) / len(h_dom)
-            h_all_u_prob = sum(h_total_all['Team_GF'] < line) / len(h_total_all)
-            if h_u_prob >= 0.95 and h_all_u_prob >= 0.94:
-                builder_blocks_code.append(f"HU{line}")
-                avg_prob = (h_u_prob + h_all_u_prob) / 2
-                block_probabilities.append(avg_prob)
-                block_estimated_odds.append(round(1 / (avg_prob * 0.91), 2))
-                break
-
-    highest_a_scored = max(max_a_scored_wyj, max_a_scored_all)
-    for line in [3.5, 4.5]:
-        if line > highest_a_scored:
-            a_u_prob = sum(a_wyj['FTAG'] < line) / len(a_wyj)
-            a_all_u_prob = sum(a_total_all['Team_GF'] < line) / len(a_total_all)
-            if a_u_prob >= 0.95 and a_all_u_prob >= 0.94:
-                builder_blocks_code.append(f"AU{line}")
-                avg_prob = (a_u_prob + a_all_u_prob) / 2
-                block_probabilities.append(avg_prob)
-                block_estimated_odds.append(round(1 / (avg_prob * 0.91), 2))
-                break
+    # Blok 3: Under w Pierwszej Połowie (HT)
+    for line in [1.5, 2.5]:
+        h_u_1h = sum(h_dom['HT_Total'] < line) / len(h_dom)
+        a_u_1h = sum(a_wyj['HT_Total'] < line) / len(a_wyj)
+        prob_u_1h = (h_u_1h + a_u_1h) / 2
+        if prob_u_1h >= 0.94:
+            builder_blocks_code.append(f"HT_U{line}")
+            block_probabilities.append(prob_u_1h)
+            break
 
     if len(builder_blocks_code) >= 3:
-        final_builder_safety = round(np.prod(block_probabilities) * 100, 1)
-        if final_builder_safety >= 95.0:
-            sugerowany_kupon = "+".join(builder_blocks_code)
-            estimated_bb_odd = round((1.0 + sum([(o - 1.0) * 0.52 for o in block_estimated_odds])) * 0.95, 2)
-            if estimated_bb_odd < 1.05: estimated_bb_odd = 1.05
-            szansa_str = f"{final_builder_safety}%"
-            uzasadnienie = f"Stabilny zestaw w kroczącym oknie."
+        # Obliczenie szansy kuponu (uproszczone złączenie do raportu)
+        final_builder_safety = round(np.mean(block_probabilities) * 100, 1)
+        
+        # OBLICZENIE REALNEGO KURSU BUKMACHERSKIEGO - korelacja underów (mocno powiązane = 0.65)
+        estimated_bb_odd = calc_betbuilder_odd(block_probabilities, correlation_factor=0.65, margin=0.92)
+        
+        sugerowany_kupon = "+".join(builder_blocks_code)
+        uzasadnienie = f"BetBuilder skalkulowany z korelacją zdarzeń."
 
-            predictions_builder.append([
-                row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}", status_k,
-                sugerowany_kupon, szansa_str, str(estimated_bb_odd).replace('.', ','), uzasadnienie,
-                f"Dom: {len(h_dom)} (Suma: {len(h_total_all)})", 
-                f"Wyjazd: {len(a_wyj)} (Suma: {len(a_total_all)})",
-                int(max_h_scored_dom), int(max_h_conceded_dom), int(max_h_scored_all), int(max_h_conceded_all),
-                int(max_a_scored_wyj), int(max_a_conceded_wyj), int(max_a_scored_all), int(max_a_conceded_all)
-            ])
-            
-            all_generated_predictions.append([row['Match_ID'], row['Termin'], row['Date'], home, away, "BetBuilder Pro", sugerowany_kupon, "-", szansa_str, str(estimated_bb_odd).replace('.', ','), uzasadnienie])
+        predictions_builder.append([
+            row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}",
+            sugerowany_kupon, f"{final_builder_safety}%", str(estimated_bb_odd).replace('.', ','), uzasadnienie,
+            f"Dom: {len(h_dom)}", f"Wyj: {len(a_wyj)}", 
+            int(h_dom['FTHG'].max()), int(h_dom['FTAG'].max()), 
+            int(a_wyj['FTAG'].max()), int(a_wyj['FTHG'].max())
+        ])
 
-headers_builder = STANDARD_HEADERS + [
-    "H_Probka", "A_Probka",
-    "H_Max_Strz_Dom", "H_Max_Stra_Dom", "H_Max_Strz_Ogół", "H_Max_Stra_Ogół",
-    "A_Max_Strz_Wyj", "A_Max_Stra_Wyj", "A_Max_Strz_Ogół", "A_Max_Stra_Ogół"
-]
-df_pred_builder = pd.DataFrame(predictions_builder, columns=headers_builder).sort_values(by="Szansa", ascending=False) if predictions_builder else pd.DataFrame(columns=headers_builder)
+df_pred_builder = pd.DataFrame(predictions_builder, columns=base_cols + ["H_Probka", "A_Probka", "H_Max_Strz_Dom", "H_Max_Stra_Dom", "A_Max_Strz_Wyj", "A_Max_Stra_Wyj"]).sort_values(by="Szansa", ascending=False) if predictions_builder else pd.DataFrame(columns=base_cols + ["H_Probka", "A_Probka", "H_Max_Strz_Dom", "H_Max_Stra_Dom", "A_Max_Strz_Wyj", "A_Max_Stra_Wyj"])
 
 # ==========================================================
-# 6c. ENGINE MULTIGOL (Przedziały 1-5 i 1-6) z Regresją
+# 6c. ENGINE MULTIGOL (Przedziały 1-5 i 1-6) z Poissonem
 # ==========================================================
-print("Uruchamiam Engine Multigol (Detektor 1-5 / 1-6 z Regresją)...")
+print("Uruchamiam Engine Multigol (Detektor z Regresją i Poissonem)...")
 predictions_multigol = []
 
 for idx, row in fixtures_clean.iterrows():
@@ -725,17 +674,14 @@ for idx, row in fixtures_clean.iterrows():
     fixture_base = get_base_league(league)
     status_k = row['Status_Kursów']
     
-    h_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == home) | (valid_matches['Away'] == home))]
-    a_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == away) | (valid_matches['Away'] == away))]
-    if len(h_tot_all) < 10 or len(a_tot_all) < 10: continue
-
     h_dom = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Home'] == home)]
     a_wyj = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Away'] == away)]
-    if len(h_dom) == 0 or len(a_wyj) == 0: continue
+    if len(h_dom) < 5 or len(a_wyj) < 5: continue
 
     h_last_goals = get_last_match_goals(fixture_base, home)
     a_last_goals = get_last_match_goals(fixture_base, away)
     
+    # Anomalie
     has_anomaly = False
     anom_text = ""
     if h_last_goals == 0 or h_last_goals > 5:
@@ -747,40 +693,46 @@ for idx, row in fixtures_clean.iterrows():
 
     if not has_anomaly: continue
 
-    h_1_5_dom = sum((h_dom['Total_Goals'] >= 1) & (h_dom['Total_Goals'] <= 5)) / len(h_dom)
-    h_1_5_all = sum((h_tot_all['Total_Goals'] >= 1) & (h_tot_all['Total_Goals'] <= 5)) / len(h_tot_all)
-    a_1_5_wyj = sum((a_wyj['Total_Goals'] >= 1) & (a_wyj['Total_Goals'] <= 5)) / len(a_wyj)
-    a_1_5_all = sum((a_tot_all['Total_Goals'] >= 1) & (a_tot_all['Total_Goals'] <= 5)) / len(a_tot_all)
+    # Obliczenia Poissona (Oczekiwana wartość goli = średnia)
+    avg_h_goals = h_dom['Total_Goals'].mean()
+    avg_a_goals = a_wyj['Total_Goals'].mean()
+    lam_match = (avg_h_goals + avg_a_goals) / 2
     
-    prob_1_5 = (h_1_5_dom + h_1_5_all + a_1_5_wyj + a_1_5_all) / 4
-
-    h_1_6_dom = sum((h_dom['Total_Goals'] >= 1) & (h_dom['Total_Goals'] <= 6)) / len(h_dom)
-    h_1_6_all = sum((h_tot_all['Total_Goals'] >= 1) & (h_tot_all['Total_Goals'] <= 6)) / len(h_tot_all)
-    a_1_6_wyj = sum((a_wyj['Total_Goals'] >= 1) & (a_wyj['Total_Goals'] <= 6)) / len(a_wyj)
-    a_1_6_all = sum((a_tot_all['Total_Goals'] >= 1) & (a_tot_all['Total_Goals'] <= 6)) / len(a_tot_all)
+    # Prawdopodobieństwa Poissona dla zakresów
+    poisson_0_goals = get_poisson_prob(lam_match, 0, "exact")
+    poisson_under_5 = get_poisson_prob(lam_match, 5, "under")
+    poisson_under_6 = get_poisson_prob(lam_match, 6, "under")
     
-    prob_1_6 = (h_1_6_dom + h_1_6_all + a_1_6_wyj + a_1_6_all) / 4
+    poisson_1_5 = poisson_under_5 - poisson_0_goals
+    poisson_1_6 = poisson_under_6 - poisson_0_goals
 
-    if prob_1_5 >= 0.90 or prob_1_6 >= 0.90:
-        if prob_1_5 >= 0.90:
+    # Częstotliwość historyczna
+    hist_1_5 = (sum((h_dom['Total_Goals'] >= 1) & (h_dom['Total_Goals'] <= 5)) / len(h_dom) + 
+                sum((a_wyj['Total_Goals'] >= 1) & (a_wyj['Total_Goals'] <= 5)) / len(a_wyj)) / 2
+    hist_1_6 = (sum((h_dom['Total_Goals'] >= 1) & (h_dom['Total_Goals'] <= 6)) / len(h_dom) + 
+                sum((a_wyj['Total_Goals'] >= 1) & (a_wyj['Total_Goals'] <= 6)) / len(a_wyj)) / 2
+    
+    # Uśredniamy historię z modelem matematycznym dla wyższej precyzji
+    prob_1_5 = (hist_1_5 + poisson_1_5) / 2
+    prob_1_6 = (hist_1_6 + poisson_1_6) / 2
+
+    if prob_1_5 >= 0.88 or prob_1_6 >= 0.88:
+        if prob_1_5 >= 0.88:
             typ_kod, pewnosc = "MG_1-5", prob_1_5
         else:
             typ_kod, pewnosc = "MG_1-6", prob_1_6
             
-        est_odd = round(1.0 + (((1/pewnosc) - 1.0) / 1.5), 2)
+        est_odd = max(1.05, round((1 / pewnosc) * 0.93, 2)) # 7% marży bukmachera
         szansa_str = f"{round(pewnosc*100, 1)}%"
-        uzasadnienie = anom_text + "Regresja do średniej."
+        uzasadnienie = anom_text + f"Regresja + Poisson (λ={round(lam_match, 2)})."
 
         predictions_multigol.append([
-            row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}", status_k,
+            row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}",
             typ_kod, szansa_str, str(est_odd).replace('.', ','), uzasadnienie,
             f"D: {len(h_dom)}", f"W: {len(a_wyj)}", h_last_goals, a_last_goals
         ])
         
-        all_generated_predictions.append([row['Match_ID'], row['Termin'], row['Date'], home, away, "Multigol", typ_kod, "-", szansa_str, str(est_odd).replace('.', ','), uzasadnienie])
-
-headers_multigol = STANDARD_HEADERS + ["H_Próbka", "A_Próbka", "Ostatnie_Gole_H", "Ostatnie_Gole_A"]
-df_pred_multigol = pd.DataFrame(predictions_multigol, columns=headers_multigol).sort_values(by="Szansa", ascending=False) if predictions_multigol else pd.DataFrame(columns=headers_multigol)
+df_pred_multigol = pd.DataFrame(predictions_multigol, columns=base_cols + ["H_Próbka", "A_Próbka", "Ostatnie_Gole_H", "Ostatnie_Gole_A"]).sort_values(by="Szansa", ascending=False) if predictions_multigol else pd.DataFrame(columns=base_cols + ["H_Próbka", "A_Próbka", "Ostatnie_Gole_H", "Ostatnie_Gole_A"])
 
 # ==========================================================
 # 6d. ENGINE CORNERS PRO (Undery Rzutów Rożnych)
