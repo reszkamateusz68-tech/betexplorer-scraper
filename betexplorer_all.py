@@ -11,11 +11,13 @@ import pandas as pd
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from google.oauth2.service_account import Credentials
+import math
 
 today = datetime.now()
 
-import math
-
+# ==========================================================
+# FUNKCJE MATEMATYCZNE BUKMACHERA (POISSON I KORELACJE)
+# ==========================================================
 def get_poisson_prob(lam, k, calc_type="exact"):
     """ Oblicza Prawdopodobieństwo z Rozkładu Poissona. """
     if pd.isna(lam) or lam <= 0: return 0.0
@@ -49,15 +51,21 @@ def get_poisson_match_prob(lam_h, lam_a, max_val=35):
     return p_1, p_x, p_2
 
 def calc_betbuilder_odd(probs, correlation_factor=0.65, margin=0.92):
-    """ Kalkulator kursów BetBuilder (Same Game Parlay). """
+    """
+    Kalkulator kursów BetBuilder (Same Game Parlay).
+    correlation_factor: 0 = brak korelacji (czyste AKO), 1 = pełna korelacja.
+    margin: marża bukmachera (0.92 to ok. 8% marży).
+    """
     if not probs: return 1.0
     probs.sort(reverse=True) 
     combined_p = probs[0]
+    
     for p in probs[1:]:
         combined_p *= (p ** (1 - correlation_factor))
         
     fair_odd = 1 / combined_p if combined_p > 0 else 99.0
     return max(1.05, round(fair_odd * margin, 2))
+
 
 # ==========================================================
 # GŁÓWNE FUNKCJE POMOCNICZE
@@ -172,7 +180,6 @@ def prepare_for_gsheets(df):
         new_row = []
         for idx, val in enumerate(row):
             col_name = df.columns[idx]
-            # Usunięcie myślników na rzecz pustych komórek ("")
             if pd.isna(val) or val == "nan":
                 new_row.append("")
                 continue
@@ -180,7 +187,6 @@ def prepare_for_gsheets(df):
             if str_val in ["<NA>", "NaN", "None", "", "inf", "-inf", "-"]:
                 new_row.append("")
             else:
-                # Zachowujemy polskie przecinki dla ułamków
                 if any(k in col_name for k in ["Odd", "Avg", "Value", "PPG", "Prawdopodobieństwo", "Pewność", "Kurs", "Szansa", "Profit"]):
                     new_row.append(str_val.replace(".", ","))
                 else:
@@ -197,45 +203,6 @@ try:
         mapowanie_ss = slownik.get("SoccerStats_To_BetExplorer", {})
 except Exception:
     mapowanie_fd, mapowanie_ss = {}, {}
-
-import math
-
-def get_poisson_match_prob(lam_h, lam_a, max_val=35):
-    """
-    Krzyżowa macierz Poissona. 
-    Zwraca Prawdopodobieństwo (1, X, 2) dla Strzałów, Rożnych lub Goli.
-    """
-    if pd.isna(lam_h) or pd.isna(lam_a) or lam_h <= 0 or lam_a <= 0: return 0.0, 0.0, 0.0
-    p_1, p_x, p_2 = 0.0, 0.0, 0.0
-    
-    for i in range(max_val):
-        prob_i = get_poisson_prob(lam_h, i, "exact")
-        for j in range(max_val):
-            prob_j = get_poisson_prob(lam_a, j, "exact")
-            prob_ij = prob_i * prob_j
-            if i > j: p_1 += prob_ij
-            elif i == j: p_x += prob_ij
-            else: p_2 += prob_ij
-            
-    return p_1, p_x, p_2
-
-def calc_betbuilder_odd(probs, correlation_factor=0.65, margin=0.92):
-    """
-    Kalkulator kursów BetBuilder (Same Game Parlay).
-    correlation_factor: 0 = brak korelacji (czyste AKO), 1 = pełna korelacja.
-    margin: marża bukmachera (0.92 to ok. 8% marży).
-    """
-    if not probs: return 1.0
-    probs.sort(reverse=True) # Zaczynamy od zdarzenia z najwyższym prawodopodobieństwem
-    combined_p = probs[0]
-    
-    # Pozostałe prawdopodobieństwa potęgujemy przez (1 - korelacja),
-    # co sprawia, że silnie skorelowane typy mniej obniżają ostateczny kurs.
-    for p in probs[1:]:
-        combined_p *= (p ** (1 - correlation_factor))
-        
-    fair_odd = 1 / combined_p if combined_p > 0 else 99.0
-    return max(1.05, round(fair_odd * margin, 2))
 
 # ==========================================
 # 1. POBIERANIE Z BETEXPLORER 
@@ -556,8 +523,6 @@ for idx, row in fixtures_clean.iterrows():
     a_window = a_all.head(30)
     if len(h_window) < 10 or len(a_window) < 10: continue
 
-    # 1. Obliczenia Poissona
-    # Średnio gole strzelane/tracone przez Gosp u siebie i Gości na wyjeździe
     h_gf, h_ga = h_window['FTHG'].mean(), h_window['FTAG'].mean()
     a_gf, a_ga = a_window['FTAG'].mean(), a_window['FTHG'].mean()
     
@@ -567,14 +532,12 @@ for idx, row in fixtures_clean.iterrows():
     p1_g, px_g, p2_g = get_poisson_match_prob(lam_h_goals, lam_a_goals, max_val=15)
     poisson_1x = p1_g + px_g
 
-    # 2. Prawdopodobieństwo Historyczne
     h_1x_window_cnt = sum(h_window['FTHG'] >= h_window['FTAG'])
     a_lose_window_cnt = sum(a_window['FTHG'] >= a_window['FTAG'])
     hist_1x = (h_1x_window_cnt / len(h_window) + a_lose_window_cnt / len(a_window)) / 2
 
-    # 3. Zblendowanie (Klucz do ominięcia bukmachera - Math + Historia)
     final_prob = min(max((poisson_1x * 0.5) + (hist_1x * 0.5), 0.05), 0.95)
-    fair_odd = round((1 / final_prob) * 0.93, 2) # Szacujemy kurs uwzględniający marżę buka
+    fair_odd = round((1 / final_prob) * 0.93, 2) 
     szansa_str = f"{round(final_prob*100, 1)}%"
     
     if buk_odd_1x != "-":
@@ -620,7 +583,6 @@ for idx, row in fixtures_clean.iterrows():
     builder_blocks_code = []
     block_probabilities = []
     
-    # Blok 1: Over 0.5 Gola
     h_dom_o05 = sum(h_dom['Total_Goals'] >= 1) / len(h_dom)
     a_wyj_o05 = sum(a_wyj['Total_Goals'] >= 1) / len(a_wyj)
     prob_o05 = (h_dom_o05 + a_wyj_o05) / 2
@@ -628,7 +590,6 @@ for idx, row in fixtures_clean.iterrows():
         builder_blocks_code.append("O0.5")
         block_probabilities.append(prob_o05)
 
-    # Blok 2: Undery meczowe (szukamy najlepszej krawędzi)
     for line in [4.5, 5.5, 6.5]:
         h_u = sum(h_dom['Total_Goals'] < line) / len(h_dom)
         a_u = sum(a_wyj['Total_Goals'] < line) / len(a_wyj)
@@ -638,7 +599,6 @@ for idx, row in fixtures_clean.iterrows():
             block_probabilities.append(prob_u)
             break
 
-    # Blok 3: Under w Pierwszej Połowie (HT)
     for line in [1.5, 2.5]:
         h_u_1h = sum(h_dom['HT_Total'] < line) / len(h_dom)
         a_u_1h = sum(a_wyj['HT_Total'] < line) / len(a_wyj)
@@ -648,7 +608,7 @@ for idx, row in fixtures_clean.iterrows():
             block_probabilities.append(prob_u_1h)
             break
 
-if len(builder_blocks_code) >= 3:
+    if len(builder_blocks_code) >= 3:
         final_builder_safety = round(np.mean(block_probabilities) * 100, 1)
         estimated_bb_odd = calc_betbuilder_odd(block_probabilities, correlation_factor=0.65, margin=0.92)
         sugerowany_kupon = "+".join(builder_blocks_code)
@@ -685,7 +645,6 @@ for idx, row in fixtures_clean.iterrows():
     h_last_goals = get_last_match_goals(fixture_base, home)
     a_last_goals = get_last_match_goals(fixture_base, away)
     
-    # Anomalie
     has_anomaly = False
     anom_text = ""
     if h_last_goals == 0 or h_last_goals > 5:
@@ -697,12 +656,10 @@ for idx, row in fixtures_clean.iterrows():
 
     if not has_anomaly: continue
 
-    # Obliczenia Poissona (Oczekiwana wartość goli = średnia)
     avg_h_goals = h_dom['Total_Goals'].mean()
     avg_a_goals = a_wyj['Total_Goals'].mean()
     lam_match = (avg_h_goals + avg_a_goals) / 2
     
-    # Prawdopodobieństwa Poissona dla zakresów
     poisson_0_goals = get_poisson_prob(lam_match, 0, "exact")
     poisson_under_5 = get_poisson_prob(lam_match, 5, "under")
     poisson_under_6 = get_poisson_prob(lam_match, 6, "under")
@@ -710,23 +667,21 @@ for idx, row in fixtures_clean.iterrows():
     poisson_1_5 = poisson_under_5 - poisson_0_goals
     poisson_1_6 = poisson_under_6 - poisson_0_goals
 
-    # Częstotliwość historyczna
     hist_1_5 = (sum((h_dom['Total_Goals'] >= 1) & (h_dom['Total_Goals'] <= 5)) / len(h_dom) + 
                 sum((a_wyj['Total_Goals'] >= 1) & (a_wyj['Total_Goals'] <= 5)) / len(a_wyj)) / 2
     hist_1_6 = (sum((h_dom['Total_Goals'] >= 1) & (h_dom['Total_Goals'] <= 6)) / len(h_dom) + 
                 sum((a_wyj['Total_Goals'] >= 1) & (a_wyj['Total_Goals'] <= 6)) / len(a_wyj)) / 2
     
-    # Uśredniamy historię z modelem matematycznym dla wyższej precyzji
     prob_1_5 = (hist_1_5 + poisson_1_5) / 2
     prob_1_6 = (hist_1_6 + poisson_1_6) / 2
 
-if prob_1_5 >= 0.88 or prob_1_6 >= 0.88:
+    if prob_1_5 >= 0.88 or prob_1_6 >= 0.88:
         if prob_1_5 >= 0.88:
             typ_kod, pewnosc = "MG_1-5", prob_1_5
         else:
             typ_kod, pewnosc = "MG_1-6", prob_1_6
             
-        est_odd = max(1.05, round((1 / pewnosc) * 0.93, 2)) # 7% marży bukmachera
+        est_odd = max(1.05, round((1 / pewnosc) * 0.93, 2))
         szansa_str = f"{round(pewnosc*100, 1)}%"
         uzasadnienie = anom_text + f"Regresja + Poisson (λ={round(lam_match, 2)})."
 
@@ -757,13 +712,11 @@ for idx, row in fixtures_clean.iterrows():
     a_wyj_c = valid_corners[(valid_corners['Base_League'] == fixture_base) & (valid_corners['Away'] == away)].copy()
     if len(h_dom_c) < 5 or len(a_wyj_c) < 5: continue
 
-    # Średnie zdobywanych rzutów rożnych (Wartości Lamda Poissona)
     h_c_for = h_dom_c['Corners_H'].mean()
     h_c_ag = h_dom_c['Corners_A'].mean()
     a_c_for = a_wyj_c['Corners_A'].mean()
     a_c_ag = a_wyj_c['Corners_H'].mean()
 
-    # Oczekiwana liczba rożnych w meczu = Średnia z tego, co Gosp. nabija w domu + to, co Gość nabija na wyjeździe
     lam_match = (h_c_for + h_c_ag + a_c_for + a_c_ag) / 2
     lam_h = (h_c_for + a_c_ag) / 2
     lam_a = (a_c_for + h_c_ag) / 2
@@ -771,7 +724,6 @@ for idx, row in fixtures_clean.iterrows():
     c_blocks_code = []
     c_probs = []
 
-    # Linie meczowe - Matematyka + Historia
     for line in [8.5, 9.5, 10.5, 11.5]:
         poisson_u = get_poisson_prob(lam_match, int(line), "under")
         hist_u = (sum(h_dom_c['Total_Corners'] < line)/len(h_dom_c) + sum(a_wyj_c['Total_Corners'] < line)/len(a_wyj_c)) / 2
@@ -780,9 +732,8 @@ for idx, row in fixtures_clean.iterrows():
         if prob_u >= 0.88:
             c_blocks_code.append(f"C_U{line}")
             c_probs.append(prob_u)
-            break # Bierzemy tylko najniższą (najbardziej opłacalną) linię powyżej 88%
+            break 
 
-    # Linie drużynowe (Gospodarz)
     for line in [4.5, 5.5, 6.5, 7.5]:
         p_u = get_poisson_prob(lam_h, int(line), "under")
         h_u = sum(h_dom_c['Corners_H'] < line) / len(h_dom_c)
@@ -792,7 +743,6 @@ for idx, row in fixtures_clean.iterrows():
             c_probs.append(prob)
             break
 
-    # Linie drużynowe (Gość)
     for line in [3.5, 4.5, 5.5, 6.5]:
         p_u = get_poisson_prob(lam_a, int(line), "under")
         h_u = sum(a_wyj_c['Corners_A'] < line) / len(a_wyj_c)
@@ -803,7 +753,6 @@ for idx, row in fixtures_clean.iterrows():
             break
 
     if len(c_blocks_code) >= 1:
-        # Obliczanie skorelowanego kursu BetBuildera (jeśli grają podwójnego undera)
         est_odd = calc_betbuilder_odd(c_probs, correlation_factor=0.60, margin=0.92)
         final_safety = round(np.mean(c_probs) * 100, 1)
         szansa_str = f"{final_safety}%"
@@ -845,18 +794,14 @@ for idx, row in fixtures_clean.iterrows():
     a_wyj_s = valid_shots[(valid_shots['Base_League'] == fixture_base) & (valid_shots['Away'] == away)].copy()
     if len(h_dom_s) < 5 or len(a_wyj_s) < 5: continue
 
-    # -- STRZAŁY OGÓŁEM --
     lam_h_shots = (h_dom_s['Shots_H'].mean() + a_wyj_s['Shots_H'].mean()) / 2
     lam_a_shots = (a_wyj_s['Shots_A'].mean() + h_dom_s['Shots_A'].mean()) / 2
     
-    # Przez macierz z max_val = 35 (bo tyle strzałów pada max w meczach)
     p1_s, px_s, p2_s = get_poisson_match_prob(lam_h_shots, lam_a_shots, max_val=35)
     
-    # Historia 
     hist_h_s = (sum(h_dom_s['Shots_H'] > h_dom_s['Shots_A'])/len(h_dom_s) + sum(a_wyj_s['Shots_H'] > a_wyj_s['Shots_A'])/len(a_wyj_s)) / 2
     prob_h_s = (p1_s + hist_h_s) / 2
 
-    # -- STRZAŁY CELNE --
     lam_h_st = (h_dom_s['ShotsTarget_H'].mean() + a_wyj_s['ShotsTarget_H'].mean()) / 2
     lam_a_st = (a_wyj_s['ShotsTarget_A'].mean() + h_dom_s['ShotsTarget_A'].mean()) / 2
     
@@ -1069,7 +1014,6 @@ creds = Credentials.from_service_account_file("credentials.json", scopes=scope) 
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
-# Oczyszczona architektura - brak Termin i Yield_Wplyw
 cols_historia = ["Match_ID", "Akceptacja", "Date", "Home", "Away", "Engine", "Bet_Type", "Odds", "Szansa", "Kurs_Szac", "Argumentacja", "Status", "Profit"]
 
 try:
@@ -1084,19 +1028,22 @@ except gspread.exceptions.WorksheetNotFound:
     ws_historia = spreadsheet.worksheet("Historia_Typow")
     df_historia = pd.DataFrame(columns=cols_historia)
 
-# Zabezpieczenie struktury kolumn
 for col in cols_historia:
     if col not in df_historia.columns:
         if col == "Akceptacja": df_historia.insert(1, "Akceptacja", "")
         else: df_historia[col] = ""
+        
 df_historia = df_historia[cols_historia]
 
+# NOWY FILTR BEZPIECZEŃSTWA: Automatycznie odrzuca puste wiersze powstałe podczas ręcznego czyszczenia w Google Sheets
+if not df_historia.empty:
+    df_historia = df_historia[df_historia['Match_ID'].astype(str).str.strip() != ""]
+
 if all_generated_predictions:
-    # Tworzymy tymczasowy DF ze wszystkimi danymi z silników, a następnie wyrzucamy "Termin"
     nowe_typy_df = pd.DataFrame(all_generated_predictions, columns=["Match_ID", "Termin", "Date", "Home", "Away", "Engine", "Bet_Type", "Odds", "Szansa", "Kurs_Szac", "Argumentacja"])
     nowe_typy_df = nowe_typy_df.drop(columns=["Termin"])
     
-    nowe_typy_df.insert(1, "Akceptacja", "") # Oczekuje na ocenę typera
+    nowe_typy_df.insert(1, "Akceptacja", "") 
     nowe_typy_df["Status"] = "W OCZEKIWANIU"
     nowe_typy_df["Profit"] = ""
     
@@ -1193,10 +1140,8 @@ if not df_historia.empty and not results_clean.empty:
                     try:
                         kurs = float(str(row["Odds"]).replace(',', '.'))
                         if nowy_status == "WYGRANA":
-                            # CZYSTA LICZBA, bez plusa
                             df_historia.at[idx, "Profit"] = round(kurs - 1.0, 2)
                         elif nowy_status == "PRZEGRANA":
-                            # CZYSTA LICZBA
                             df_historia.at[idx, "Profit"] = -1.0
                     except: pass
 
@@ -1223,11 +1168,9 @@ base_cols = ["Match_ID", "Date", "Godzina", "Liga", "Mecz", "Sugerowany Typ", "S
 
 for engine_name, df_e in all_pred_dfs:
     if df_e.empty: continue
-    # Zbieramy wszystkie kolumny statystyczne, które nie są podstawowymi
     context_cols = [c for c in df_e.columns if c not in base_cols and c not in ["Termin", "Status_Kursów", "Data"]]
     
     for _, row in df_e.iterrows():
-        # Budujemy zwięzły kontekst statystyczny (np. "Średnia Sezon: 3.5 | Średnia 2 Ostatnie: 0.5")
         context_data = " | ".join([f"{c}: {row[c]}" for c in context_cols if str(row[c]).strip() not in ["", "-", "nan"]])
         
         master_predictions_list.append([
@@ -1241,7 +1184,6 @@ df_all_predictions = pd.DataFrame(master_predictions_list, columns=["Match_ID", 
 if not df_all_predictions.empty:
     df_all_predictions = df_all_predictions.sort_values(by=["Date", "Szansa"], ascending=[True, False])
 
-# Uproszczona lista zakładek (Zastępujemy 9 zakładek jedną)
 all_sheets = [
     "Summary", "Fixtures", "Results", "League_Tables", "Historia_Typow", "All_Predictions"
 ]
