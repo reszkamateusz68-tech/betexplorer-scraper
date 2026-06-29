@@ -157,7 +157,13 @@ except Exception:
 try: urls = pd.read_excel("ligi.xlsx")["URL"].dropna().tolist()
 except: urls = []
 
-# Konfiguracja twardego scrapera imitującego przeglądarkę z PC
+headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Cache-Control": "no-cache"
+}
+
 scraper_be = cloudscraper.create_scraper(
     browser={
         'browser': 'chrome',
@@ -272,12 +278,21 @@ print("Rozpoczynam pobieranie z SoccerStats...")
 try:
     if os.path.exists("ligi_soccerstats.xlsx"):
         urls_ss = pd.read_excel("ligi_soccerstats.xlsx")["URL"].dropna().tolist()
-        skaner_ss = cloudscraper.create_scraper()
+        # Poprawka: Używamy tego samego, wzmocnionego profilu przeglądarki
+        skaner_ss = cloudscraper.create_scraper(
+            browser={
+                'browser': 'chrome',
+                'platform': 'windows',
+                'desktop': True
+            }
+        )
         for i_ss, url_ss in enumerate(urls_ss, start=1):
             url_ss_clean = str(url_ss).strip()
-            time.sleep(random.uniform(1, 3))
+            time.sleep(random.uniform(2, 4))
             try:
-                soup_ss = BeautifulSoup(skaner_ss.get(url_ss_clean, timeout=30).text, "html.parser")
+                # Poprawka: Dodano brakujący atrybut 'headers=headers' do zapytania get
+                response_ss = skaner_ss.get(url_ss_clean, headers=headers, timeout=30)
+                soup_ss = BeautifulSoup(response_ss.text, "html.parser")
                 tabela_meczow = next((t for t in soup_ss.find_all("table") if "HT" in t.get_text() and "BTS" in t.get_text() and len(t.find_all("tr")) > 15), None)
                 ss_count = 0
                 if tabela_meczow:
@@ -429,7 +444,7 @@ team_ppg = {(r['League'], r['Team']): float(str(r['PPG']).replace(',', '.')) for
 # ==========================================================
 all_generated_predictions = []
 
-# ŻELAZNY STANDARD NAGŁÓWKÓW PREDYKCYJNYCH (Teraz 11 Kolumn z Tagi)
+# ŻELAZNY STANDARD NAGŁÓWKÓW PREDYKCYJNYCH
 STANDARD_HEADERS = ["Match_ID", "Termin", "Data", "Godzina", "Liga", "Mecz", "Status_Kursów", "Sugerowany Typ", "Szansa", "Kurs Szac.", "Argumentacja"]
 
 # ==========================================
