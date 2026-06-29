@@ -178,14 +178,21 @@ for i, url in enumerate(urls, start=1):
     print(f"[{i}/{len(urls)}] Pobieram BetExplorer: {url_clean}")
     if "/fixtures/" not in url_clean and "/results/" not in url_clean: continue
 
+    # Delikatne opóźnienie TYLKO między kolejnymi zapytaniami, by nie spamować (nie przed pierwszym)
+    if i > 1:
+        time.sleep(random.uniform(1.0, 2.5))
+
     max_retries = 3
     response = None
     bypass_used = False
     success = False
 
     for attempt in range(max_retries):
-        wait_time = random.uniform(2, 5) if attempt == 0 else random.uniform(15, 25) + (attempt * 10)
-        time.sleep(wait_time)
+        # Jeśli to ponowna próba po błędzie 429, włączamy długie chłodzenie
+        if attempt > 0:
+            wait_time = random.uniform(10, 15) * attempt
+            print(f"  -> Kod antybotowy. Chłodzenie {wait_time:.1f}s (Próba {attempt+1}/{max_retries})...")
+            time.sleep(wait_time)
         
         try:
             response = scraper_be.get(url_clean, timeout=30)
@@ -194,17 +201,20 @@ for i, url in enumerate(urls, start=1):
                 break
             elif response.status_code in [429, 403]:
                 bypass_used = True
-                print(f"  -> Kod {response.status_code}. Blokada serwera. Próba {attempt+1}/{max_retries}. Chłodzenie...")
+                # Nie robimy break, pozwalamy pętli przejść do kolejnej próby (gdzie odpali się chłodzenie)
             else:
                 break
         except Exception as e:
             print(f"  -> Błąd żądania: {e}")
-            time.sleep(10)
+            if attempt < max_retries - 1:
+                time.sleep(5)
 
     if not success or response is None or response.status_code != 200:
         final_code = response.status_code if response else "Brak odpowiedzi"
         scrape_report.append(["BetExplorer", url_clean, f"BŁĄD: Kod {final_code} po {max_retries} próbach"])
         continue
+
+    # ... reszta kodu bs4 (try: html = response.text ...) zostaje DOKŁADNIE bez zmian
 
     try:
         html = response.text
@@ -288,7 +298,7 @@ try:
         )
         for i_ss, url_ss in enumerate(urls_ss, start=1):
             url_ss_clean = str(url_ss).strip()
-            time.sleep(random.uniform(2, 4))
+            time.sleep(random.uniform(1.0, 2.0))
             try:
                 # Poprawka: Dodano brakujący atrybut 'headers=headers' do zapytania get
                 response_ss = skaner_ss.get(url_ss_clean, headers=headers, timeout=30)
