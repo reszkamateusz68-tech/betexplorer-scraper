@@ -127,14 +127,16 @@ def prepare_for_gsheets(df):
         new_row = []
         for idx, val in enumerate(row):
             col_name = df.columns[idx]
+            # Usunięcie myślników na rzecz pustych komórek ("")
             if pd.isna(val) or val == "nan":
-                new_row.append("-")
+                new_row.append("")
                 continue
             str_val = str(val).strip()
-            if str_val in ["<NA>", "NaN", "None", "", "inf", "-inf"]:
-                new_row.append("-")
+            if str_val in ["<NA>", "NaN", "None", "", "inf", "-inf", "-"]:
+                new_row.append("")
             else:
-                if any(k in col_name for k in ["Odd", "Avg", "Value", "PPG", "Prawdopodobieństwo", "Pewność", "Kurs", "Szansa"]):
+                # Zachowujemy polskie przecinki dla ułamków
+                if any(k in col_name for k in ["Odd", "Avg", "Value", "PPG", "Prawdopodobieństwo", "Pewność", "Kurs", "Szansa", "Profit"]):
                     new_row.append(str_val.replace(".", ","))
                 else:
                     if str_val.endswith(".0") and "%" not in str_val: new_row.append(str_val[:-2])
@@ -1132,8 +1134,8 @@ creds = Credentials.from_service_account_file("credentials.json", scopes=scope) 
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
-# UWAGA: Rozbudowałem listę o Szansa, Kurs_Szac i Argumentacja
-cols_historia = ["Match_ID", "Akceptacja", "Termin", "Date", "Home", "Away", "Engine", "Bet_Type", "Odds", "Szansa", "Kurs_Szac", "Argumentacja", "Status", "Profit", "Yield_Wplyw"]
+# Oczyszczona architektura - brak Termin i Yield_Wplyw
+cols_historia = ["Match_ID", "Akceptacja", "Date", "Home", "Away", "Engine", "Bet_Type", "Odds", "Szansa", "Kurs_Szac", "Argumentacja", "Status", "Profit"]
 
 try:
     ws_historia = spreadsheet.worksheet("Historia_Typow")
@@ -1143,25 +1145,26 @@ try:
     else:
         df_historia = pd.DataFrame(columns=cols_historia)
 except gspread.exceptions.WorksheetNotFound:
-    spreadsheet.add_worksheet(title="Historia_Typow", rows=10000, cols=20)
+    spreadsheet.add_worksheet(title="Historia_Typow", rows=10000, cols=15)
     ws_historia = spreadsheet.worksheet("Historia_Typow")
     df_historia = pd.DataFrame(columns=cols_historia)
 
-# Zabezpieczenie starych wierszy przed przesunięciem danych po dodaniu kolumn
+# Zabezpieczenie struktury kolumn
 for col in cols_historia:
     if col not in df_historia.columns:
-        if col == "Akceptacja": df_historia.insert(1, "Akceptacja", "-")
-        else: df_historia[col] = "-"
+        if col == "Akceptacja": df_historia.insert(1, "Akceptacja", "")
+        else: df_historia[col] = ""
 df_historia = df_historia[cols_historia]
 
 if all_generated_predictions:
+    # Tworzymy tymczasowy DF ze wszystkimi danymi z silników, a następnie wyrzucamy "Termin"
     nowe_typy_df = pd.DataFrame(all_generated_predictions, columns=["Match_ID", "Termin", "Date", "Home", "Away", "Engine", "Bet_Type", "Odds", "Szansa", "Kurs_Szac", "Argumentacja"])
-    nowe_typy_df.insert(1, "Akceptacja", "-") # Oczekuje na ocenę typera
-    nowe_typy_df["Status"] = "W OCZEKIWANIU"
-    nowe_typy_df["Profit"] = "-"
-    nowe_typy_df["Yield_Wplyw"] = "-"
+    nowe_typy_df = nowe_typy_df.drop(columns=["Termin"])
     
-    # Upewnienie się, że kolejność kolumn jest identyczna przed złączeniem
+    nowe_typy_df.insert(1, "Akceptacja", "") # Oczekuje na ocenę typera
+    nowe_typy_df["Status"] = "W OCZEKIWANIU"
+    nowe_typy_df["Profit"] = ""
+    
     nowe_typy_df = nowe_typy_df[cols_historia]
     
     if not df_historia.empty:
@@ -1255,35 +1258,68 @@ if not df_historia.empty and not results_clean.empty:
                     try:
                         kurs = float(str(row["Odds"]).replace(',', '.'))
                         if nowy_status == "WYGRANA":
-                            profit = round(kurs - 1.0, 2)
-                            df_historia.at[idx, "Profit"] = f"+{profit}"
-                            df_historia.at[idx, "Yield_Wplyw"] = f"+{round(profit*100, 1)}%"
+                            # CZYSTA LICZBA, bez plusa
+                            df_historia.at[idx, "Profit"] = round(kurs - 1.0, 2)
                         elif nowy_status == "PRZEGRANA":
-                            df_historia.at[idx, "Profit"] = "-1.0"
-                            df_historia.at[idx, "Yield_Wplyw"] = "-100%"
+                            # CZYSTA LICZBA
+                            df_historia.at[idx, "Profit"] = -1.0
                     except: pass
 
 
 # ==========================================
-# 8. WYSYŁKA GOOGLE SHEETS
+# 8. WYSYŁKA GOOGLE SHEETS I AGREGACJA PREDYKCJI
 # ==========================================
+print("Agregacja predykcji do jednej inteligentnej tabeli (All_Predictions)...")
+
+all_pred_dfs = [
+    ("1X Pro", df_pred_1x if 'df_pred_1x' in locals() else pd.DataFrame()),
+    ("BetBuilder", df_pred_builder if 'df_pred_builder' in locals() else pd.DataFrame()),
+    ("Multigol", df_pred_multigol if 'df_pred_multigol' in locals() else pd.DataFrame()),
+    ("Corners Pro", df_pred_corners if 'df_pred_corners' in locals() else pd.DataFrame()),
+    ("Shots Pro", df_pred_shots if 'df_pred_shots' in locals() else pd.DataFrame()),
+    ("Zimny Prysznic", df_pred_coldshower if 'df_pred_coldshower' in locals() else pd.DataFrame()),
+    ("Ukryta Forma", df_pred_hiddenform if 'df_pred_hiddenform' in locals() else pd.DataFrame()),
+    ("Anomalie Rożnych", df_pred_corner_anomalies if 'df_pred_corner_anomalies' in locals() else pd.DataFrame()),
+    ("Anomalie Bramkowe", df_pred_goal_anomalies if 'df_pred_goal_anomalies' in locals() else pd.DataFrame())
+]
+
+master_predictions_list = []
+base_cols = ["Match_ID", "Date", "Godzina", "Liga", "Mecz", "Sugerowany Typ", "Szansa", "Kurs Szac.", "Argumentacja"]
+
+for engine_name, df_e in all_pred_dfs:
+    if df_e.empty: continue
+    # Zbieramy wszystkie kolumny statystyczne, które nie są podstawowymi
+    context_cols = [c for c in df_e.columns if c not in base_cols and c not in ["Termin", "Status_Kursów", "Data"]]
+    
+    for _, row in df_e.iterrows():
+        # Budujemy zwięzły kontekst statystyczny (np. "Średnia Sezon: 3.5 | Średnia 2 Ostatnie: 0.5")
+        context_data = " | ".join([f"{c}: {row[c]}" for c in context_cols if str(row[c]).strip() not in ["", "-", "nan"]])
+        
+        master_predictions_list.append([
+            row.get("Match_ID", ""), row.get("Date", row.get("Data", "")), row.get("Godzina", ""), 
+            row.get("Liga", ""), row.get("Mecz", ""), engine_name, 
+            row.get("Sugerowany Typ", ""), row.get("Szansa", ""), 
+            row.get("Kurs Szac.", ""), row.get("Argumentacja", ""), context_data
+        ])
+
+df_all_predictions = pd.DataFrame(master_predictions_list, columns=["Match_ID", "Date", "Godzina", "Liga", "Mecz", "Engine", "Sugerowany Typ", "Szansa", "Kurs Szac.", "Argumentacja", "Metrics_Context"])
+if not df_all_predictions.empty:
+    df_all_predictions = df_all_predictions.sort_values(by=["Date", "Szansa"], ascending=[True, False])
+
+# Uproszczona lista zakładek (Zastępujemy 9 zakładek jedną)
 all_sheets = [
-    "Summary", "Fixtures", "Results", "League_Tables", "Historia_Typow",
-    "Predictions_1X", "Predictions_Builder", "Predictions_Multigol", 
-    "Predictions_Corners", "Predictions_Shots", "Predictions_ColdShower",
-    "Predictions_HiddenForm", "Predictions_CornerAnomalies", "Predictions_GoalAnomalies"
+    "Summary", "Fixtures", "Results", "League_Tables", "Historia_Typow", "All_Predictions"
 ]
 
 for sheet_name in all_sheets:
     try: spreadsheet.worksheet(sheet_name)
-    except: spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=45)
+    except: spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=20)
 
 try:
     spreadsheet.worksheet("Fixtures").resize(rows=5000, cols=35)
     spreadsheet.worksheet("Results").resize(rows=10000, cols=45) 
-    spreadsheet.worksheet("Historia_Typow").resize(rows=10000, cols=20) # Zwiększono limit kolumn
-    for name in ["Predictions_1X", "Predictions_Builder", "Predictions_Multigol", "Predictions_Corners", "Predictions_Shots", "Predictions_ColdShower", "Predictions_HiddenForm", "Predictions_CornerAnomalies", "Predictions_GoalAnomalies"]:
-        spreadsheet.worksheet(name).resize(rows=3000, cols=45)
+    spreadsheet.worksheet("Historia_Typow").resize(rows=10000, cols=15)
+    spreadsheet.worksheet("All_Predictions").resize(rows=5000, cols=15)
 except: pass
 
 print("Wysyłam Czysty Terminarz do Google Sheets...")
@@ -1302,34 +1338,9 @@ print("Wysyłam Logi Systemu Backtestingu (Historia_Typow)...")
 ws_historia.clear()
 if not df_historia.empty: ws_historia.update(prepare_for_gsheets(df_historia))
 
-print("Wysyłam Analizy Podstawowe (1X, Builder, Multigol, Corners, Shots)...")
-spreadsheet.worksheet("Predictions_1X").clear()
-if not df_pred_1x.empty: spreadsheet.worksheet("Predictions_1X").update(prepare_for_gsheets(df_pred_1x))
-
-spreadsheet.worksheet("Predictions_Builder").clear()
-if not df_pred_builder.empty: spreadsheet.worksheet("Predictions_Builder").update(prepare_for_gsheets(df_pred_builder))
-
-spreadsheet.worksheet("Predictions_Multigol").clear()
-if not df_pred_multigol.empty: spreadsheet.worksheet("Predictions_Multigol").update(prepare_for_gsheets(df_pred_multigol))
-
-spreadsheet.worksheet("Predictions_Corners").clear()
-if not df_pred_corners.empty: spreadsheet.worksheet("Predictions_Corners").update(prepare_for_gsheets(df_pred_corners))
-
-spreadsheet.worksheet("Predictions_Shots").clear()
-if not df_pred_shots.empty: spreadsheet.worksheet("Predictions_Shots").update(prepare_for_gsheets(df_pred_shots))
-
-print("Wysyłam Analizy Behawioralne i Wariancyjne...")
-spreadsheet.worksheet("Predictions_ColdShower").clear()
-if not df_pred_coldshower.empty: spreadsheet.worksheet("Predictions_ColdShower").update(prepare_for_gsheets(df_pred_coldshower))
-
-spreadsheet.worksheet("Predictions_HiddenForm").clear()
-if not df_pred_hiddenform.empty: spreadsheet.worksheet("Predictions_HiddenForm").update(prepare_for_gsheets(df_pred_hiddenform))
-
-spreadsheet.worksheet("Predictions_CornerAnomalies").clear()
-if not df_pred_corner_anomalies.empty: spreadsheet.worksheet("Predictions_CornerAnomalies").update(prepare_for_gsheets(df_pred_corner_anomalies))
-
-spreadsheet.worksheet("Predictions_GoalAnomalies").clear()
-if not df_pred_goal_anomalies.empty: spreadsheet.worksheet("Predictions_GoalAnomalies").update(prepare_for_gsheets(df_pred_goal_anomalies))
+print("Wysyłam Skonsolidowane Predykcje (All_Predictions)...")
+spreadsheet.worksheet("All_Predictions").clear()
+if not df_all_predictions.empty: spreadsheet.worksheet("All_Predictions").update(prepare_for_gsheets(df_all_predictions))
 
 print("Wysyłam Logi Pobierania (Summary) do Google Sheets...")
 summary_data = [
@@ -1339,17 +1350,7 @@ summary_data = [
     ["Results Zintegrowane", len(results_clean), ""],
     ["Tabela Drużyn", len(league_tables), ""],
     ["Przetworzone Typy w Historii", len(df_historia), ""],
-    ["", "", ""],
-    ["==== PODSUMOWANIE PREDYKCJI ====", "", ""],
-    ["Wyselekcjonowane Typy 1X Pro", len(df_pred_1x), ""],
-    ["Wyselekcjonowane Bloki BetBuilder", len(df_pred_builder), ""],
-    ["Typy Multigol (Zakresy)", len(df_pred_multigol), ""],
-    ["Wyselekcjonowane Typy Rożne (Undery)", len(df_pred_corners), ""],
-    ["Wyliczone Typy Strzałów i Celnych", len(df_pred_shots), ""],
-    ["Typy Zimny Prysznic (Motywacja)", len(df_pred_coldshower), ""],
-    ["Typy Ukryta Forma (Proxy xG)", len(df_pred_hiddenform), ""],
-    ["Anomalie Rożnych (Regresja do średniej)", len(df_pred_corner_anomalies), ""],
-    ["Anomalie Bramkowe (Regresja do średniej)", len(df_pred_goal_anomalies), ""],
+    ["Wygenerowane Predykcje (Wszystkie)", len(df_all_predictions), ""],
     ["", "", ""],
     ["==== RAPORT POBIERANIA Z LINKÓW ====", "", ""],
     ["System", "URL", "Status / Wynik"]
@@ -1360,5 +1361,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Zaktualizowano historię typów (Backtester).")
+print("Zaktualizowano historię typów oraz skonsolidowane predykcje.")
 print("=" * 60)
