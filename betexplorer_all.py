@@ -60,7 +60,7 @@ def fetch_football_data(raport):
         except Exception as e: raport.append(["Football-Data", url_clean, f"BŁĄD: {e}"])
     if not dfs: return pd.DataFrame()
     fd_master = pd.concat(dfs, ignore_index=True)
-    cols_to_keep = ['Date', 'HomeTeam', 'AwayTeam', 'HTHG', 'HTAG', 'HS', 'AS', 'HST', 'AST', 'HC', 'AC', 'HY', 'AY', 'AvgH', 'AvgD', 'AvgA']
+    cols_to_keep = ['Date', 'HomeTeam', 'AwayTeam', 'HTHG', 'HTAG', 'HS', 'AS', 'HST', 'AST', 'HC', 'AC', 'Odd1', 'OddX', 'Odd2']
     existing_cols = [col for col in cols_to_keep if col in fd_master.columns]
     return fd_master[existing_cols]
 
@@ -110,13 +110,6 @@ def prepare_for_gsheets(df):
                     else: new_row.append(str_val)
         output.append(new_row)
     return output
-
-def calc_value(odd, avg):
-    try:
-        o, a = float(str(odd).replace(',', '.')), float(str(avg).replace(',', '.'))
-        if a > 0: return round(((o / a) - 1) * 100, 2)
-    except: pass
-    return np.nan
 
 scrape_report = []
 try:
@@ -289,18 +282,17 @@ if not fd_df.empty and not results_df.empty:
     results_df = pd.merge(results_df, fd_df.drop(columns=['Date']), how='left', on=['Date_str', 'Home', 'Away']).drop(columns=['Date_str'])
 
 # ==========================================
-# 4. TWORZENIE ZŁOTEJ STRUKTURY
+# 4. ZŁOTA STRUKTURA DANYCH
 # ==========================================
 print("Czyszczenie bazy - Złota Struktura...")
 
+# Oczyszczony słownik - usunięte bezużyteczne średnie kursy i kartki
 golden_cols = {
     'Match_ID': 'Match_ID', 'Date': 'Date', 'Time': 'Time', 'League': 'League', 'Home': 'Home', 'Away': 'Away',
     'FTHG': 'FTHG', 'FTAG': 'FTAG', 'Total_Goals': 'Total_Goals', 'HTHG': 'HTHG', 'HTAG': 'HTAG',
     'HS': 'Shots_H', 'AS': 'Shots_A', 'HST': 'ShotsTarget_H', 'AST': 'ShotsTarget_A',
-    'HC': 'Corners_H', 'AC': 'Corners_A', 'HY': 'Cards_H', 'AY': 'Cards_A',
-    'Odd1': 'Odd_1', 'OddX': 'Odd_X', 'Odd2': 'Odd_2',
-    'AvgH': 'Avg_1', 'AvgD': 'Avg_X', 'AvgA': 'Avg_2',
-    'Val_1': 'Val_1', 'Val_X': 'Val_X', 'Val_2': 'Val_2'
+    'HC': 'Corners_H', 'AC': 'Corners_A', 
+    'Odd1': 'Odd_1', 'OddX': 'Odd_X', 'Odd2': 'Odd_2'
 }
 
 if not results_df.empty:
@@ -315,15 +307,13 @@ if not results_df.empty:
         results_df['HTHG'] = results_df['HTHG'].combine_first(pd.to_numeric(results_df['Gole_Gosp_1H'], errors='coerce'))
         results_df['HTAG'] = results_df['HTAG'].combine_first(pd.to_numeric(results_df['Gole_Gosc_1H'], errors='coerce'))
 
-    fd_expected_cols = ['HS', 'AS', 'HST', 'AST', 'HC', 'AC', 'HY', 'AY', 'AvgH', 'AvgD', 'AvgA']
+    # Ujednolicona weryfikacja kluczowych kolumn piłkarskich
+    fd_expected_cols = ['HS', 'AS', 'HST', 'AST', 'HC', 'AC']
     for col in fd_expected_cols:
         if col not in results_df.columns: results_df[col] = np.nan
 
     results_df['Date_str'] = pd.to_datetime(results_df['Date'], errors='coerce').dt.strftime('%Y%m%d').fillna('99999999')
     results_df['Match_ID'] = results_df['Date_str'] + "_" + results_df['Home'].str[:3].str.upper() + "_" + results_df['Away'].str[:3].str.upper()
-    
-    for outcome in [('Odd1', 'AvgH', 'Val_1'), ('OddX', 'AvgD', 'Val_X'), ('Odd2', 'AvgA', 'Val_2')]:
-        results_df[outcome[2]] = results_df.apply(lambda row: calc_value(row[outcome[0]], row[outcome[1]]), axis=1)
 
 if not fixtures_df.empty:
     fixtures_df['Date_str'] = pd.to_datetime(fixtures_df['Date'], errors='coerce').dt.strftime('%Y%m%d').fillna('99999999')
@@ -394,6 +384,9 @@ team_ppg = {(r['League'], r['Team']): float(str(r['PPG']).replace(',', '.')) for
 # Inicjalizacja Głównej Listy Wyników (Dla Backtestera)
 # ==========================================================
 all_generated_predictions = []
+
+# ŻELAZNY STANDARD NAGŁÓWKÓW PREDYKCYJNYCH (9 Kolumn Startowych dla Data Blendingu)
+STANDARD_HEADERS = ["Match_ID", "Data", "Godzina", "Liga", "Mecz", "Sugerowany Typ", "Szansa", "Kurs Szac.", "Argumentacja"]
 
 # ==========================================
 # 6a. ENGINE 1X PRO
@@ -469,28 +462,28 @@ for idx, row in fixtures_clean.iterrows():
     value_perc = round(((buk_odd_1x / fair_odd) - 1) * 100, 2)
 
     if final_prob >= 0.70:
-        arg = f"Gospodarz stabilny dom ({h_1x_window_cnt}/{len(h_window)} w oknie 30 gier). "
+        arg = f"Gospodarz stabilny dom ({h_1x_window_cnt}/{len(h_window)} w oknie 30 gier)."
         
         predictions_1x.append([
-            row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}", "1X", f"{round(final_prob*100)}%", f"{value_perc}%",
-            fair_odd, buk_odd_1x, 
+            row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}", 
+            "1X", f"{round(final_prob*100)}%", str(fair_odd).replace('.', ','), arg,
+            f"{value_perc}%", str(buk_odd_1x).replace('.', ','), 
             f"Baza: {len(h_window)} (bieżący: {len(h_current)})", f"{h_1x_all_cnt}/{len(h_all)}", f"{h_1x_window_cnt}/{len(h_window)}",
             f"{l_top} x", f"{l_mid} x", f"{l_bot} x",
             f"Baza: {len(a_window)} (bieżący: {len(a_current)})", f"{a_2_all_cnt}/{len(a_all)}", f"{a_2_window_cnt}/{len(a_window)}",
             f"{w_top} x", f"{w_mid} x", f"{w_bot} x",
-            f"{a_fts_pct}%", h_unbeaten, a_winless, h_proxy, arg
+            f"{a_fts_pct}%", h_unbeaten, a_winless, h_proxy
         ])
         
-        # Wysłanie do Historii
         all_generated_predictions.append([row['Match_ID'], row['Date'], home, away, "1X Pro", "1X", buk_odd_1x])
 
-headers_1x = [
-    "Match_ID", "Data", "Godzina", "Liga", "Mecz", "Sugerowany Typ", "Prawdopodobieństwo_1X", "Value", "Fair_Odd (Twój)", "Buk_Odd (Rynek)",
+headers_1x = STANDARD_HEADERS + [
+    "Value %", "Buk_Odd (Rynek)",
     "H_Probka_Meczow", "H_1X_Wszystkie", "H_1X_OknoKroczace", "H_Porażki_vs_TOP", "H_Porażki_vs_MID", "H_Porażki_vs_BOTTOM",
     "A_Probka_Meczow", "A_Wygrane_Wszystkie", "A_Wygrane_OknoKroczace", "A_Wygrane_vs_TOP", "A_Wygrane_vs_MID", "A_Wygrane_vs_BOTTOM",
-    "A_FTS_Wyjazd_%", "H_Passa_Bez_Porażki", "A_Passa_Bez_Wygranej", "H_Proxy_xG_Status", "Argumentacja Modelu"
+    "A_FTS_Wyjazd_%", "H_Passa_Bez_Porażki", "A_Passa_Bez_Wygranej", "H_Proxy_xG_Status"
 ]
-df_pred_1x = pd.DataFrame(predictions_1x, columns=headers_1x).sort_values(by="Prawdopodobieństwo_1X", ascending=False) if predictions_1x else pd.DataFrame(columns=headers_1x)
+df_pred_1x = pd.DataFrame(predictions_1x, columns=headers_1x).sort_values(by="Szansa", ascending=False) if predictions_1x else pd.DataFrame(columns=headers_1x)
 
 # ==========================================================
 # 6b. ENGINE BETBUILDER PRO
@@ -628,29 +621,25 @@ for idx, row in fixtures_clean.iterrows():
             sugerowany_kupon = "+".join(builder_blocks_code)
             estimated_bb_odd = round((1.0 + sum([(o - 1.0) * 0.52 for o in block_estimated_odds])) * 0.95, 2)
             if estimated_bb_odd < 1.05: estimated_bb_odd = 1.05
-            uzasadnienie = f"Stabilny zestaw kroczący."
+            uzasadnienie = f"Stabilny zestaw w kroczącym oknie."
 
             predictions_builder.append([
-                row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}", sugerowany_kupon, 
-                str(estimated_bb_odd).replace('.', ','),
-                f"{final_builder_safety}%",
+                row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}", 
+                sugerowany_kupon, f"{final_builder_safety}%", str(estimated_bb_odd).replace('.', ','), uzasadnienie,
                 f"Dom: {len(h_dom)} (Suma: {len(h_total_all)})", 
                 f"Wyjazd: {len(a_wyj)} (Suma: {len(a_total_all)})",
                 int(max_h_scored_dom), int(max_h_conceded_dom), int(max_h_scored_all), int(max_h_conceded_all),
-                int(max_a_scored_wyj), int(max_a_conceded_wyj), int(max_a_scored_all), int(max_a_conceded_all),
-                uzasadnienie
+                int(max_a_scored_wyj), int(max_a_conceded_wyj), int(max_a_scored_all), int(max_a_conceded_all)
             ])
             
             all_generated_predictions.append([row['Match_ID'], row['Date'], home, away, "BetBuilder Pro", sugerowany_kupon, estimated_bb_odd])
 
-headers_builder = [
-    "Match_ID", "Data", "Godzina", "Liga", "Mecz", "Sugerowany Typ", "Szacowany_Kurs", "Pewność",
+headers_builder = STANDARD_HEADERS + [
     "H_Probka", "A_Probka",
     "H_Max_Strz_Dom", "H_Max_Stra_Dom", "H_Max_Strz_Ogół", "H_Max_Stra_Ogół",
-    "A_Max_Strz_Wyj", "A_Max_Stra_Wyj", "A_Max_Strz_Ogół", "A_Max_Stra_Ogół",
-    "Analiza"
+    "A_Max_Strz_Wyj", "A_Max_Stra_Wyj", "A_Max_Strz_Ogół", "A_Max_Stra_Ogół"
 ]
-df_pred_builder = pd.DataFrame(predictions_builder, columns=headers_builder).sort_values(by="Pewność", ascending=False) if predictions_builder else pd.DataFrame(columns=headers_builder)
+df_pred_builder = pd.DataFrame(predictions_builder, columns=headers_builder).sort_values(by="Szansa", ascending=False) if predictions_builder else pd.DataFrame(columns=headers_builder)
 
 # ==========================================================
 # 6c. ENGINE MULTIGOL (Przedziały 1-5 i 1-6) z Regresją
@@ -709,14 +698,14 @@ for idx, row in fixtures_clean.iterrows():
 
         predictions_multigol.append([
             row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}",
-            typ_kod, str(est_odd).replace('.', ','), f"{round(pewnosc*100, 1)}%",
-            f"D: {len(h_dom)}", f"W: {len(a_wyj)}", h_last_goals, a_last_goals, uzasadnienie
+            typ_kod, f"{round(pewnosc*100, 1)}%", str(est_odd).replace('.', ','), uzasadnienie,
+            f"D: {len(h_dom)}", f"W: {len(a_wyj)}", h_last_goals, a_last_goals
         ])
         
         all_generated_predictions.append([row['Match_ID'], row['Date'], home, away, "Multigol", typ_kod, est_odd])
 
-headers_multigol = ["Match_ID", "Data", "Godzina", "Liga", "Mecz", "Sugerowany Typ", "Kurs Szac.", "Pewność", "H_Próbka", "A_Próbka", "Ostatnie_Gole_H", "Ostatnie_Gole_A", "Analiza"]
-df_pred_multigol = pd.DataFrame(predictions_multigol, columns=headers_multigol).sort_values(by="Pewność", ascending=False) if predictions_multigol else pd.DataFrame(columns=headers_multigol)
+headers_multigol = STANDARD_HEADERS + ["H_Próbka", "A_Próbka", "Ostatnie_Gole_H", "Ostatnie_Gole_A"]
+df_pred_multigol = pd.DataFrame(predictions_multigol, columns=headers_multigol).sort_values(by="Szansa", ascending=False) if predictions_multigol else pd.DataFrame(columns=headers_multigol)
 
 # ==========================================================
 # 6d. ENGINE CORNERS PRO (Undery Rzutów Rożnych)
@@ -800,18 +789,19 @@ for idx, row in fixtures_clean.iterrows():
         if est_odd < 1.05: est_odd = 1.05
         final_safety = round(np.mean(c_probs) * 100, 1)
         typ_kod = "+".join(c_blocks_code)
+        uzasadnienie = "Stabilny zakres linii rożnych."
 
         predictions_corners.append([
             row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}",
-            typ_kod, str(est_odd).replace('.', ','), f"{final_safety}%",
+            typ_kod, f"{final_safety}%", str(est_odd).replace('.', ','), uzasadnienie,
             len(h_tot_all_c), len(a_tot_all_c),
             int(max_match_all), int(highest_h), int(highest_a)
         ])
         
         all_generated_predictions.append([row['Match_ID'], row['Date'], home, away, "Corners Pro", typ_kod, est_odd])
 
-headers_corners = ["Match_ID", "Data", "Godzina", "Liga", "Mecz", "Sugerowany Typ", "Kurs Szac.", "Pewność", "H_Próbka", "A_Próbka", "Max_Mecz", "Max_Gosp", "Max_Gość"]
-df_pred_corners = pd.DataFrame(predictions_corners, columns=headers_corners).sort_values(by="Pewność", ascending=False) if predictions_corners else pd.DataFrame(columns=headers_corners)
+headers_corners = STANDARD_HEADERS + ["H_Próbka", "A_Próbka", "Max_Mecz", "Max_Gosp", "Max_Gość"]
+df_pred_corners = pd.DataFrame(predictions_corners, columns=headers_corners).sort_values(by="Szansa", ascending=False) if predictions_corners else pd.DataFrame(columns=headers_corners)
 
 # ==========================================================
 # 6e. ENGINE SHOTS PRO (Gospodarz: Strzały i Strzały Celne)
@@ -867,26 +857,25 @@ for idx, row in fixtures_clean.iterrows():
     avg_diff_st_wyj = round(a_wyj_s['ST_Diff'].mean(), 1)
     
     if prob_h_s > 0.80:
+        uzasadnienie_s = f"Przewaga w strzałach: Gosp wygrywa w {h_s_win_dom}/{len(h_dom_s)} (Śr. dom: +{avg_diff_s_dom})"
+        predictions_shots.append([
+            row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}",
+            "S_1", f"{round(prob_h_s * 100, 1)}%", str(est_odd_s).replace('.', ','), uzasadnienie_s,
+            "Strzały Ogółem", f"{h_s_win_dom}/{len(h_dom_s)}", str(avg_diff_s_dom).replace('.', ','), f"{a_s_lose_wyj}/{len(a_wyj_s)}", str(avg_diff_s_wyj).replace('.', ',')
+        ])
         all_generated_predictions.append([row['Match_ID'], row['Date'], home, away, "Shots Pro", "S_1", est_odd_s])
+        
     if prob_h_st > 0.80:
+        uzasadnienie_st = f"Przewaga w celnych: Gosp wygrywa w {h_st_win_dom}/{len(h_dom_s)} (Śr. dom: +{avg_diff_st_dom})"
+        predictions_shots.append([
+            row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}",
+            "ST_1", f"{round(prob_h_st * 100, 1)}%", str(est_odd_st).replace('.', ','), uzasadnienie_st,
+            "Strzały Celne", f"{h_st_win_dom}/{len(h_dom_s)}", str(avg_diff_st_dom).replace('.', ','), f"{a_st_lose_wyj}/{len(a_wyj_s)}", str(avg_diff_st_wyj).replace('.', ',')
+        ])
         all_generated_predictions.append([row['Match_ID'], row['Date'], home, away, "Shots Pro", "ST_1", est_odd_st])
 
-    predictions_shots.append([
-        row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}",
-        f"{round(prob_h_s * 100, 1)}%", str(est_odd_s).replace('.', ','),
-        f"{h_s_win_dom}/{len(h_dom_s)}", str(avg_diff_s_dom).replace('.', ','),
-        f"{a_s_lose_wyj}/{len(a_wyj_s)}", str(avg_diff_s_wyj).replace('.', ','),
-        f"{round(prob_h_st * 100, 1)}%", str(est_odd_st).replace('.', ','),
-        f"{h_st_win_dom}/{len(h_dom_s)}", str(avg_diff_st_dom).replace('.', ','),
-        f"{a_st_lose_wyj}/{len(a_wyj_s)}", str(avg_diff_st_wyj).replace('.', ',')
-    ])
-
-headers_shots = [
-    "Match_ID", "Data", "Godzina", "Liga", "Mecz", 
-    "S_1: Szansa", "S_1: Kurs", "S_1: Gosp Dom", "S_1: Śr Różnica D", "S_1: Gość Przeg. Wyj", "S_1: Śr Różnica W",
-    "ST_1: Szansa", "ST_1: Kurs", "ST_1: Gosp Dom", "ST_1: Śr Różnica D", "ST_1: Gość Przeg. Wyj", "ST_1: Śr Różnica W"
-]
-df_pred_shots = pd.DataFrame(predictions_shots, columns=headers_shots).sort_values(by="S_1: Szansa", ascending=False) if predictions_shots else pd.DataFrame(columns=headers_shots)
+headers_shots = STANDARD_HEADERS + ["Typ Statystyki", "Gosp Wygrywa Dom", "Śr Różnica D", "Gość Przegrywa Wyj", "Śr Różnica W"]
+df_pred_shots = pd.DataFrame(predictions_shots, columns=headers_shots).sort_values(by="Szansa", ascending=False) if predictions_shots else pd.DataFrame(columns=headers_shots)
 
 # ==========================================================
 # 6f. ENGINE ZIMNY PRYSZNIC (Test Motywacji)
@@ -911,16 +900,17 @@ for idx, row in fixtures_clean.iterrows():
         if opp_tier in ['BOTTOM', 'MID']:
             prob_bounce = 0.85 
             est_odd = round(1.0 + (((1/prob_bounce) - 1.0) / 1.5), 2)
+            uzasadnienie = "Reakcja TOP drużyny na potknięcie z dołem tabeli."
             
             predictions_coldshower.append([
                 row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}",
-                "1", str(est_odd).replace('.', ','), f"{round(prob_bounce*100)}%",
+                "1", f"{round(prob_bounce*100)}%", str(est_odd).replace('.', ','), uzasadnienie,
                 f"{last_m['Home']} {last_m['FTHG']}:{last_m['FTAG']} {home}"
             ])
             all_generated_predictions.append([row['Match_ID'], row['Date'], home, away, "Cold Shower", "1", est_odd])
 
-headers_coldshower = ["Match_ID", "Data", "Godzina", "Liga", "Mecz", "Sugerowany Typ", "Kurs Szac.", "Szansa", "Wpadka (Dowód)"]
-df_pred_coldshower = pd.DataFrame(predictions_coldshower, columns=headers_coldshower)
+headers_coldshower = STANDARD_HEADERS + ["Wpadka (Dowód)"]
+df_pred_coldshower = pd.DataFrame(predictions_coldshower, columns=headers_coldshower).sort_values(by="Szansa", ascending=False) if predictions_coldshower else pd.DataFrame(columns=headers_coldshower)
 
 # ==========================================================
 # 6g. ENGINE UKRYTA FORMA (Proxy xG / Wariancja)
@@ -952,16 +942,17 @@ for idx, row in fixtures_clean.iterrows():
                 typ_kod = "1X" if is_home else "X2"
                 prob = 0.80
                 est_odd = round(1.0 + (((1/prob) - 1.0) / 1.5), 2)
+                uzasadnienie = f"Wysokie xG ze strzałów celnych ({int(st_for)}) bez poparcia w wynikach ({int(g_for)} goli)."
                 
                 predictions_hiddenform.append([
                     row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}",
-                    typ_kod, str(est_odd).replace('.', ','), f"{round(prob*100)}%",
+                    typ_kod, f"{round(prob*100)}%", str(est_odd).replace('.', ','), uzasadnienie,
                     f"Celne Zespół: {int(st_for)} | Rywale: {int(st_agg)}", f"{int(g_for)} goli w 3 meczach"
                 ])
                 all_generated_predictions.append([row['Match_ID'], row['Date'], home, away, "Hidden Form", typ_kod, est_odd])
 
-headers_hiddenform = ["Match_ID", "Data", "Godzina", "Liga", "Mecz", "Sugerowany Typ", "Kurs Szac.", "Szansa", "Strzały Celne (Ostatnie 3)", "Brak Skuteczności"]
-df_pred_hiddenform = pd.DataFrame(predictions_hiddenform, columns=headers_hiddenform)
+headers_hiddenform = STANDARD_HEADERS + ["Strzały Celne (Ostatnie 3)", "Brak Skuteczności"]
+df_pred_hiddenform = pd.DataFrame(predictions_hiddenform, columns=headers_hiddenform).sort_values(by="Szansa", ascending=False) if predictions_hiddenform else pd.DataFrame(columns=headers_hiddenform)
 
 # ==========================================================
 # 6h. ENGINE ANOMALIE ROŻNYCH (Pęknięte serie rożnych)
@@ -987,16 +978,17 @@ for idx, row in fixtures_clean.iterrows():
             typ_kod = "HC_O4.5" if is_home else "AC_O4.5"
             prob = 0.82
             est_odd = round(1.0 + (((1/prob) - 1.0) / 1.5), 2)
+            uzasadnienie = f"Pęknięta seria rożnych. Średnia z sezonu: {round(season_avg, 2)}, ostatnio: {round(last_2_avg, 2)}"
             
             predictions_corner_anomalies.append([
                 row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}",
-                typ_kod, str(est_odd).replace('.', ','), f"{round(prob*100)}%",
+                typ_kod, f"{round(prob*100)}%", str(est_odd).replace('.', ','), uzasadnienie,
                 str(round(season_avg, 2)).replace('.', ','), str(round(last_2_avg, 2)).replace('.', ',')
             ])
             all_generated_predictions.append([row['Match_ID'], row['Date'], home, away, "Corner Anomalies", typ_kod, est_odd])
 
-headers_corner_anomalies = ["Match_ID", "Data", "Godzina", "Liga", "Mecz", "Sugerowany Typ", "Kurs Szac.", "Szansa", "Średnia Sezon", "Średnia 2 Ostatnie"]
-df_pred_corner_anomalies = pd.DataFrame(predictions_corner_anomalies, columns=headers_corner_anomalies)
+headers_corner_anomalies = STANDARD_HEADERS + ["Średnia Sezon", "Średnia 2 Ostatnie"]
+df_pred_corner_anomalies = pd.DataFrame(predictions_corner_anomalies, columns=headers_corner_anomalies).sort_values(by="Szansa", ascending=False) if predictions_corner_anomalies else pd.DataFrame(columns=headers_corner_anomalies)
 
 # ==========================================================
 # 6i. ENGINE ANOMALIE BRAMKOWE (Regresja do średniej Goli)
@@ -1019,18 +1011,28 @@ for idx, row in fixtures_clean.iterrows():
         typ_kod = "U3.5"
         prob = 0.85
         est_odd = round(1.0 + (((1/prob) - 1.0) / 1.5), 2)
-        predictions_goal_anomalies.append([row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}", typ_kod, str(est_odd).replace('.', ','), f"{round(prob*100)}%", str(round(season_avg, 2)).replace('.', ','), str(round(last_2_avg, 2)).replace('.', ',')])
+        uzasadnienie = f"Anomalia overowa. Sezon: {round(season_avg, 2)}, ost. 2 mecze: {round(last_2_avg, 2)}"
+        predictions_goal_anomalies.append([
+            row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}", 
+            typ_kod, f"{round(prob*100)}%", str(est_odd).replace('.', ','), uzasadnienie,
+            str(round(season_avg, 2)).replace('.', ','), str(round(last_2_avg, 2)).replace('.', ',')
+        ])
         all_generated_predictions.append([row['Match_ID'], row['Date'], home, away, "Goal Anomalies", typ_kod, est_odd])
         
     elif season_avg >= 2.5 and last_2_avg <= 0.5:
         typ_kod = "O1.5"
         prob = 0.85
         est_odd = round(1.0 + (((1/prob) - 1.0) / 1.5), 2)
-        predictions_goal_anomalies.append([row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}", typ_kod, str(est_odd).replace('.', ','), f"{round(prob*100)}%", str(round(season_avg, 2)).replace('.', ','), str(round(last_2_avg, 2)).replace('.', ',')])
+        uzasadnienie = f"Anomalia underowa. Sezon: {round(season_avg, 2)}, ost. 2 mecze: {round(last_2_avg, 2)}"
+        predictions_goal_anomalies.append([
+            row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}", 
+            typ_kod, f"{round(prob*100)}%", str(est_odd).replace('.', ','), uzasadnienie,
+            str(round(season_avg, 2)).replace('.', ','), str(round(last_2_avg, 2)).replace('.', ',')
+        ])
         all_generated_predictions.append([row['Match_ID'], row['Date'], home, away, "Goal Anomalies", typ_kod, est_odd])
 
-headers_goal_anomalies = ["Match_ID", "Data", "Godzina", "Liga", "Mecz", "Sugerowany Typ", "Kurs Szac.", "Szansa", "Średnia Sezon", "Średnia 2 Ostatnie"]
-df_pred_goal_anomalies = pd.DataFrame(predictions_goal_anomalies, columns=headers_goal_anomalies)
+headers_goal_anomalies = STANDARD_HEADERS + ["Średnia Sezon", "Średnia 2 Ostatnie"]
+df_pred_goal_anomalies = pd.DataFrame(predictions_goal_anomalies, columns=headers_goal_anomalies).sort_values(by="Szansa", ascending=False) if predictions_goal_anomalies else pd.DataFrame(columns=headers_goal_anomalies)
 
 
 # ==========================================================
@@ -1092,7 +1094,6 @@ def evaluate_bet(bet_type, row_data):
 
     if pd.isna(hg) or pd.isna(ag): return "W OCZEKIWANIU"
 
-    # BetBuilder (Kupon wielokrotny połączony plusem +)
     if "+" in bet:
         parts = bet.split("+")
         results = [evaluate_bet(p.strip(), row_data) for p in parts]
@@ -1101,7 +1102,6 @@ def evaluate_bet(bet_type, row_data):
         if "DO RĘCZNEJ KONTROLI" in results: return "DO RĘCZNEJ KONTROLI"
         return "WYGRANA"
 
-    # 1X2 i Podwójna Szansa
     if bet == "1": return "WYGRANA" if hg > ag else "PRZEGRANA"
     if bet == "X": return "WYGRANA" if hg == ag else "PRZEGRANA"
     if bet == "2": return "WYGRANA" if hg < ag else "PRZEGRANA"
@@ -1109,30 +1109,21 @@ def evaluate_bet(bet_type, row_data):
     if bet == "X2": return "WYGRANA" if hg <= ag else "PRZEGRANA"
     if bet == "12": return "WYGRANA" if hg != ag else "PRZEGRANA"
     
-    # Over/Under Meczu (np. O1.5, U3.5)
-    if bet.startswith("O") and pd.notna(tg) and "_" not in bet:
-        return "WYGRANA" if tg > float(bet[1:]) else "PRZEGRANA"
-    if bet.startswith("U") and pd.notna(tg) and "_" not in bet:
-        return "WYGRANA" if tg < float(bet[1:]) else "PRZEGRANA"
+    if bet.startswith("O") and pd.notna(tg) and "_" not in bet: return "WYGRANA" if tg > float(bet[1:]) else "PRZEGRANA"
+    if bet.startswith("U") and pd.notna(tg) and "_" not in bet: return "WYGRANA" if tg < float(bet[1:]) else "PRZEGRANA"
 
-    # Over/Under Połowy (np. HT_U1.5, 2H_U1.5)
-    if bet.startswith("HT_U") and pd.notna(ht_hg) and pd.notna(ht_ag):
-        return "WYGRANA" if (ht_hg + ht_ag) < float(bet[4:]) else "PRZEGRANA"
-    if bet.startswith("2H_U") and pd.notna(tg) and pd.notna(ht_hg) and pd.notna(ht_ag):
-        return "WYGRANA" if (tg - (ht_hg + ht_ag)) < float(bet[4:]) else "PRZEGRANA"
+    if bet.startswith("HT_U") and pd.notna(ht_hg) and pd.notna(ht_ag): return "WYGRANA" if (ht_hg + ht_ag) < float(bet[4:]) else "PRZEGRANA"
+    if bet.startswith("2H_U") and pd.notna(tg) and pd.notna(ht_hg) and pd.notna(ht_ag): return "WYGRANA" if (tg - (ht_hg + ht_ag)) < float(bet[4:]) else "PRZEGRANA"
 
-    # Over/Under Drużyny (np. HU2.5, AU1.5)
     if bet.startswith("HU") and pd.notna(hg): return "WYGRANA" if hg < float(bet[2:]) else "PRZEGRANA"
     if bet.startswith("AU") and pd.notna(ag): return "WYGRANA" if ag < float(bet[2:]) else "PRZEGRANA"
 
-    # Multigol (np. MG_1-5)
     if bet.startswith("MG_"):
         try:
             low, high = map(int, bet[3:].split("-"))
             return "WYGRANA" if low <= tg <= high else "PRZEGRANA"
         except: pass
 
-    # Rzuty Rożne (np. C_U10.5, HC_U5.5, AC_O4.5)
     if pd.notna(hc) and pd.notna(ac):
         tc = hc + ac
         if bet.startswith("C_U"): return "WYGRANA" if tc < float(bet[3:]) else "PRZEGRANA"
@@ -1142,7 +1133,6 @@ def evaluate_bet(bet_type, row_data):
         if bet.startswith("HC_O"): return "WYGRANA" if hc > float(bet[4:]) else "PRZEGRANA"
         if bet.startswith("AC_O"): return "WYGRANA" if ac > float(bet[4:]) else "PRZEGRANA"
 
-    # Strzały i Strzały Celne (S_1, S_2, ST_1, ST_2)
     if pd.notna(hs) and pd.notna(away_s):
         if bet == "S_1": return "WYGRANA" if hs > away_s else "PRZEGRANA"
         if bet == "S_2": return "WYGRANA" if hs < away_s else "PRZEGRANA"
@@ -1186,24 +1176,17 @@ all_sheets = [
     "Predictions_HiddenForm", "Predictions_CornerAnomalies", "Predictions_GoalAnomalies"
 ]
 
+# Zmiana formatu kolumn - teraz elastyczne "cols=45" uchroni przed błędami braku miejsca
 for sheet_name in all_sheets:
     try: spreadsheet.worksheet(sheet_name)
-    except: spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=30)
+    except: spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=45)
 
 try:
     spreadsheet.worksheet("Fixtures").resize(rows=5000, cols=35)
-    spreadsheet.worksheet("Results").resize(rows=10000, cols=65) 
+    spreadsheet.worksheet("Results").resize(rows=10000, cols=45) 
     spreadsheet.worksheet("Historia_Typow").resize(rows=10000, cols=15)
-    # Zwiększono liczbę kolumn o 1 dla każdego arkusza analiz, aby zmieścić Match_ID
-    spreadsheet.worksheet("Predictions_1X").resize(rows=3000, cols=41)
-    spreadsheet.worksheet("Predictions_Builder").resize(rows=3000, cols=36)
-    spreadsheet.worksheet("Predictions_Multigol").resize(rows=1500, cols=21)
-    spreadsheet.worksheet("Predictions_Corners").resize(rows=1500, cols=21)
-    spreadsheet.worksheet("Predictions_Shots").resize(rows=3000, cols=21)
-    spreadsheet.worksheet("Predictions_ColdShower").resize(rows=1500, cols=16)
-    spreadsheet.worksheet("Predictions_HiddenForm").resize(rows=1500, cols=16)
-    spreadsheet.worksheet("Predictions_CornerAnomalies").resize(rows=1500, cols=16)
-    spreadsheet.worksheet("Predictions_GoalAnomalies").resize(rows=1500, cols=16)
+    for name in ["Predictions_1X", "Predictions_Builder", "Predictions_Multigol", "Predictions_Corners", "Predictions_Shots", "Predictions_ColdShower", "Predictions_HiddenForm", "Predictions_CornerAnomalies", "Predictions_GoalAnomalies"]:
+        spreadsheet.worksheet(name).resize(rows=3000, cols=45)
 except: pass
 
 print("Wysyłam Czysty Terminarz do Google Sheets...")
