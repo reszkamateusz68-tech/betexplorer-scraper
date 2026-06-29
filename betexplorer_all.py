@@ -14,6 +14,51 @@ from google.oauth2.service_account import Credentials
 
 today = datetime.now()
 
+import math
+
+def get_poisson_prob(lam, k, calc_type="exact"):
+    """ Oblicza Prawdopodobieństwo z Rozkładu Poissona. """
+    if pd.isna(lam) or lam <= 0: return 0.0
+    try:
+        if calc_type == "exact":
+            return (math.exp(-lam) * (lam**k)) / math.factorial(int(k))
+        elif calc_type == "under":
+            return sum((math.exp(-lam) * (lam**i)) / math.factorial(i) for i in range(int(k) + 1))
+        elif calc_type == "over":
+            return 1.0 - sum((math.exp(-lam) * (lam**i)) / math.factorial(i) for i in range(int(k) + 1))
+    except:
+        return 0.0
+
+def get_poisson_match_prob(lam_h, lam_a, max_val=35):
+    """
+    Krzyżowa macierz Poissona. 
+    Zwraca Prawdopodobieństwo (1, X, 2) dla Strzałów, Rożnych lub Goli.
+    """
+    if pd.isna(lam_h) or pd.isna(lam_a) or lam_h <= 0 or lam_a <= 0: return 0.0, 0.0, 0.0
+    p_1, p_x, p_2 = 0.0, 0.0, 0.0
+    
+    for i in range(max_val):
+        prob_i = get_poisson_prob(lam_h, i, "exact")
+        for j in range(max_val):
+            prob_j = get_poisson_prob(lam_a, j, "exact")
+            prob_ij = prob_i * prob_j
+            if i > j: p_1 += prob_ij
+            elif i == j: p_x += prob_ij
+            else: p_2 += prob_ij
+            
+    return p_1, p_x, p_2
+
+def calc_betbuilder_odd(probs, correlation_factor=0.65, margin=0.92):
+    """ Kalkulator kursów BetBuilder (Same Game Parlay). """
+    if not probs: return 1.0
+    probs.sort(reverse=True) 
+    combined_p = probs[0]
+    for p in probs[1:]:
+        combined_p *= (p ** (1 - correlation_factor))
+        
+    fair_odd = 1 / combined_p if combined_p > 0 else 99.0
+    return max(1.05, round(fair_odd * margin, 2))
+
 # ==========================================================
 # GŁÓWNE FUNKCJE POMOCNICZE
 # ==========================================================
@@ -45,7 +90,7 @@ def categorize_date(d_str):
     try:
         d = pd.to_datetime(str(d_str), format='%d.%m.%Y', errors='coerce')
         if pd.isna(d):
-            d = pd.to_datetime(str(d_str), errors='coerce', dayfirst=True)
+            d = pd.to_datetime(str(d_str), errors='coerce', format='mixed')
             
         if pd.isna(d):
             return "Nieznany"
