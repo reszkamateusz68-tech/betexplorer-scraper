@@ -45,7 +45,7 @@ def categorize_date(d_str):
     try:
         d = pd.to_datetime(str(d_str), format='%d.%m.%Y', errors='coerce')
         if pd.isna(d):
-            d = pd.to_datetime(str(d_str), errors='coerce')
+            d = pd.to_datetime(str(d_str), errors='coerce', dayfirst=True)
             
         if pd.isna(d):
             return "Nieznany"
@@ -643,25 +643,24 @@ for idx, row in fixtures_clean.iterrows():
             block_probabilities.append(prob_u_1h)
             break
 
-    if len(builder_blocks_code) >= 3:
-        # Obliczenie szansy kuponu (uproszczone złączenie do raportu)
+if len(builder_blocks_code) >= 3:
         final_builder_safety = round(np.mean(block_probabilities) * 100, 1)
-        
-        # OBLICZENIE REALNEGO KURSU BUKMACHERSKIEGO - korelacja underów (mocno powiązane = 0.65)
         estimated_bb_odd = calc_betbuilder_odd(block_probabilities, correlation_factor=0.65, margin=0.92)
-        
         sugerowany_kupon = "+".join(builder_blocks_code)
         uzasadnienie = f"BetBuilder skalkulowany z korelacją zdarzeń."
 
         predictions_builder.append([
-            row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}",
+            row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}", status_k,
             sugerowany_kupon, f"{final_builder_safety}%", str(estimated_bb_odd).replace('.', ','), uzasadnienie,
             f"Dom: {len(h_dom)}", f"Wyj: {len(a_wyj)}", 
             int(h_dom['FTHG'].max()), int(h_dom['FTAG'].max()), 
             int(a_wyj['FTAG'].max()), int(a_wyj['FTHG'].max())
         ])
+        
+        all_generated_predictions.append([row['Match_ID'], row['Termin'], row['Date'], home, away, "BetBuilder Pro", sugerowany_kupon, "-", f"{final_builder_safety}%", str(estimated_bb_odd).replace('.', ','), uzasadnienie])
 
-df_pred_builder = pd.DataFrame(predictions_builder, columns=base_cols + ["H_Probka", "A_Probka", "H_Max_Strz_Dom", "H_Max_Stra_Dom", "A_Max_Strz_Wyj", "A_Max_Stra_Wyj"]).sort_values(by="Szansa", ascending=False) if predictions_builder else pd.DataFrame(columns=base_cols + ["H_Probka", "A_Probka", "H_Max_Strz_Dom", "H_Max_Stra_Dom", "A_Max_Strz_Wyj", "A_Max_Stra_Wyj"])
+headers_builder = STANDARD_HEADERS + ["H_Probka", "A_Probka", "H_Max_Strz_Dom", "H_Max_Stra_Dom", "A_Max_Strz_Wyj", "A_Max_Stra_Wyj"]
+df_pred_builder = pd.DataFrame(predictions_builder, columns=headers_builder).sort_values(by="Szansa", ascending=False) if predictions_builder else pd.DataFrame(columns=headers_builder)
 
 # ==========================================================
 # 6c. ENGINE MULTIGOL (Przedziały 1-5 i 1-6) z Poissonem
@@ -716,7 +715,7 @@ for idx, row in fixtures_clean.iterrows():
     prob_1_5 = (hist_1_5 + poisson_1_5) / 2
     prob_1_6 = (hist_1_6 + poisson_1_6) / 2
 
-    if prob_1_5 >= 0.88 or prob_1_6 >= 0.88:
+if prob_1_5 >= 0.88 or prob_1_6 >= 0.88:
         if prob_1_5 >= 0.88:
             typ_kod, pewnosc = "MG_1-5", prob_1_5
         else:
@@ -727,12 +726,15 @@ for idx, row in fixtures_clean.iterrows():
         uzasadnienie = anom_text + f"Regresja + Poisson (λ={round(lam_match, 2)})."
 
         predictions_multigol.append([
-            row['Match_ID'], row['Date'], row['Time'], league, f"{home} - {away}",
+            row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}", status_k,
             typ_kod, szansa_str, str(est_odd).replace('.', ','), uzasadnienie,
             f"D: {len(h_dom)}", f"W: {len(a_wyj)}", h_last_goals, a_last_goals
         ])
         
-df_pred_multigol = pd.DataFrame(predictions_multigol, columns=base_cols + ["H_Próbka", "A_Próbka", "Ostatnie_Gole_H", "Ostatnie_Gole_A"]).sort_values(by="Szansa", ascending=False) if predictions_multigol else pd.DataFrame(columns=base_cols + ["H_Próbka", "A_Próbka", "Ostatnie_Gole_H", "Ostatnie_Gole_A"])
+        all_generated_predictions.append([row['Match_ID'], row['Termin'], row['Date'], home, away, "Multigol", typ_kod, "-", szansa_str, str(est_odd).replace('.', ','), uzasadnienie])
+
+headers_multigol = STANDARD_HEADERS + ["H_Próbka", "A_Próbka", "Ostatnie_Gole_H", "Ostatnie_Gole_A"]
+df_pred_multigol = pd.DataFrame(predictions_multigol, columns=headers_multigol).sort_values(by="Szansa", ascending=False) if predictions_multigol else pd.DataFrame(columns=headers_multigol)
 
 # ==========================================================
 # 6d. ENGINE CORNERS PRO (Undery Rzutów Rożnych)
