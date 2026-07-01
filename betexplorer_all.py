@@ -1006,7 +1006,8 @@ creds = Credentials.from_service_account_file("credentials.json", scopes=scope) 
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
-cols_historia = ["Match_ID", "Akceptacja", "Date", "Home", "Away", "Engine", "Bet_Type", "Odds", "Szansa", "Kurs_Szac", "Argumentacja", "Status", "Profit"]
+# UJEDNOLICONE NAZEWNICTWO (Zagrane i Kurs_Rynek)
+cols_historia = ["Match_ID", "Zagrane", "Date", "Home", "Away", "Engine", "Bet_Type", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja", "Status", "Profit"]
 
 try:
     ws_historia = spreadsheet.worksheet("Historia_Typow")
@@ -1022,7 +1023,7 @@ except gspread.exceptions.WorksheetNotFound:
 
 for col in cols_historia:
     if col not in df_historia.columns:
-        if col == "Akceptacja": df_historia.insert(1, "Akceptacja", "")
+        if col == "Zagrane": df_historia.insert(1, "Zagrane", "")
         else: df_historia[col] = ""
         
 df_historia = df_historia[cols_historia]
@@ -1031,10 +1032,11 @@ if not df_historia.empty:
     df_historia = df_historia[df_historia['Match_ID'].astype(str).str.strip() != ""]
 
 if all_generated_predictions:
-    nowe_typy_df = pd.DataFrame(all_generated_predictions, columns=["Match_ID", "Termin", "Date", "Home", "Away", "Engine", "Bet_Type", "Odds", "Szansa", "Kurs_Szac", "Argumentacja"])
+    # Pobieramy rynkowy kurs do kolumny "Kurs_Rynek"
+    nowe_typy_df = pd.DataFrame(all_generated_predictions, columns=["Match_ID", "Termin", "Date", "Home", "Away", "Engine", "Bet_Type", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja"])
     nowe_typy_df = nowe_typy_df.drop(columns=["Termin"])
     
-    nowe_typy_df.insert(1, "Akceptacja", "") 
+    nowe_typy_df.insert(1, "Zagrane", "") 
     nowe_typy_df["Status"] = "W OCZEKIWANIU"
     nowe_typy_df["Profit"] = ""
     nowe_typy_df = nowe_typy_df[cols_historia]
@@ -1046,23 +1048,24 @@ if all_generated_predictions:
         w_oczek_mask = df_historia['Status'] == "W OCZEKIWANIU"
         if w_oczek_mask.any():
             map_szansa = nowe_typy_df.set_index('Unikalny_Klucz')['Szansa'].to_dict()
-            map_kurs = nowe_typy_df.set_index('Unikalny_Klucz')['Kurs_Szac'].to_dict()
+            map_kurs_szac = nowe_typy_df.set_index('Unikalny_Klucz')['Kurs_Szac'].to_dict()
             map_arg = nowe_typy_df.set_index('Unikalny_Klucz')['Argumentacja'].to_dict()
-            map_odds = nowe_typy_df.set_index('Unikalny_Klucz')['Odds'].to_dict()
+            map_kurs_rynek = nowe_typy_df.set_index('Unikalny_Klucz')['Kurs_Rynek'].to_dict()
             
             for idx in df_historia[w_oczek_mask].index:
                 klucz = df_historia.at[idx, 'Unikalny_Klucz']
                 if klucz in map_szansa:
                     df_historia.at[idx, 'Szansa'] = str(map_szansa[klucz])
-                    df_historia.at[idx, 'Kurs_Szac'] = str(map_kurs[klucz])
+                    df_historia.at[idx, 'Kurs_Szac'] = str(map_kurs_szac[klucz])
                     df_historia.at[idx, 'Argumentacja'] = str(map_arg[klucz])
-                    odd_val = map_odds[klucz]
-                    if pd.notna(odd_val) and str(odd_val).strip() not in ["-", ""]:
-                        df_historia.at[idx, 'Odds'] = str(odd_val)
+                    
+                    kr_val = map_kurs_rynek[klucz]
+                    if pd.notna(kr_val) and str(kr_val).strip() not in ["-", ""]:
+                        df_historia.at[idx, 'Kurs_Rynek'] = str(kr_val)
 
         is_empty_szansa = df_historia['Szansa'].astype(str).str.strip().isin(["", "nan", "None"])
-        is_empty_akceptacja = df_historia['Akceptacja'].astype(str).str.strip().isin(["", "nan", "None"])
-        ghost_mask = (df_historia['Status'] == "W OCZEKIWANIU") & is_empty_szansa & is_empty_akceptacja & (~df_historia['Unikalny_Klucz'].isin(nowe_typy_df['Unikalny_Klucz']))
+        is_empty_zagrane = df_historia['Zagrane'].astype(str).str.strip().isin(["", "nan", "None"])
+        ghost_mask = (df_historia['Status'] == "W OCZEKIWANIU") & is_empty_szansa & is_empty_zagrane & (~df_historia['Unikalny_Klucz'].isin(nowe_typy_df['Unikalny_Klucz']))
         
         if ghost_mask.any(): df_historia = df_historia[~ghost_mask]
         
@@ -1141,13 +1144,14 @@ if not df_historia.empty and not results_clean.empty:
                     nowy_status = evaluate_bet(row["Bet_Type"], match_row)
                     df_historia.at[idx, "Status"] = nowy_status
                     try:
-                        kurs_str = str(row["Odds"]).replace(',', '.').strip()
-                        if kurs_str in ["", "-", "nan", "None"]: kurs_str = str(row["Kurs_Szac"]).replace(',', '.').strip()
+                        kurs_str = str(row["Kurs_Rynek"]).replace(',', '.').strip()
+                        if kurs_str in ["", "-", "nan", "None"]: 
+                            kurs_str = str(row["Kurs_Szac"]).replace(',', '.').strip()
+                            
                         kurs = float(kurs_str)
                         if nowy_status == "WYGRANA": df_historia.at[idx, "Profit"] = round(kurs - 1.0, 2)
                         elif nowy_status == "PRZEGRANA": df_historia.at[idx, "Profit"] = -1.0
                     except: pass
-
 # ==========================================
 # 8. WYSYŁKA GOOGLE SHEETS I AGREGACJA PREDYKCJI
 # ==========================================
