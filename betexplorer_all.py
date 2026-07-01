@@ -1162,7 +1162,7 @@ def evaluate_bet(bet_type, row_data):
 
     return "DO RĘCZNEJ KONTROLI"
 
-all_pred_dfs:
+if not df_historia.empty and not results_clean.empty:
     for idx, row in df_historia.iterrows():
         if row["Status"] == "W OCZEKIWANIU":
             match_data = results_clean[results_clean['Match_ID'] == row["Match_ID"]]
@@ -1176,7 +1176,7 @@ all_pred_dfs:
                         # --- AWARYJNY SYSTEM OBLICZANIA ZYSKU ---
                         kurs_str = str(row["Odds"]).replace(',', '.').strip()
                         
-                        # Jeśli rynkowego kursu (Odds) nie ma (np. BetBuilder), używamy naszego szacowanego kursu z modelu
+                        # Jeśli rynkowego kursu (Odds) nie ma, używamy szacowanego z modelu Poissona
                         if kurs_str in ["", "-", "nan", "None"]:
                             kurs_str = str(row["Kurs_Szac"]).replace(',', '.').strip()
                             
@@ -1205,32 +1205,28 @@ all_pred_dfs = [
 ]
 
 master_predictions_list = []
-# Dodaliśmy "Kurs Rynek" do struktury All_Predictions
 base_cols = ["Match_ID", "Date", "Godzina", "Liga", "Mecz", "Sugerowany Typ", "Szansa", "Kurs Szac.", "Argumentacja"]
 
-# Ekstrakcja rynkowych kursów z głównej pamięci systemu
+# Słownik do szybkiego wyciągania rynkowych kursów na podstawie Match_ID, Engine i Typu
 odds_dict = {f"{r[0]}_{r[5]}_{r[6]}": r[7] for r in all_generated_predictions}
 
 for engine_name, df_e in all_pred_dfs:
     if df_e.empty: continue
-    # Ignorujemy również stare kolumny pomocnicze, które mogłyby psuć wygląd
     context_cols = [c for c in df_e.columns if c not in base_cols and c not in ["Termin", "Status_Kursów", "Data", "Buk_Odd (Rynek)", "Value %"]]
     
     for _, row in df_e.iterrows():
         context_data = " | ".join([f"{c}: {row[c]}" for c in context_cols if str(row[c]).strip() not in ["", "-", "nan"]])
         
-        # Pobieramy rynkowy kurs
         klucz = f"{row.get('Match_ID')}_{engine_name}_{row.get('Sugerowany Typ')}"
         kurs_rynkowy = odds_dict.get(klucz, "-")
         
         master_predictions_list.append([
             row.get("Match_ID", ""), row.get("Date", row.get("Data", "")), row.get("Godzina", ""), 
             row.get("Liga", ""), row.get("Mecz", ""), engine_name, 
-            row.get("Sugerowany Typ", ""), kurs_rynkowy, row.get("Szansa", ""), 
+            row.get("Sugerowany Typ", kurs_rynkowy), kurs_rynkowy, row.get("Szansa", ""), 
             row.get("Kurs Szac.", ""), row.get("Argumentacja", ""), context_data
         ])
 
-# Dodano kolumnę 'Kurs Rynek' do struktury wyjściowej Dataframe
 df_all_predictions = pd.DataFrame(master_predictions_list, columns=["Match_ID", "Date", "Godzina", "Liga", "Mecz", "Engine", "Sugerowany Typ", "Kurs Rynek", "Szansa", "Kurs Szac.", "Argumentacja", "Metrics_Context"])
 if not df_all_predictions.empty:
     df_all_predictions = df_all_predictions.sort_values(by=["Date", "Szansa"], ascending=[True, False])
