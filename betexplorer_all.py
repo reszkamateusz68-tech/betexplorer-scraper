@@ -387,24 +387,24 @@ results_clean = results_df[list(golden_cols.keys()) + ['HT_Total', 'Total_Corner
 fixtures_clean = fixtures_df[['Match_ID', 'Termin', 'Status_Kursów', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd1', 'OddX', 'Odd2', 'Marża']].rename(columns={'Odd1': 'Odd_1', 'OddX': 'Odd_X', 'Odd2': 'Odd_2'}) if not fixtures_df.empty else pd.DataFrame(columns=['Match_ID', 'Termin', 'Status_Kursów', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd_1', 'Odd_X', 'Odd_2', 'Marża'])
 
 # ==========================================
-# 5. GENEROWANIE TABEL LIGOWYCH
+# 5. GENEROWANIE TABEL LIGOWYCH I RANKINGÓW
 # ==========================================
 print("Generowanie inteligentnych tabel ligowych...")
+
+# Zabezpieczenie przed błędem "NameError"
+valid_matches = pd.DataFrame()
+
 if not results_clean.empty:
-    results_clean['Date_Parsed'] = pd.to_datetime(results_clean['Date'], errors='coerce')
-    results_clean = results_clean.sort_values(by='Date_Parsed', ascending=False)
-    valid_matches = results_clean.dropna(subset=['FTHG', 'FTAG']).copy()
-    results_clean = results_clean.drop(columns=['Date_Parsed'])
-else:
-    valid_matches = pd.DataFrame(columns=results_clean.columns)
+    # Tworzymy kopię, by bezpiecznie przetworzyć daty bez psucia Złotej Struktury
+    temp_df = results_clean.copy()
+    temp_df['Date_Parsed'] = pd.to_datetime(temp_df['Date'], errors='coerce')
+    temp_df = temp_df.sort_values(by='Date_Parsed', ascending=False)
+    valid_matches = temp_df.dropna(subset=['FTHG', 'FTAG']).copy()
 
 if not valid_matches.empty:
     valid_matches['Base_League'] = valid_matches['League'].apply(get_base_league)
     valid_matches['FTHG'] = pd.to_numeric(valid_matches['FTHG'], errors='coerce').fillna(0).astype(int)
     valid_matches['FTAG'] = pd.to_numeric(valid_matches['FTAG'], errors='coerce').fillna(0).astype(int)
-    valid_matches['Corners_H'] = pd.to_numeric(valid_matches['Corners_H'], errors='coerce')
-    valid_matches['Corners_A'] = pd.to_numeric(valid_matches['Corners_A'], errors='coerce')
-    valid_matches['Total_Corners'] = valid_matches['Corners_H'] + valid_matches['Corners_A']
     
     home_rec = valid_matches[['League', 'Home', 'FTHG', 'FTAG']].copy()
     home_rec.columns = ['League', 'Team', 'GF', 'GA']
@@ -427,28 +427,42 @@ if not valid_matches.empty:
     league_tables['GD'] = league_tables['GF'] - league_tables['GA']
     league_tables['PPG'] = round(league_tables['Pts'] / league_tables['M'].replace(0, 1), 2)
 
+    # Sortowanie na potrzeby Rankingu
     league_tables = league_tables.sort_values(by=['League', 'Pts', 'GD', 'GF'], ascending=[True, False, False, False])
-    league_tables = league_tables[['League', 'Team', 'M', 'W', 'D', 'L', 'GF', 'GA', 'GD', 'Pts', 'PPG']]
+    
+# DODANIE POZYCJI (RANKINGU)
+    league_tables['Pozycja'] = league_tables.groupby('League').cumcount() + 1
+    
+    # DODANIE 6 KOSZYKÓW (Zamiast 3)
+    league_counts = league_tables.groupby('League')['Team'].transform('count')
+    
+    def assign_tier(row):
+        total = row['Total_Teams']
+        pos = row['Pozycja']
+        if total > 0:
+            # Matematyczny podział tabeli na 6 równych stref
+            tier_num = math.ceil((pos / total) * 6)
+            if tier_num < 1: tier_num = 1
+            if tier_num > 6: tier_num = 6
+            return f"Koszyk {tier_num}"
+        return "Koszyk 3" # Domyślny
+        
+    league_tables['Total_Teams'] = league_counts
+    league_tables['Koszyk'] = league_tables.apply(assign_tier, axis=1)
+    league_tables = league_tables.drop(columns=['Total_Teams'])
+
+    # Ostateczna, czytelna i relacyjna kolejność kolumn
+    league_tables = league_tables[['League', 'Pozycja', 'Team', 'M', 'W', 'D', 'L', 'GF', 'GA', 'GD', 'Pts', 'PPG', 'Koszyk']]
 else:
-    league_tables = pd.DataFrame(columns=['League', 'Team', 'M', 'W', 'D', 'L', 'GF', 'GA', 'GD', 'Pts', 'PPG'])
+    league_tables = pd.DataFrame(columns=['League', 'Pozycja', 'Team', 'M', 'W', 'D', 'L', 'GF', 'GA', 'GD', 'Pts', 'PPG', 'Koszyk'])
 
+# Słowniki z twardymi danymi używane przez algorytmy predykcyjne
 team_tiers = {}
-for lg in league_tables['League'].unique():
-    lg_teams = league_tables[league_tables['League'] == lg].reset_index(drop=True)
-    n_teams = len(lg_teams)
-    if n_teams >= 3:
-        t_size = max(1, n_teams // 3)
-        for i, t in enumerate(lg_teams['Team']):
-            if i < t_size: team_tiers[(lg, t)] = 'TOP'
-            elif i >= n_teams - t_size: team_tiers[(lg, t)] = 'BOTTOM'
-            else: team_tiers[(lg, t)] = 'MID'
-    else:
-        for t in lg_teams['Team']: team_tiers[(lg, t)] = 'MID'
-
-team_ppg = {(r['League'], r['Team']): float(str(r['PPG']).replace(',', '.')) for _, r in league_tables.iterrows()}
-
-all_generated_predictions = []
-STANDARD_HEADERS = ["Match_ID", "Termin", "Data", "Godzina", "Liga", "Mecz", "Status_Kursów", "Sugerowany Typ", "Szansa", "Kurs Szac.", "Argumentacja"]
+team_ppg = {}
+if not league_tables.empty:
+    for _, r in league_tables.iterrows():
+        team_tiers[(r['League'], r['Team'])] = r['Koszyk']
+        team_ppg[(r['League'], r['Team'])] = float(str(r['PPG']).replace(',', '.'))
 
 # ==========================================================
 # 6a. ENGINE 1X PRO (Model Dixona-Colesa)
@@ -809,7 +823,7 @@ headers_shots = STANDARD_HEADERS + ["Typ Statystyki", "Oczekiwane Strz H", "Ocze
 df_pred_shots = pd.DataFrame(predictions_shots, columns=headers_shots).sort_values(by="Szansa", ascending=False) if predictions_shots else pd.DataFrame(columns=headers_shots)
 
 # ==========================================================
-# 6f. ENGINE ZIMNY PRYSZNIC (Test Motywacji)
+# 6f. ENGINE ZIMNY PRYSZNIC (Test Motywacji po wpadce)
 # ==========================================================
 print("Uruchamiam Engine Zimny Prysznic (Reakcja TOP drużyn na wpadkę)...")
 predictions_coldshower = []
@@ -819,20 +833,24 @@ for idx, row in fixtures_clean.iterrows():
     fixture_base = get_base_league(league)
     status_k = row['Status_Kursów']
     
-    h_tier = team_tiers.get((league, home), 'MID')
-    if h_tier != 'TOP': continue 
+    # Wymagamy, aby gospodarz to była Elita lub mocna czołówka (Koszyk 1 lub 2)
+    h_tier = team_tiers.get((league, home), 'Koszyk 3')
+    if h_tier not in ['Koszyk 1', 'Koszyk 2']: continue 
     
     h_past = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == home) | (valid_matches['Away'] == home))]
     if len(h_past) == 0: continue
     last_m = h_past.iloc[0] 
     
+    # Jeśli nasza TOP drużyna grała na wyjeździe i się potknęła (Zimny Prysznic)
     if last_m['Away'] == home and last_m['FTHG'] >= last_m['FTAG']:
-        opp_tier = team_tiers.get((last_m['League'], last_m['Home']), 'TOP')
-        if opp_tier in ['BOTTOM', 'MID']:
+        opp_tier = team_tiers.get((last_m['League'], last_m['Home']), 'Koszyk 1')
+        
+        # Jeśli wpadka była z drużynami z dolnej połowy tabeli (Koszyk 4, 5, 6)
+        if opp_tier in ['Koszyk 4', 'Koszyk 5', 'Koszyk 6']:
             prob_bounce = 0.85 
             est_odd = round(1.0 + (((1/prob_bounce) - 1.0) / 1.5), 2)
             szansa_str = f"{round(prob_bounce*100)}%"
-            uzasadnienie = "Reakcja TOP drużyny na potknięcie z dołem tabeli."
+            uzasadnienie = f"Reakcja drużyny ({h_tier}) na potknięcie z dołem tabeli ({opp_tier})."
             
             predictions_coldshower.append([
                 row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}", status_k,
