@@ -426,8 +426,24 @@ if not fixtures_df.empty:
     fixtures_df['Termin'] = fixtures_df['Date'].apply(categorize_date)
     fixtures_df['Status_Kursów'] = np.where(fixtures_df['Odd1'].astype(str).str.strip().isin(["", "-", "nan"]), "Brak Kursów", "Są Kursy")
 
+    # --- DODANA MARŻA BUKMACHERA ---
+    def get_margin(r):
+        try:
+            o1 = float(str(r['Odd1']).replace(',', '.'))
+            ox = float(str(r['OddX']).replace(',', '.'))
+            o2 = float(str(r['Odd2']).replace(',', '.'))
+            margin = ((1 / o1) + (1 / ox) + (1 / o2) - 1.0) * 100
+            # Formatuje do polskiego standardu, np. 5,25%
+            return f"{round(margin, 2)}%".replace('.', ',')
+        except:
+            return "-"
+    fixtures_df['Marża'] = fixtures_df.apply(get_margin, axis=1)
+    # -------------------------------
+
 results_clean = results_df[list(golden_cols.keys())].rename(columns=golden_cols) if not results_df.empty else pd.DataFrame(columns=golden_cols.values())
-fixtures_clean = fixtures_df[['Match_ID', 'Termin', 'Status_Kursów', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd1', 'OddX', 'Odd2']].rename(columns={'Odd1': 'Odd_1', 'OddX': 'Odd_X', 'Odd2': 'Odd_2'}) if not fixtures_df.empty else pd.DataFrame(columns=['Match_ID', 'Termin', 'Status_Kursów', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd_1', 'Odd_X', 'Odd_2'])
+
+# Aktualizacja fixtures_clean o kolumnę 'Marża'
+fixtures_clean = fixtures_df[['Match_ID', 'Termin', 'Status_Kursów', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd1', 'OddX', 'Odd2', 'Marża']].rename(columns={'Odd1': 'Odd_1', 'OddX': 'Odd_X', 'Odd2': 'Odd_2'}) if not fixtures_df.empty else pd.DataFrame(columns=['Match_ID', 'Termin', 'Status_Kursów', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd_1', 'Odd_X', 'Odd_2', 'Marża'])
 
 # ==========================================
 # 5. GENEROWANIE TABEL LIGOWYCH
