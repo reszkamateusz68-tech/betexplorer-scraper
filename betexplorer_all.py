@@ -252,7 +252,11 @@ for i, url in enumerate(urls, start=1):
                 all_data.append(["Result", league, date, home, away, score, odd1, oddx, odd2])
                 mecz_count += 1
                 
-        scrape_report.append(["BetExplorer", url_clean, f"OK (Pobrano: {mecz_count} meczów)" if mecz_count > 0 else "BŁĄD: Znaleziono 0 meczów"])
+if mecz_count > 0:
+            status_msg = f"OK (Pobrano: {mecz_count} meczów)" + (" [Zadziałał Bypass 429]" if bypass_used else "")
+            scrape_report.append(["BetExplorer", url_clean, status_msg])
+        else:
+            scrape_report.append(["BetExplorer", url_clean, "OSTRZEŻENIE: Brak meczów na stronie (0)"])
     except Exception as e: scrape_report.append(["BetExplorer", url_clean, f"BŁĄD PARSOWANIA: {e}"])
 
 df = pd.DataFrame(all_data, columns=["Type", "League", "Date", "Home", "Away", "Score", "Odd1", "OddX", "Odd2"]).drop_duplicates()
@@ -304,8 +308,11 @@ try:
                                         except: pass
                                     dane_soccerstats_baza.append([gospodarz, gosc, wynik_czysty, g_gosp_1h, g_gosc_1h])
                                     ss_count += 1
-                scrape_report.append(["SoccerStats", url_ss_clean, f"OK (Pobrano: {ss_count} wierszy)" if ss_count > 0 else "BŁĄD: 0 wierszy"])
-            except Exception as e: scrape_report.append(["SoccerStats", url_ss_clean, f"BŁĄD: {str(e)}"])
+if ss_count > 0:
+                    scrape_report.append(["SoccerStats", url_ss_clean, f"OK (Pobrano: {ss_count} wierszy)"])
+                else:
+                    scrape_report.append(["SoccerStats", url_ss_clean, "OSTRZEŻENIE: Brak meczów na stronie (0)"])
+            except Exception as e: scrape_report.append(["SoccerStats", url_ss_clean, f"BŁĄD HTTP: {str(e)}"])
         if dane_soccerstats_baza: ss_df = pd.DataFrame(dane_soccerstats_baza, columns=["Home", "Away", "Score", "Gole_Gosp_1H", "Gole_Gosc_1H"]).drop_duplicates(subset=["Home", "Away", "Score"])
         else: ss_df = pd.DataFrame()
 except Exception: ss_df = pd.DataFrame()
@@ -1172,7 +1179,31 @@ print("Wysyłam Skonsolidowane Predykcje (All_Predictions)...")
 spreadsheet.worksheet("All_Predictions").clear()
 if not df_all_predictions.empty: spreadsheet.worksheet("All_Predictions").update(prepare_for_gsheets(df_all_predictions))
 
-print("Wysyłam Logi Pobierania (Summary) do Google Sheets...")
+print("Wysyłam Zaawansowane Logi Pobierania (Summary) do Google Sheets...")
+
+# --- 1. Rozkład wygenerowanych predykcji ---
+pred_breakdown = []
+if not df_all_predictions.empty:
+    counts = df_all_predictions['Engine'].value_counts()
+    for engine, count in counts.items():
+        pred_breakdown.append([f"  - {engine}", count, ""])
+else:
+    pred_breakdown.append(["  - Brak wygenerowanych predykcji", 0, ""])
+
+# --- 2. Diagnoza Danych per Liga ---
+league_breakdown = [["==== STATUS LIG (Pobranie Danych) ====", "", ""]]
+league_breakdown.append(["Liga", "Liczba Fixtures (Nadchodzące)", "Liczba Results (Zintegrowane)"])
+
+all_leagues = set()
+if not fixtures_clean.empty: all_leagues.update(fixtures_clean['League'].unique())
+if not results_clean.empty: all_leagues.update(results_clean['League'].unique())
+
+for lg in sorted(all_leagues):
+    f_cnt = len(fixtures_clean[fixtures_clean['League'] == lg]) if not fixtures_clean.empty else 0
+    r_cnt = len(results_clean[results_clean['League'] == lg]) if not results_clean.empty else 0
+    league_breakdown.append([lg, f_cnt, r_cnt])
+
+# --- 3. Złożenie całości do finalnej tabeli Summary ---
 summary_data = [
     ["==== PODSUMOWANIE OGÓLNE ====", "", ""],
     ["Ostatnia aktualizacja", datetime.now().strftime("%Y-%m-%d %H:%M:%S"), ""],
@@ -1180,16 +1211,24 @@ summary_data = [
     ["Results Zintegrowane", len(results_clean), ""],
     ["Tabela Drużyn", len(league_tables), ""],
     ["Przetworzone Typy w Historii", len(df_historia), ""],
-    ["Wygenerowane Predykcje (Wszystkie)", len(df_all_predictions), ""],
+    ["Wygenerowane Predykcje (Suma)", len(df_all_predictions), ""],
     ["", "", ""],
-    ["==== RAPORT POBIERANIA Z LINKÓW ====", "", ""],
-    ["System", "URL", "Status / Wynik"]
+    ["==== ROZKŁAD PREDYKCJI (SILNIKI) ====", "", ""]
 ]
+
+summary_data.extend(pred_breakdown)
+summary_data.append(["", "", ""])
+summary_data.extend(league_breakdown)
+summary_data.append(["", "", ""])
+
+summary_data.append(["==== RAPORT POBIERANIA Z LINKÓW ====", "", ""])
+summary_data.append(["System", "URL", "Status / Wynik"])
 summary_data.extend(scrape_report)
+
 spreadsheet.worksheet("Summary").clear()
 spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Zaktualizowano historię typów oraz skonsolidowane predykcje.")
+print("Zaktualizowano historię typów, skonsolidowane predykcje i zaawansowany raport Summary.")
 print("=" * 60)
