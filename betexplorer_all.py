@@ -464,6 +464,11 @@ if not league_tables.empty:
         team_tiers[(r['League'], r['Team'])] = r['Koszyk']
         team_ppg[(r['League'], r['Team'])] = float(str(r['PPG']).replace(',', '.'))
 
+# --- TE DWIE LINIJKI MUSZĄ SIĘ TU ZNALEŹĆ ---
+all_generated_predictions = []
+STANDARD_HEADERS = ["Match_ID", "Termin", "Data", "Godzina", "Liga", "Mecz", "Status_Kursów", "Sugerowany Typ", "Szansa", "Kurs Szac.", "Argumentacja"]
+# -------------------------------------------
+
 # ==========================================================
 # 6a. ENGINE 1X PRO (Model Dixona-Colesa)
 # ==========================================================
