@@ -525,55 +525,78 @@ headers_1x = STANDARD_HEADERS + ["Value %", "Buk_Odd (Rynek)", "Gosp Atak", "Gos
 df_pred_1x = pd.DataFrame(predictions_1x, columns=headers_1x).sort_values(by="Szansa", ascending=False) if predictions_1x else pd.DataFrame(columns=headers_1x)
 
 # ==========================================================
-# 6b. ENGINE BETBUILDER PRO (Zestaw Skorelowany)
+# 6b. ENGINE BETBUILDER PRO (Zoptymalizowany pod "Taśmy")
 # ==========================================================
 print("Uruchamiam Engine BetBuilder Pro...")
 predictions_builder = []
+
+# --- TWOJE KRYTERIA DOSTOSOWANIA (Możesz je swobodnie zmieniać!) ---
+# Próg 0.88 oznacza, że zdarzenie musiało wystąpić w 88% meczów historycznych.
+PROG_OVER = 0.88  # Wymagana skuteczność dla Over 0.5
+PROG_UNDER = 0.88 # Wymagana skuteczność dla Underów (Mecz, HT, 2H)
+MIN_BLOKOW = 2    # Min. liczba zdarzeń na kupon (np. 2 oznacza O0.5 + U4.5)
+# -------------------------------------------------------------------
 
 for idx, row in fixtures_clean.iterrows():
     league, home, away = row['League'], row['Home'], row['Away']
     fixture_base = get_base_league(league)
     status_k = row['Status_Kursów']
     
-    h_dom = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Home'] == home)].copy()
-    a_wyj = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Away'] == away)].copy()
-    if len(h_dom) < 10 or len(a_wyj) < 10: continue
+    h_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == home) | (valid_matches['Away'] == home))]
+    a_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == away) | (valid_matches['Away'] == away))]
+    if len(h_tot_all) < 10 or len(a_tot_all) < 10: continue
+
+    h_dom = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Home'] == home)]
+    a_wyj = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Away'] == away)]
+
+    if len(h_dom) == 0 or len(a_wyj) == 0: continue
 
     h_dom['HT_Total'] = pd.to_numeric(h_dom['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(h_dom['HTAG'], errors='coerce').fillna(0)
     a_wyj['HT_Total'] = pd.to_numeric(a_wyj['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(a_wyj['HTAG'], errors='coerce').fillna(0)
     
-    builder_blocks_code, block_probabilities = [], []
+    builder_blocks_code = []
+    block_probabilities = []
     
+    # Blok 1: Over 0.5 Gola
     h_dom_o05 = sum(h_dom['Total_Goals'] >= 1) / len(h_dom)
     a_wyj_o05 = sum(a_wyj['Total_Goals'] >= 1) / len(a_wyj)
     prob_o05 = (h_dom_o05 + a_wyj_o05) / 2
-    if prob_o05 >= 0.95:
+    
+    # Zamiast wymogu 100%, używamy Twojego elastycznego progu
+    if prob_o05 >= PROG_OVER:
         builder_blocks_code.append("O0.5")
         block_probabilities.append(prob_o05)
 
-    for line in [4.5, 5.5, 6.5]:
+    # Blok 2: Undery meczowe (szukamy najlepszej, najbardziej opłacalnej krawędzi)
+    for line in [3.5, 4.5, 5.5, 6.5]:
         h_u = sum(h_dom['Total_Goals'] < line) / len(h_dom)
         a_u = sum(a_wyj['Total_Goals'] < line) / len(a_wyj)
         prob_u = (h_u + a_u) / 2
-        if prob_u >= 0.94:
+        if prob_u >= PROG_UNDER:
             builder_blocks_code.append(f"U{line}")
             block_probabilities.append(prob_u)
             break
 
+    # Blok 3: Under w Pierwszej Połowie (HT)
     for line in [1.5, 2.5]:
         h_u_1h = sum(h_dom['HT_Total'] < line) / len(h_dom)
         a_u_1h = sum(a_wyj['HT_Total'] < line) / len(a_wyj)
         prob_u_1h = (h_u_1h + a_u_1h) / 2
-        if prob_u_1h >= 0.94:
+        if prob_u_1h >= PROG_UNDER:
             builder_blocks_code.append(f"HT_U{line}")
             block_probabilities.append(prob_u_1h)
             break
 
-    if len(builder_blocks_code) >= 3:
+    # Jeśli zebraliśmy wystarczającą liczbę bloków, generujemy typ!
+    if len(builder_blocks_code) >= MIN_BLOKOW:
+        # Zamiast iloczynu używamy średniej arytmetycznej pewności poszczególnych zdarzeń
         final_builder_safety = round(np.mean(block_probabilities) * 100, 1)
+        
+        # OBLICZENIE REALNEGO KURSU - korelacja underów (mocno powiązane = 0.65)
         estimated_bb_odd = calc_betbuilder_odd(block_probabilities, correlation_factor=0.65, margin=0.92)
+        
         sugerowany_kupon = "+".join(builder_blocks_code)
-        uzasadnienie = f"BetBuilder skalkulowany z korelacją zdarzeń."
+        uzasadnienie = f"Model 'Taśma'. Śr. pewność bloków: {final_builder_safety}% (Wymóg: Min. {MIN_BLOKOW} zdarzenia)."
 
         predictions_builder.append([
             row['Match_ID'], row['Termin'], row['Date'], row['Time'], league, f"{home} - {away}", status_k,
@@ -582,6 +605,7 @@ for idx, row in fixtures_clean.iterrows():
             int(h_dom['FTHG'].max()), int(h_dom['FTAG'].max()), 
             int(a_wyj['FTAG'].max()), int(a_wyj['FTHG'].max())
         ])
+        
         all_generated_predictions.append([row['Match_ID'], row['Termin'], row['Date'], home, away, "BetBuilder Pro", sugerowany_kupon, "-", f"{final_builder_safety}%", str(estimated_bb_odd).replace('.', ','), uzasadnienie])
 
 headers_builder = STANDARD_HEADERS + ["H_Probka", "A_Probka", "H_Max_Strz_Dom", "H_Max_Stra_Dom", "A_Max_Strz_Wyj", "A_Max_Stra_Wyj"]
