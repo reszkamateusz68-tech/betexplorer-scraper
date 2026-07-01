@@ -19,20 +19,14 @@ today = datetime.now()
 # FUNKCJE MATEMATYCZNE BUKMACHERA (POISSON I KORELACJE)
 # ==========================================================
 def get_poisson_prob(lam, k, calc_type="exact"):
-    """ Oblicza Prawdopodobieństwo z Rozkładu Poissona. """
     if pd.isna(lam) or lam <= 0: return 0.0
     try:
-        if calc_type == "exact":
-            return (math.exp(-lam) * (lam**k)) / math.factorial(int(k))
-        elif calc_type == "under":
-            return sum((math.exp(-lam) * (lam**i)) / math.factorial(i) for i in range(int(k) + 1))
-        elif calc_type == "over":
-            return 1.0 - sum((math.exp(-lam) * (lam**i)) / math.factorial(i) for i in range(int(k) + 1))
-    except:
-        return 0.0
+        if calc_type == "exact": return (math.exp(-lam) * (lam**k)) / math.factorial(int(k))
+        elif calc_type == "under": return sum((math.exp(-lam) * (lam**i)) / math.factorial(i) for i in range(int(k) + 1))
+        elif calc_type == "over": return 1.0 - sum((math.exp(-lam) * (lam**i)) / math.factorial(i) for i in range(int(k) + 1))
+    except: return 0.0
 
 def get_poisson_match_prob(lam_h, lam_a, max_val=35):
-    """ Krzyżowa macierz Poissona. """
     if pd.isna(lam_h) or pd.isna(lam_a) or lam_h <= 0 or lam_a <= 0: return 0.0, 0.0, 0.0
     p_1, p_x, p_2 = 0.0, 0.0, 0.0
     for i in range(max_val):
@@ -46,12 +40,10 @@ def get_poisson_match_prob(lam_h, lam_a, max_val=35):
     return p_1, p_x, p_2
 
 def calc_betbuilder_odd(probs, correlation_factor=0.65, margin=0.92):
-    """ Kalkulator kursów BetBuilder (Same Game Parlay). """
     if not probs: return 1.0
     probs.sort(reverse=True) 
     combined_p = probs[0]
-    for p in probs[1:]:
-        combined_p *= (p ** (1 - correlation_factor))
+    for p in probs[1:]: combined_p *= (p ** (1 - correlation_factor))
     fair_odd = 1 / combined_p if combined_p > 0 else 99.0
     return max(1.05, round(fair_odd * margin, 2))
 
@@ -209,7 +201,7 @@ for i, url in enumerate(urls, start=1):
 
     if not success or response is None or response.status_code != 200:
         final_code = response.status_code if response else "Brak odpowiedzi"
-        scrape_report.append(["BetExplorer", url_clean, f"BŁĄD: Kod {final_code}"])
+        scrape_report.append(["BetExplorer", url_clean, f"BŁĄD: Kod {final_code} po {max_retries} próbach"])
         continue
 
     try:
@@ -252,12 +244,13 @@ for i, url in enumerate(urls, start=1):
                 all_data.append(["Result", league, date, home, away, score, odd1, oddx, odd2])
                 mecz_count += 1
                 
-if mecz_count > 0:
+        if mecz_count > 0:
             status_msg = f"OK (Pobrano: {mecz_count} meczów)" + (" [Zadziałał Bypass 429]" if bypass_used else "")
             scrape_report.append(["BetExplorer", url_clean, status_msg])
         else:
             scrape_report.append(["BetExplorer", url_clean, "OSTRZEŻENIE: Brak meczów na stronie (0)"])
-    except Exception as e: scrape_report.append(["BetExplorer", url_clean, f"BŁĄD PARSOWANIA: {e}"])
+    except Exception as e: 
+        scrape_report.append(["BetExplorer", url_clean, f"BŁĄD PARSOWANIA: {e}"])
 
 df = pd.DataFrame(all_data, columns=["Type", "League", "Date", "Home", "Away", "Score", "Odd1", "OddX", "Odd2"]).drop_duplicates()
 
@@ -308,11 +301,12 @@ try:
                                         except: pass
                                     dane_soccerstats_baza.append([gospodarz, gosc, wynik_czysty, g_gosp_1h, g_gosc_1h])
                                     ss_count += 1
-if ss_count > 0:
+                if ss_count > 0:
                     scrape_report.append(["SoccerStats", url_ss_clean, f"OK (Pobrano: {ss_count} wierszy)"])
                 else:
                     scrape_report.append(["SoccerStats", url_ss_clean, "OSTRZEŻENIE: Brak meczów na stronie (0)"])
-            except Exception as e: scrape_report.append(["SoccerStats", url_ss_clean, f"BŁĄD HTTP: {str(e)}"])
+            except Exception as e: 
+                scrape_report.append(["SoccerStats", url_ss_clean, f"BŁĄD HTTP: {str(e)}"])
         if dane_soccerstats_baza: ss_df = pd.DataFrame(dane_soccerstats_baza, columns=["Home", "Away", "Score", "Gole_Gosp_1H", "Gole_Gosc_1H"]).drop_duplicates(subset=["Home", "Away", "Score"])
         else: ss_df = pd.DataFrame()
 except Exception: ss_df = pd.DataFrame()
@@ -359,7 +353,6 @@ if not results_df.empty:
         results_df['HTHG'] = results_df['HTHG'].combine_first(pd.to_numeric(results_df['Gole_Gosp_1H'], errors='coerce'))
         results_df['HTAG'] = results_df['HTAG'].combine_first(pd.to_numeric(results_df['Gole_Gosc_1H'], errors='coerce'))
 
-    # Dodane zsumowane statystyki do tablicy Results
     results_df['HT_Total'] = pd.to_numeric(results_df['HTHG'], errors='coerce') + pd.to_numeric(results_df['HTAG'], errors='coerce')
     results_df['Total_Corners'] = pd.to_numeric(results_df['HC'], errors='coerce') + pd.to_numeric(results_df['AC'], errors='coerce')
 
@@ -1111,7 +1104,7 @@ if not df_historia.empty and not results_clean.empty:
 # ==========================================
 # 8. WYSYŁKA GOOGLE SHEETS I AGREGACJA PREDYKCJI
 # ==========================================
-print("Agregacja predykcji do jednej inteligentnej tabeli (All_Predictions)...")
+print("Wysyłam Zaawansowane Logi Pobierania (Summary) do Google Sheets...")
 
 all_pred_dfs = [
     ("1X Pro", df_pred_1x if 'df_pred_1x' in locals() else pd.DataFrame()),
@@ -1181,7 +1174,6 @@ if not df_all_predictions.empty: spreadsheet.worksheet("All_Predictions").update
 
 print("Wysyłam Zaawansowane Logi Pobierania (Summary) do Google Sheets...")
 
-# --- 1. Rozkład wygenerowanych predykcji ---
 pred_breakdown = []
 if not df_all_predictions.empty:
     counts = df_all_predictions['Engine'].value_counts()
@@ -1190,7 +1182,6 @@ if not df_all_predictions.empty:
 else:
     pred_breakdown.append(["  - Brak wygenerowanych predykcji", 0, ""])
 
-# --- 2. Diagnoza Danych per Liga ---
 league_breakdown = [["==== STATUS LIG (Pobranie Danych) ====", "", ""]]
 league_breakdown.append(["Liga", "Liczba Fixtures (Nadchodzące)", "Liczba Results (Zintegrowane)"])
 
@@ -1203,7 +1194,6 @@ for lg in sorted(all_leagues):
     r_cnt = len(results_clean[results_clean['League'] == lg]) if not results_clean.empty else 0
     league_breakdown.append([lg, f_cnt, r_cnt])
 
-# --- 3. Złożenie całości do finalnej tabeli Summary ---
 summary_data = [
     ["==== PODSUMOWANIE OGÓLNE ====", "", ""],
     ["Ostatnia aktualizacja", datetime.now().strftime("%Y-%m-%d %H:%M:%S"), ""],
@@ -1220,7 +1210,6 @@ summary_data.extend(pred_breakdown)
 summary_data.append(["", "", ""])
 summary_data.extend(league_breakdown)
 summary_data.append(["", "", ""])
-
 summary_data.append(["==== RAPORT POBIERANIA Z LINKÓW ====", "", ""])
 summary_data.append(["System", "URL", "Status / Wynik"])
 summary_data.extend(scrape_report)
