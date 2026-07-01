@@ -393,8 +393,9 @@ if not fd_df.empty and not results_df.empty:
 # ==========================================
 print("Czyszczenie bazy - Złota Struktura...")
 
+# Wyrzuciliśmy 'Time' z poniższego słownika
 golden_cols = {
-    'Match_ID': 'Match_ID', 'Date': 'Date', 'Time': 'Time', 'League': 'League', 'Home': 'Home', 'Away': 'Away',
+    'Match_ID': 'Match_ID', 'Date': 'Date', 'League': 'League', 'Home': 'Home', 'Away': 'Away',
     'FTHG': 'FTHG', 'FTAG': 'FTAG', 'Total_Goals': 'Total_Goals', 'HTHG': 'HTHG', 'HTAG': 'HTAG',
     'HS': 'Shots_H', 'AS': 'Shots_A', 'HST': 'ShotsTarget_H', 'AST': 'ShotsTarget_A',
     'HC': 'Corners_H', 'AC': 'Corners_A', 
@@ -413,12 +414,29 @@ if not results_df.empty:
         results_df['HTHG'] = results_df['HTHG'].combine_first(pd.to_numeric(results_df['Gole_Gosp_1H'], errors='coerce'))
         results_df['HTAG'] = results_df['HTAG'].combine_first(pd.to_numeric(results_df['Gole_Gosc_1H'], errors='coerce'))
 
+    # NOWE KOLUMNY SUMARYCZNE
+    results_df['HT_Total'] = pd.to_numeric(results_df['HTHG'], errors='coerce') + pd.to_numeric(results_df['HTAG'], errors='coerce')
+    results_df['Total_Corners'] = pd.to_numeric(results_df['HC'], errors='coerce') + pd.to_numeric(results_df['AC'], errors='coerce')
+
     fd_expected_cols = ['HS', 'AS', 'HST', 'AST', 'HC', 'AC']
     for col in fd_expected_cols:
         if col not in results_df.columns: results_df[col] = np.nan
 
     results_df['Date_str'] = pd.to_datetime(results_df['Date'], errors='coerce').dt.strftime('%Y%m%d').fillna('99999999')
     results_df['Match_ID'] = results_df['Date_str'] + "_" + results_df['Home'].str[:3].str.upper() + "_" + results_df['Away'].str[:3].str.upper()
+
+    # OBLICZANIE MARŻY DLA RESULTS
+    def get_margin_results(r):
+        try:
+            o1 = float(str(r['Odd1']).replace(',', '.'))
+            ox = float(str(r['OddX']).replace(',', '.'))
+            o2 = float(str(r['Odd2']).replace(',', '.'))
+            return f"{round(((1/o1) + (1/ox) + (1/o2) - 1.0) * 100, 2)}%".replace('.', ',')
+        except: return "-"
+    results_df['Marża'] = results_df.apply(get_margin_results, axis=1)
+
+# Generujemy czystą ramkę i dodajemy nowe kolumny do docelowej struktury
+results_clean = results_df[list(golden_cols.keys()) + ['HT_Total', 'Total_Corners', 'Marża']].rename(columns=golden_cols) if not results_df.empty else pd.DataFrame(columns=list(golden_cols.values()) + ['HT_Total', 'Total_Corners', 'Marża'])
 
 if not fixtures_df.empty:
     fixtures_df['Date_str'] = pd.to_datetime(fixtures_df['Date'], errors='coerce').dt.strftime('%Y%m%d').fillna('99999999')
