@@ -469,7 +469,7 @@ fixtures_clean = fixtures_df[['Match_ID', 'Termin', 'Status_Kursów', 'League', 
 print("Generowanie inteligentnych tabel ligowych...")
 results_clean['Date_Parsed'] = pd.to_datetime(results_clean['Date'], errors='coerce')
 results_clean = results_clean.sort_values(by='Date_Parsed', ascending=False)
-valid_matches = results_clean.dropna(subset=['FTHG', 'FTAG']).copy()
+results_clean = results_clean.drop(columns=['Date_Parsed']) # Wyrzucamy techniczny śmieć
 
 valid_matches['Base_League'] = valid_matches['League'].apply(get_base_league)
 
