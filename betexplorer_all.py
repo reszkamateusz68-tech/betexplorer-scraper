@@ -989,11 +989,6 @@ if not df_all_predictions.empty:
 # TYLKO 7 ZŁOTYCH ZAKŁADEK (DODANO H2H)
 all_sheets = ["Summary", "Fixtures", "Results", "League_Tables", "H2H_Mecze", "Historia_Typow", "All_Predictions"]
 
-# Usuwanie starych zakładek
-for old_sheet in ["Predictions_1X", "Predictions_Builder", "Predictions_Multigol", "Predictions_Corners", "Predictions_Shots", "Predictions_ColdShower", "Predictions_HiddenForm", "Predictions_CornerAnomalies", "Predictions_GoalAnomalies"]:
-    try: spreadsheet.del_worksheet(spreadsheet.worksheet(old_sheet))
-    except: pass
-
 for sheet_name in all_sheets:
     try: spreadsheet.worksheet(sheet_name)
     except: spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=30)
