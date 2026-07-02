@@ -136,10 +136,12 @@ def prepare_for_gsheets(df):
             if str_val in ["<NA>", "NaN", "None", "", "inf", "-inf", "-"]:
                 new_row.append("")
             else:
-                if any(k in col_name for k in ["Odd", "Avg", "Value", "PPG", "Prawdopodobieństwo", "Pewność", "Kurs", "Szansa", "Profit", "Marża", "Wplyw"]):
-                    new_row.append(str_val.replace(".", ","))
+                # STANDARYZACJA DLA BAZ DANYCH (Czyste liczby dla Looker Studio)
+                if any(k in col_name for k in ["Odd", "Avg", "Value", "PPG", "Kurs", "Szansa", "Profit", "Marża", "Yield"]):
+                    clean_val = str_val.replace("%", "").replace(",", ".").strip()
+                    new_row.append(clean_val)
                 else:
-                    if str_val.endswith(".0") and "%" not in str_val: new_row.append(str_val[:-2])
+                    if str_val.endswith(".0"): new_row.append(str_val[:-2])
                     else: new_row.append(str_val)
         output.append(new_row)
     return output
