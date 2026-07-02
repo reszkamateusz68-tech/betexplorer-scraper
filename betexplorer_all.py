@@ -52,24 +52,44 @@ def calc_betbuilder_odd(probs, correlation_factor=0.65, margin=0.92):
 # GŁÓWNE FUNKCJE POMOCNICZE
 # ==========================================================
 def split_datetime(value):
-    if pd.isna(value): return None, ""
+    if pd.isna(value): return "", ""
     value = str(value).strip()
-    if value.lower().startswith("today"): return today.date(), value.replace("Today", "").strip()
-    if value.lower().startswith("tomorrow"): return (today.date() + timedelta(days=1), value.replace("Tomorrow", "").strip())
-    if value.lower().startswith("yesterday"): return (today.date() - timedelta(days=1), value.replace("Yesterday", "").strip())
-    try:
+    
+    # 1. Obsługa słów kluczowych (Today, Tomorrow, Yesterday)
+    if value.lower().startswith("today"): 
         parts = value.split()
-        if len(parts) == 2 and parts[0].endswith("."):
-            day, month = parts[0].rstrip(".").split(".")
-            return (datetime(today.year, int(month), int(day)).date(), parts[1])
-    except: pass
-    try: return (datetime.strptime(value, "%d.%m.%Y").date(), "")
-    except: pass
-    try:
-        if value.endswith("."):
-            day, month = value.rstrip(".").split(".")
-            return (datetime(today.year, int(month), int(day)).date(), "")
-    except: pass
+        return today.strftime('%Y-%m-%d'), parts[1] if len(parts) > 1 else ""
+    if value.lower().startswith("tomorrow"): 
+        parts = value.split()
+        return (today + timedelta(days=1)).strftime('%Y-%m-%d'), parts[1] if len(parts) > 1 else ""
+    if value.lower().startswith("yesterday"): 
+        parts = value.split()
+        return (today - timedelta(days=1)).strftime('%Y-%m-%d'), parts[1] if len(parts) > 1 else ""
+        
+    # 2. Obsługa formatów z godziną np. "20.03.2027 16:00" lub "20.03. 16:00"
+    parts = value.split()
+    if len(parts) == 2:
+        date_part, time_part = parts[0], parts[1]
+        if len(date_part.split('.')) >= 3:
+            try:
+                if date_part.endswith("."): # Format "20.03."
+                    d, m = date_part.rstrip(".").split(".")
+                    return datetime(today.year, int(m), int(d)).strftime('%Y-%m-%d'), time_part
+                else: # Format "20.03.2027"
+                    return datetime.strptime(date_part, "%d.%m.%Y").strftime('%Y-%m-%d'), time_part
+            except: pass
+            
+    # 3. Obsługa samych dat (bez godziny) np. "20.03.2027" lub "20.03."
+    else:
+        if len(value.split('.')) >= 3:
+            try:
+                if value.endswith("."):
+                    d, m = value.rstrip(".").split(".")
+                    return datetime(today.year, int(m), int(d)).strftime('%Y-%m-%d'), ""
+                else:
+                    return datetime.strptime(value, "%d.%m.%Y").strftime('%Y-%m-%d'), ""
+            except: pass
+            
     return value, ""
 
 def categorize_date(d_str):
