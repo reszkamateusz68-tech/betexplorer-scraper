@@ -274,7 +274,7 @@ try:
                                 if "HOME" in gospodarz.upper(): continue
                                 if gospodarz and gosc and gosc != gospodarz:
                                     statystyki = [s for s in teksty[wynik_index + 2:] if s.strip()] 
-                                    ht = statystyki[0] if len(statystyki) > 0 else "-"
+                                    ht = statystyki[0] if len(statystyki) > 0 else ""
                                     wynik_czysty = wynik.replace("*", "").strip().replace(" ", "").replace("-", ":")
                                     ht_czysty = ht.replace("*", "").strip().replace(" ", "").replace("-", ":").replace("(", "").replace(")", "")
                                     g_gosp_1h, g_gosc_1h = "", ""
@@ -434,6 +434,8 @@ if not league_tables.empty:
 
 # --- GENERATOR H2H DLA ZAKŁADKI "H2H_Mecze" ---
 h2h_list = []
+df_h2h = pd.DataFrame(columns=["Nadchodzący Mecz", "Data Meczu", "Liga", "Data H2H", "Gospodarz H2H", "Gość H2H", "Wynik H2H", "Gole HT", "Rożne H2H"])
+
 if not fixtures_clean.empty and not valid_matches.empty:
     upcoming = fixtures_clean[fixtures_clean['Status_Kursów'] == 'Są Kursy']
     for _, f in upcoming.iterrows():
@@ -446,7 +448,8 @@ if not fixtures_clean.empty and not valid_matches.empty:
                 h['Date'], h['Home'], h['Away'], f"{int(h['FTHG'])}:{int(h['FTAG'])}",
                 str(h['HT_Total']).replace('.0', ''), str(h['Total_Corners']).replace('.0', '')
             ])
-df_h2h = pd.DataFrame(h2h_list, columns=["Nadchodzący Mecz", "Data Meczu", "Liga", "Data H2H", "Gospodarz H2H", "Gość H2H", "Wynik H2H", "Gole HT", "Rożne H2H"])
+    if h2h_list:
+        df_h2h = pd.DataFrame(h2h_list, columns=["Nadchodzący Mecz", "Data Meczu", "Liga", "Data H2H", "Gospodarz H2H", "Gość H2H", "Wynik H2H", "Gole HT", "Rożne H2H"])
 
 
 # ==========================================================
@@ -986,8 +989,11 @@ if not df_all_predictions.empty:
 # ==========================================
 # 8. WYSYŁKA GOOGLE SHEETS
 # ==========================================
-# TYLKO 7 ZŁOTYCH ZAKŁADEK (DODANO H2H)
 all_sheets = ["Summary", "Fixtures", "Results", "League_Tables", "H2H_Mecze", "Historia_Typow", "All_Predictions"]
+
+for old_sheet in ["Predictions_1X", "Predictions_Builder", "Predictions_Multigol", "Predictions_Corners", "Predictions_Shots", "Predictions_ColdShower", "Predictions_HiddenForm", "Predictions_CornerAnomalies", "Predictions_GoalAnomalies"]:
+    try: spreadsheet.del_worksheet(spreadsheet.worksheet(old_sheet))
+    except: pass
 
 for sheet_name in all_sheets:
     try: spreadsheet.worksheet(sheet_name)
