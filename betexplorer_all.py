@@ -1312,7 +1312,8 @@ if not df_historia.empty and not results_clean.empty:
 
 # --- INTELIGENTNE SORTOWANIE (Przyszłość na górze, Historia na dole) ---
 if not df_historia.empty:
-    df_historia['Data_Sort'] = pd.to_datetime(df_historia['Data'] + ' ' + df_historia['Godzina'].replace('', '00:00').replace('-', '00:00'), errors='coerce')
+    # Wymuszenie rzutowania na tekst (.astype(str)) przed sklejeniem daty i godziny
+    df_historia['Data_Sort'] = pd.to_datetime(df_historia['Data'].astype(str) + ' ' + df_historia['Godzina'].astype(str).replace('', '00:00').replace('-', '00:00'), errors='coerce')
     
     mask_oczek = df_historia['Status'] == 'W OCZEKIWANIU'
     df_oczek = df_historia[mask_oczek].sort_values(by=['Data_Sort'], ascending=[True])
