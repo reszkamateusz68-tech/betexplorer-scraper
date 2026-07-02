@@ -479,9 +479,10 @@ if not fixtures_clean.empty and not valid_matches.empty:
 # ==========================================================
 all_generated_predictions = []
 
-def add_pred(match_id, date, time, league, home, away, engine, typ, kurs_rynek, szansa, kurs_szac, arg):
+# Zmodyfikowana funkcja - dodano 'termin'
+def add_pred(match_id, termin, date, time, league, home, away, engine, typ, kurs_rynek, szansa, kurs_szac, arg):
     all_generated_predictions.append({
-        "Match_ID": match_id, "Data": date, "Godzina": time, "Liga": league, 
+        "Match_ID": match_id, "Termin": termin, "Data": date, "Godzina": time, "Liga": league, 
         "Gospodarz": home, "Gość": away, "Engine": engine, "Typ": typ, 
         "Kurs_Rynek": kurs_rynek if kurs_rynek not in ["-", "nan"] else "",
         "Szansa": szansa, "Kurs_Szac": kurs_szac, "Argumentacja": arg
@@ -492,7 +493,7 @@ print("Uruchamiam Modele Predykcyjne...")
 for idx, row in fixtures_clean.iterrows():
     league, home, away = row['League'], row['Home'], row['Away']
     fixture_base = get_base_league(league)
-    match_id, d_date, d_time = row['Match_ID'], row['Date'], row['Time']
+    match_id, d_date, d_time, d_termin = row['Match_ID'], row['Date'], row['Time'], row['Termin']
     
     o1_raw, ox_raw, o2_raw = row['Odd_1'], row['Odd_X'], row['Odd_2']
     buk_odd_1x = ""
@@ -517,7 +518,7 @@ for idx, row in fixtures_clean.iterrows():
         a_tot_all['Team_GA'] = np.where(a_tot_all['Home'] == away, a_tot_all['FTAG'], a_tot_all['FTHG'])
 
     # ----------------------------------------------------
-    # 6a. 1X PRO (Dixon-Coles + H2H Koszyki Argumentacja)
+    # 6a. 1X PRO
     # ----------------------------------------------------
     lg_matches = valid_matches[valid_matches['Base_League'] == fixture_base]
     if len(lg_matches) >= 20 and len(h_tot_all) >= 5 and len(a_tot_all) >= 5 and len(h_dom) > 0 and len(a_wyj) > 0:
@@ -576,10 +577,10 @@ for idx, row in fixtures_clean.iterrows():
 
                 arg = f"Gość ({a_tier}) wyjazd bez porażki {a_x2_c}/{len(a_wyj)} (Ogółem: {a_x2_tot}/{len(a_tot_all)}). Gość przegrywał z: [{a_ls_txt}]. Gosp ({h_tier}) dom wygrał {h_win_c}/{len(h_dom)} (Ogółem: {h_win_tot}/{len(h_tot_all)}). Gosp wygrywał z: [{h_ws_txt}]."
                 
-            add_pred(match_id, d_date, d_time, league, home, away, "1X Pro", typ_kod, str(buk_odd_1x), f"{round(final_prob*100)}%", str(fair_odd).replace('.', ','), arg)
+            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "1X Pro", typ_kod, str(buk_odd_1x), f"{round(final_prob*100)}%", str(fair_odd).replace('.', ','), arg)
 
     # ----------------------------------------------------
-    # 6b. BETBUILDER PRO (Taśmy)
+    # 6b. BETBUILDER PRO
     # ----------------------------------------------------
     PROG_OVER = 0.88
     PROG_UNDER = 0.88
@@ -631,10 +632,10 @@ for idx, row in fixtures_clean.iterrows():
             final_builder_safety = round(np.mean(block_probabilities) * 100, 1)
             estimated_bb_odd = calc_betbuilder_odd(block_probabilities, correlation_factor=0.65, margin=0.92)
             uzasadnienie = " | ".join(arg_blocks)
-            add_pred(match_id, d_date, d_time, league, home, away, "BetBuilder Pro", "+".join(builder_blocks_code), "", f"{final_builder_safety}%", str(estimated_bb_odd).replace('.', ','), uzasadnienie)
+            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "BetBuilder Pro", "+".join(builder_blocks_code), "", f"{final_builder_safety}%", str(estimated_bb_odd).replace('.', ','), uzasadnienie)
 
     # ----------------------------------------------------
-    # 6c. MULTIGOL (Regresja z Dokładnymi Wynikami)
+    # 6c. MULTIGOL
     # ----------------------------------------------------
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
         h_last_goals = get_last_match_goals(fixture_base, home)
@@ -661,7 +662,7 @@ for idx, row in fixtures_clean.iterrows():
                 a_scores = ", ".join([f"{int(m['FTHG'])}:{int(m['FTAG'])}" for _, m in a_tot_all.head(3).iterrows()])
                 
                 arg = f"Regresja po anomalii (Wyniki Gosp ost. 3: {h_scores} | Gość ost. 3: {a_scores}). Historycznie {typ_kod} wchodzi u Gosp: {hc}/{len(h_dom)} (Ogół: {htc}/{len(h_tot_all)}), u Gości: {ac}/{len(a_wyj)} (Ogół: {atc}/{len(a_tot_all)})."
-                add_pred(match_id, d_date, d_time, league, home, away, "Multigol", typ_kod, "", f"{round(pewnosc*100, 1)}%", str(est_odd).replace('.', ','), arg)
+                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Multigol", typ_kod, "", f"{round(pewnosc*100, 1)}%", str(est_odd).replace('.', ','), arg)
 
     # ----------------------------------------------------
     # 6d. CORNERS PRO
@@ -715,7 +716,7 @@ for idx, row in fixtures_clean.iterrows():
         if len(c_blocks_code) >= 1:
             est_odd = round((1.0 + sum([(o - 1.0) * 0.60 for o in c_odds])) * 0.95, 2) if len(c_blocks_code) > 1 else c_odds[0]
             if est_odd < 1.05: est_odd = 1.05
-            add_pred(match_id, d_date, d_time, league, home, away, "Corners Pro", "+".join(c_blocks_code), "", f"{round(np.mean(c_probs)*100, 1)}%", str(est_odd).replace('.', ','), " | ".join(arg_c))
+            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Corners Pro", "+".join(c_blocks_code), "", f"{round(np.mean(c_probs)*100, 1)}%", str(est_odd).replace('.', ','), " | ".join(arg_c))
 
     # ----------------------------------------------------
     # 6e. SHOTS PRO
@@ -729,7 +730,7 @@ for idx, row in fixtures_clean.iterrows():
         valid_shots = valid_shots.dropna(subset=['Shots_H', 'Shots_A', 'ShotsTarget_H', 'ShotsTarget_A'])
         
         h_tot_all_s = valid_shots[(valid_shots['Base_League'] == fixture_base) & ((valid_shots['Home'] == home) | (valid_shots['Away'] == home))].copy()
-        a_tot_all_s = valid_shots[(valid_shots['Base_League'] == fixture_base) & ((valid_shots['Home'] == away) | (valid_shots['Away'] == away))].copy()
+        a_tot_all_s = valid_shots[(valid_shots['Base_League'] == fixture_base) & ((valid_matches['Home'] == away) | (valid_shots['Away'] == away))].copy()
         h_dom_s = valid_shots[(valid_shots['Base_League'] == fixture_base) & (valid_shots['Home'] == home)]
         a_wyj_s = valid_shots[(valid_shots['Base_League'] == fixture_base) & (valid_shots['Away'] == away)]
 
@@ -763,12 +764,12 @@ for idx, row in fixtures_clean.iterrows():
             if prob_h_s > 0.80:
                 est_odd_s = round(1.0 + (((1/prob_h_s) - 1.0) / 1.5), 2) if prob_h_s < 1.0 else 1.01
                 arg = f"Strzały Ogółem: Gosp win u siebie {h_s_win}/{len(h_dom_s)} (Ogółem: {h_tot_s_win}/{len(h_tot_all_s)}). Gość lose wyjazd {a_s_lose}/{len(a_wyj_s)} (Ogółem: {a_tot_s_lose}/{len(a_tot_all_s)})."
-                add_pred(match_id, d_date, d_time, league, home, away, "Shots Pro", "S_1", "", f"{round(prob_h_s*100, 1)}%", str(est_odd_s).replace('.', ','), arg)
+                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Shots Pro", "S_1", "", f"{round(prob_h_s*100, 1)}%", str(est_odd_s).replace('.', ','), arg)
             
             if prob_h_st > 0.80:
                 est_odd_st = round(1.0 + (((1/prob_h_st) - 1.0) / 1.5), 2) if prob_h_st < 1.0 else 1.01
                 arg = f"Strzały Celne: Gosp win u siebie {h_st_win}/{len(h_dom_s)} (Ogółem: {h_tot_st_win}/{len(h_tot_all_s)}). Gość lose wyjazd {a_st_lose}/{len(a_wyj_s)} (Ogółem: {a_tot_st_lose}/{len(a_tot_all_s)})."
-                add_pred(match_id, d_date, d_time, league, home, away, "Shots Pro", "ST_1", "", f"{round(prob_h_st*100, 1)}%", str(est_odd_st).replace('.', ','), arg)
+                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Shots Pro", "ST_1", "", f"{round(prob_h_st*100, 1)}%", str(est_odd_st).replace('.', ','), arg)
 
     # ----------------------------------------------------
     # 6f. ZIMNY PRYSZNIC
@@ -780,7 +781,7 @@ for idx, row in fixtures_clean.iterrows():
             if opp_tier in ['Koszyk 4', 'Koszyk 5', 'Koszyk 6']:
                 est_odd = round(1.0 + (((1/0.85) - 1.0) / 1.5), 2)
                 arg = f"Gospodarz ({h_tier}) szuka rewanżu u siebie po stracie punktów na wyjeździe z dużo słabszym rywalem ({opp_tier})."
-                add_pred(match_id, d_date, d_time, league, home, away, "Cold Shower", "1", "", "85%", str(est_odd).replace('.', ','), arg)
+                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Cold Shower", "1", "", "85%", str(est_odd).replace('.', ','), arg)
 
     # ----------------------------------------------------
     # 6g. UKRYTA FORMA (Proxy xG)
@@ -805,7 +806,7 @@ for idx, row in fixtures_clean.iterrows():
                     typ_kod = "1X" if is_home else "X2"
                     est_odd = round(1.0 + (((1/0.80) - 1.0) / 1.5), 2)
                     arg = f"Wysokie xG. W 3 ost. meczach zespół oddał {int(st_for)} celnych strzałów, ale zdobył tylko {int(g_for)} goli."
-                    add_pred(match_id, d_date, d_time, league, home, away, "Hidden Form", typ_kod, "", "80%", str(est_odd).replace('.', ','), arg)
+                    add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Hidden Form", typ_kod, "", "80%", str(est_odd).replace('.', ','), arg)
 
     # ----------------------------------------------------
     # 6h. ANOMALIE ROŻNYCH
@@ -822,7 +823,7 @@ for idx, row in fixtures_clean.iterrows():
                 typ_kod = "HC_O4.5" if is_home else "AC_O4.5"
                 est_odd = round(1.0 + (((1/0.82) - 1.0) / 1.5), 2)
                 arg = f"Pęknięta seria. Średnia sezonu zespołu: {round(season_avg, 2)}. Średnia 2 ost. meczów: tylko {round(last_2_avg, 2)}."
-                add_pred(match_id, d_date, d_time, league, home, away, "Corner Anomalies", typ_kod, "", "82%", str(est_odd).replace('.', ','), arg)
+                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Corner Anomalies", typ_kod, "", "82%", str(est_odd).replace('.', ','), arg)
 
     # ----------------------------------------------------
     # 6i. ANOMALIE BRAMKOWE
@@ -834,12 +835,14 @@ for idx, row in fixtures_clean.iterrows():
         if season_avg <= 2.8 and last_2_avg >= 4.5:
             est_odd = round(1.0 + (((1/0.85) - 1.0) / 1.5), 2)
             arg = f"Anomalia overowa. Średnia sezonu obu ekip: {round(season_avg, 2)}. Ost. 2 mecze: aż {round(last_2_avg, 2)} goli. Oczekiwany powrót undera."
-            add_pred(match_id, d_date, d_time, league, home, away, "Goal Anomalies", "U3.5", "", "85%", str(est_odd).replace('.', ','), arg)
+            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Anomalies", "U3.5", "", "85%", str(est_odd).replace('.', ','), arg)
         elif season_avg >= 2.5 and last_2_avg <= 0.5:
             est_odd = round(1.0 + (((1/0.85) - 1.0) / 1.5), 2)
             arg = f"Anomalia underowa. Średnia sezonu obu ekip: {round(season_avg, 2)}. Ost. 2 mecze: tylko {round(last_2_avg, 2)} goli. Oczekiwane przełamanie."
-            add_pred(match_id, d_date, d_time, league, home, away, "Goal Anomalies", "O1.5", "", "85%", str(est_odd).replace('.', ','), arg)
+            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Anomalies", "O1.5", "", "85%", str(est_odd).replace('.', ','), arg)
 
+# Zaktualizowana definicja kolumn z nową pozycją 'Termin'
+cols_all_pred = ["Match_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja"]
 
 # ==========================================================
 # 7. SYSTEM ŚLEDZENIA SKUTECZNOŚCI I YIELDU (BACKTESTER)
