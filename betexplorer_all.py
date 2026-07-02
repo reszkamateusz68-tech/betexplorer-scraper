@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from google.oauth2.service_account import Credentials
 import math
+from collections import Counter
 
 today = datetime.now()
 
@@ -128,7 +129,6 @@ def prepare_for_gsheets(df):
         new_row = []
         for idx, val in enumerate(row):
             col_name = df.columns[idx]
-            # Utrzymanie czystych, pustych komórek dla Looker Studio
             if pd.isna(val) or val == "nan":
                 new_row.append("")
                 continue
@@ -366,9 +366,9 @@ results_clean = results_df[list(golden_cols.keys()) + ['HT_Total', 'Total_Corner
 fixtures_clean = fixtures_df[['Match_ID', 'Termin', 'Status_Kursów', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd1', 'OddX', 'Odd2', 'Marża']].rename(columns={'Odd1': 'Odd_1', 'OddX': 'Odd_X', 'Odd2': 'Odd_2'}) if not fixtures_df.empty else pd.DataFrame(columns=['Match_ID', 'Termin', 'Status_Kursów', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd_1', 'Odd_X', 'Odd_2', 'Marża'])
 
 # ==========================================
-# 5. GENEROWANIE TABEL LIGOWYCH (6 KOSZYKÓW)
+# 5. GENEROWANIE TABEL LIGOWYCH I H2H
 # ==========================================
-print("Generowanie inteligentnych tabel ligowych (6 Koszyków)...")
+print("Generowanie inteligentnych tabel ligowych (6 Koszyków) oraz zestawień H2H...")
 valid_matches = pd.DataFrame()
 
 if not results_clean.empty:
@@ -432,6 +432,23 @@ if not league_tables.empty:
     for _, r in league_tables.iterrows():
         team_tiers[(r['League'], r['Team'])] = r['Koszyk']
 
+# --- GENERATOR H2H DLA ZAKŁADKI "H2H_Mecze" ---
+h2h_list = []
+if not fixtures_clean.empty and not valid_matches.empty:
+    upcoming = fixtures_clean[fixtures_clean['Status_Kursów'] == 'Są Kursy']
+    for _, f in upcoming.iterrows():
+        f_home, f_away, f_date, f_league = f['Home'], f['Away'], f['Date'], f['League']
+        base_lg = get_base_league(f_league)
+        h2h_m = valid_matches[(valid_matches['Base_League'] == base_lg) & (((valid_matches['Home'] == f_home) & (valid_matches['Away'] == f_away)) | ((valid_matches['Home'] == f_away) & (valid_matches['Away'] == f_home)))].head(5)
+        for _, h in h2h_m.iterrows():
+            h2h_list.append([
+                f"{f_home} - {f_away}", f_date, f_league,
+                h['Date'], h['Home'], h['Away'], f"{int(h['FTHG'])}:{int(h['FTAG'])}",
+                str(h['HT_Total']).replace('.0', ''), str(h['Total_Corners']).replace('.0', '')
+            ])
+df_h2h = pd.DataFrame(h2h_list, columns=["Nadchodzący Mecz", "Data Meczu", "Liga", "Data H2H", "Gospodarz H2H", "Gość H2H", "Wynik H2H", "Gole HT", "Rożne H2H"])
+
+
 # ==========================================================
 # 6. SILNIKI PREDYKCYJNE (Z centralizowanym Generatorem Tekstu)
 # ==========================================================
@@ -467,8 +484,15 @@ for idx, row in fixtures_clean.iterrows():
     h_tier = team_tiers.get((league, home), 'Koszyk 3')
     a_tier = team_tiers.get((league, away), 'Koszyk 3')
 
+    if len(h_tot_all) > 0:
+        h_tot_all['Team_GF'] = np.where(h_tot_all['Home'] == home, h_tot_all['FTHG'], h_tot_all['FTAG'])
+        h_tot_all['Team_GA'] = np.where(h_tot_all['Home'] == home, h_tot_all['FTAG'], h_tot_all['FTHG'])
+    if len(a_tot_all) > 0:
+        a_tot_all['Team_GF'] = np.where(a_tot_all['Home'] == away, a_tot_all['FTHG'], a_tot_all['FTAG'])
+        a_tot_all['Team_GA'] = np.where(a_tot_all['Home'] == away, a_tot_all['FTAG'], a_tot_all['FTHG'])
+
     # ----------------------------------------------------
-    # 6a. 1X PRO (Dixon-Coles + Zrozumiała Argumentacja)
+    # 6a. 1X PRO (Dixon-Coles + H2H Koszyki Argumentacja)
     # ----------------------------------------------------
     lg_matches = valid_matches[valid_matches['Base_League'] == fixture_base]
     if len(lg_matches) >= 20 and len(h_tot_all) >= 5 and len(a_tot_all) >= 5 and len(h_dom) > 0 and len(a_wyj) > 0:
@@ -496,23 +520,36 @@ for idx, row in fixtures_clean.iterrows():
         if final_prob >= 0.70:
             fair_odd = round((1 / final_prob) * 0.93, 2)
             
-            h_tot_all['Team_GF'] = np.where(h_tot_all['Home'] == home, h_tot_all['FTHG'], h_tot_all['FTAG'])
-            h_tot_all['Team_GA'] = np.where(h_tot_all['Home'] == home, h_tot_all['FTAG'], h_tot_all['FTHG'])
-            a_tot_all['Team_GF'] = np.where(a_tot_all['Home'] == away, a_tot_all['FTHG'], a_tot_all['FTAG'])
-            a_tot_all['Team_GA'] = np.where(a_tot_all['Home'] == away, a_tot_all['FTAG'], a_tot_all['FTHG'])
-            
             if typ_kod == "1X":
                 h_1x_c = sum(h_dom['FTHG'] >= h_dom['FTAG'])
                 a_win_c = sum(a_wyj['FTAG'] > a_wyj['FTHG'])
                 h_1x_tot = sum(h_tot_all['Team_GF'] >= h_tot_all['Team_GA'])
                 a_win_tot = sum(a_tot_all['Team_GF'] > a_tot_all['Team_GA'])
-                arg = f"Gosp ({h_tier}) u siebie bez porażki w {h_1x_c}/{len(h_dom)} (Ogółem: {h_1x_tot}/{len(h_tot_all)}). Gość ({a_tier}) na wyjazdach wygrał {a_win_c}/{len(a_wyj)} (Ogółem: {a_win_tot}/{len(a_tot_all)})."
+                
+                h_losses = h_dom[h_dom['FTHG'] < h_dom['FTAG']]
+                h_ls_tiers = [team_tiers.get((league, x), 'Koszyk 3') for x in h_losses['Away']]
+                h_ls_txt = ", ".join([f"{k.replace('Koszyk ', 'K')}:{v}x" for k, v in dict(Counter(h_ls_tiers)).items()]) if h_ls_tiers else "Brak"
+
+                a_wins = a_wyj[a_wyj['FTAG'] > a_wyj['FTHG']]
+                a_ws_tiers = [team_tiers.get((league, x), 'Koszyk 3') for x in a_wins['Home']]
+                a_ws_txt = ", ".join([f"{k.replace('Koszyk ', 'K')}:{v}x" for k, v in dict(Counter(a_ws_tiers)).items()]) if a_ws_tiers else "Brak"
+
+                arg = f"Gosp ({h_tier}) dom bez porażki {h_1x_c}/{len(h_dom)} (Ogółem: {h_1x_tot}/{len(h_tot_all)}). Gosp przegrywał z: [{h_ls_txt}]. Gość ({a_tier}) wyjazd wygrał {a_win_c}/{len(a_wyj)} (Ogółem: {a_win_tot}/{len(a_tot_all)}). Gość wygrywał z: [{a_ws_txt}]."
             else:
                 a_x2_c = sum(a_wyj['FTAG'] >= a_wyj['FTHG'])
                 h_win_c = sum(h_dom['FTHG'] > h_dom['FTAG'])
                 a_x2_tot = sum(a_tot_all['Team_GF'] >= a_tot_all['Team_GA'])
                 h_win_tot = sum(h_tot_all['Team_GF'] > h_tot_all['Team_GA'])
-                arg = f"Gość ({a_tier}) na wyjazdach bez porażki w {a_x2_c}/{len(a_wyj)} (Ogółem: {a_x2_tot}/{len(a_tot_all)}). Gosp ({h_tier}) u siebie wygrał {h_win_c}/{len(h_dom)} (Ogółem: {h_win_tot}/{len(h_tot_all)})."
+
+                a_losses = a_wyj[a_wyj['FTAG'] < a_wyj['FTHG']]
+                a_ls_tiers = [team_tiers.get((league, x), 'Koszyk 3') for x in a_losses['Home']]
+                a_ls_txt = ", ".join([f"{k.replace('Koszyk ', 'K')}:{v}x" for k, v in dict(Counter(a_ls_tiers)).items()]) if a_ls_tiers else "Brak"
+
+                h_wins = h_dom[h_dom['FTHG'] > h_dom['FTAG']]
+                h_ws_tiers = [team_tiers.get((league, x), 'Koszyk 3') for x in h_wins['Away']]
+                h_ws_txt = ", ".join([f"{k.replace('Koszyk ', 'K')}:{v}x" for k, v in dict(Counter(h_ws_tiers)).items()]) if h_ws_tiers else "Brak"
+
+                arg = f"Gość ({a_tier}) wyjazd bez porażki {a_x2_c}/{len(a_wyj)} (Ogółem: {a_x2_tot}/{len(a_tot_all)}). Gość przegrywał z: [{a_ls_txt}]. Gosp ({h_tier}) dom wygrał {h_win_c}/{len(h_dom)} (Ogółem: {h_win_tot}/{len(h_tot_all)}). Gosp wygrywał z: [{h_ws_txt}]."
                 
             add_pred(match_id, d_date, d_time, league, home, away, "1X Pro", typ_kod, str(buk_odd_1x), f"{round(final_prob*100)}%", str(fair_odd).replace('.', ','), arg)
 
@@ -572,17 +609,13 @@ for idx, row in fixtures_clean.iterrows():
             add_pred(match_id, d_date, d_time, league, home, away, "BetBuilder Pro", "+".join(builder_blocks_code), "", f"{final_builder_safety}%", str(estimated_bb_odd).replace('.', ','), uzasadnienie)
 
     # ----------------------------------------------------
-    # 6c. MULTIGOL (Regresja)
+    # 6c. MULTIGOL (Regresja z Dokładnymi Wynikami)
     # ----------------------------------------------------
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
         h_last_goals = get_last_match_goals(fixture_base, home)
         a_last_goals = get_last_match_goals(fixture_base, away)
         
-        has_anomaly = False
         if h_last_goals == 0 or h_last_goals > 5 or a_last_goals == 0 or a_last_goals > 5:
-            has_anomaly = True
-
-        if has_anomaly:
             h_15 = sum((h_dom['Total_Goals'].between(1,5)))
             a_15 = sum((a_wyj['Total_Goals'].between(1,5)))
             h_tot_15 = sum((h_tot_all['Total_Goals'].between(1,5)))
@@ -598,7 +631,11 @@ for idx, row in fixtures_clean.iterrows():
             if prob_1_5 >= 0.90 or prob_1_6 >= 0.90:
                 typ_kod, pewnosc, hc, ac, htc, atc = ("MG_1-5", prob_1_5, h_15, a_15, h_tot_15, a_tot_15) if prob_1_5 >= 0.90 else ("MG_1-6", prob_1_6, h_16, a_16, h_tot_16, a_tot_16)
                 est_odd = round(1.0 + (((1/pewnosc) - 1.0) / 1.5), 2)
-                arg = f"Regresja po anomalii (Ost. Gosp: {h_last_goals}, Gość: {a_last_goals} goli). Historycznie {typ_kod} wchodzi u Gosp: {hc}/{len(h_dom)} (Ogółem: {htc}/{len(h_tot_all)}), u Gości: {ac}/{len(a_wyj)} (Ogółem: {atc}/{len(a_tot_all)})."
+                
+                h_scores = ", ".join([f"{int(m['FTHG'])}:{int(m['FTAG'])}" for _, m in h_tot_all.head(3).iterrows()])
+                a_scores = ", ".join([f"{int(m['FTHG'])}:{int(m['FTAG'])}" for _, m in a_tot_all.head(3).iterrows()])
+                
+                arg = f"Regresja po anomalii (Wyniki Gosp ost. 3: {h_scores} | Gość ost. 3: {a_scores}). Historycznie {typ_kod} wchodzi u Gosp: {hc}/{len(h_dom)} (Ogół: {htc}/{len(h_tot_all)}), u Gości: {ac}/{len(a_wyj)} (Ogół: {atc}/{len(a_tot_all)})."
                 add_pred(match_id, d_date, d_time, league, home, away, "Multigol", typ_kod, "", f"{round(pewnosc*100, 1)}%", str(est_odd).replace('.', ','), arg)
 
     # ----------------------------------------------------
@@ -629,7 +666,7 @@ for idx, row in fixtures_clean.iterrows():
                 avg_p = (h_c/len(h_dom_c) + a_c/len(a_wyj_c)) / 2
                 if avg_p >= 0.90:
                     c_blocks_code.append(f"C_U{line}"); c_probs.append(avg_p); c_odds.append(round(1/(avg_p*0.90), 2))
-                    arg_c.append(f"C_U{line} (D: {h_c}/{len(h_dom_c)}, W: {a_c}/{len(a_wyj_c)} | Ogół Gosp: {h_tot_c}/{len(h_tot_all_c)}, Ogół Gość: {a_tot_c}/{len(a_tot_all_c)})")
+                    arg_c.append(f"C_U{line} (D: {h_c}/{len(h_dom_c)}, W: {a_c}/{len(a_wyj_c)} | Ogół Gosp: {h_tot_c}/{len(h_tot_all_c)}, Gość: {a_tot_c}/{len(a_tot_all_c)})")
                     break
 
         for line in [4.5, 5.5, 6.5, 7.5, 8.5]:
@@ -949,8 +986,8 @@ if not df_all_predictions.empty:
 # ==========================================
 # 8. WYSYŁKA GOOGLE SHEETS
 # ==========================================
-# TYLKO 6 ZŁOTYCH ZAKŁADEK
-all_sheets = ["Summary", "Fixtures", "Results", "League_Tables", "Historia_Typow", "All_Predictions"]
+# TYLKO 7 ZŁOTYCH ZAKŁADEK (DODANO H2H)
+all_sheets = ["Summary", "Fixtures", "Results", "League_Tables", "H2H_Mecze", "Historia_Typow", "All_Predictions"]
 
 # Usuwanie starych zakładek
 for old_sheet in ["Predictions_1X", "Predictions_Builder", "Predictions_Multigol", "Predictions_Corners", "Predictions_Shots", "Predictions_ColdShower", "Predictions_HiddenForm", "Predictions_CornerAnomalies", "Predictions_GoalAnomalies"]:
@@ -964,6 +1001,7 @@ for sheet_name in all_sheets:
 try:
     spreadsheet.worksheet("Fixtures").resize(rows=5000, cols=25)
     spreadsheet.worksheet("Results").resize(rows=10000, cols=35) 
+    spreadsheet.worksheet("H2H_Mecze").resize(rows=5000, cols=15)
     spreadsheet.worksheet("Historia_Typow").resize(rows=10000, cols=20)
     spreadsheet.worksheet("All_Predictions").resize(rows=5000, cols=20)
 except: pass
@@ -979,6 +1017,10 @@ if not results_clean.empty: spreadsheet.worksheet("Results").update(prepare_for_
 print("Wysyłam Tabele Ligowe...")
 spreadsheet.worksheet("League_Tables").clear()
 if not league_tables.empty: spreadsheet.worksheet("League_Tables").update(prepare_for_gsheets(league_tables))
+
+print("Wysyłam Analizę H2H do Google Sheets...")
+spreadsheet.worksheet("H2H_Mecze").clear()
+if not df_h2h.empty: spreadsheet.worksheet("H2H_Mecze").update(prepare_for_gsheets(df_h2h))
 
 print("Wysyłam Logi Systemu Backtestingu (Historia_Typow)...")
 ws_historia.clear()
@@ -1015,6 +1057,7 @@ summary_data = [
     ["Fixtures Czyste", len(fixtures_clean), ""],
     ["Results Zintegrowane", len(results_clean), ""],
     ["Tabela Drużyn", len(league_tables), ""],
+    ["Wygenerowane Zestawienia H2H", len(df_h2h), ""],
     ["Przetworzone Typy w Historii", len(df_historia), ""],
     ["Wygenerowane Predykcje (Suma)", len(df_all_predictions), ""],
     ["", "", ""],
@@ -1033,5 +1076,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Architektura z 6 zakładkami i pełną argumentacją H2H/Ogółem wdrożona.")
+print("Architektura z 7 zakładkami (w tym H2H) z wdrożoną pełną argumentacją statystyczną.")
 print("=" * 60)
