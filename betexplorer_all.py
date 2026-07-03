@@ -478,11 +478,27 @@ if not fixtures_clean.empty and not valid_matches.empty:
 all_generated_predictions = []
 
 def add_pred(match_id, termin, date, time, league, home, away, engine, typ, kurs_rynek, szansa, kurs_szac, arg):
+    try:
+        kr_str = str(kurs_rynek).replace(',', '.').strip()
+        if kr_str in ["", "-", "nan", "None"]:
+            przedzial = "Brak kursu"
+        else:
+            kr = float(kr_str)
+            if kr < 1.10: przedzial = "do 1.09"
+            elif kr < 1.20: przedzial = "1.10 - 1.19"
+            elif kr < 1.30: przedzial = "1.20 - 1.29"
+            elif kr < 1.40: przedzial = "1.30 - 1.39"
+            elif kr < 1.50: przedzial = "1.40 - 1.49"
+            else: przedzial = "1.50+"
+    except:
+        przedzial = "Brak kursu"
+
     all_generated_predictions.append({
         "Match_ID": match_id, "Termin": termin, "Data": date, "Godzina": time, "Liga": league, 
         "Gospodarz": home, "Gość": away, "Engine": engine, "Typ": typ, 
         "Kurs_Rynek": kurs_rynek if kurs_rynek not in ["", "-", "nan"] else "",
-        "Szansa": szansa, "Kurs_Szac": kurs_szac, "Argumentacja": arg
+        "Szansa": szansa, "Kurs_Szac": kurs_szac, "Argumentacja": arg,
+        "Przedzial_Kursowy": przedzial
     })
 
 print("Uruchamiam Modele Predykcyjne...")
@@ -677,7 +693,7 @@ for idx, row in fixtures_clean.iterrows():
         max_h = h_dom_c['Corners_H'].max()
         max_a = a_wyj_c['Corners_A'].max()
 
-        c_blocks_code, c_probs, c_odds, arg_c = [], [], [], []
+        c_blocks_code, c_probs, c_odds, arg_c = [], [], []
 
         for line in [8.5, 9.5, 10.5, 11.5, 12.5, 13.5, 14.5]:
             if line > max_match - 2:
@@ -848,8 +864,8 @@ creds = Credentials.from_service_account_file("credentials.json", scopes=scope) 
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
-cols_all_pred = ["Match_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja"]
-cols_historia = ["Match_ID", "Zagrane", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja", "Status", "Profit", "Yield_Wplyw"]
+cols_all_pred = ["Match_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy"]
+cols_historia = ["Match_ID", "Zagrane", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Status", "Profit", "Yield_Wplyw"]
 
 df_all_predictions = pd.DataFrame(all_generated_predictions, columns=cols_all_pred)
 
@@ -885,6 +901,7 @@ if not df_all_predictions.empty:
             map_kurs = nowe_typy_df.set_index('Unikalny_Klucz')['Kurs_Szac'].to_dict()
             map_arg = nowe_typy_df.set_index('Unikalny_Klucz')['Argumentacja'].to_dict()
             map_kr = nowe_typy_df.set_index('Unikalny_Klucz')['Kurs_Rynek'].to_dict()
+            map_przedzial = nowe_typy_df.set_index('Unikalny_Klucz')['Przedzial_Kursowy'].to_dict()
             
             for idx in df_historia[w_oczek_mask].index:
                 klucz = df_historia.at[idx, 'Unikalny_Klucz']
@@ -892,6 +909,7 @@ if not df_all_predictions.empty:
                     df_historia.at[idx, 'Szansa'] = str(map_szansa[klucz])
                     df_historia.at[idx, 'Kurs_Szac'] = str(map_kurs[klucz])
                     df_historia.at[idx, 'Argumentacja'] = str(map_arg[klucz])
+                    df_historia.at[idx, 'Przedzial_Kursowy'] = str(map_przedzial.get(klucz, ""))
                     kr_val = map_kr[klucz]
                     if pd.notna(kr_val) and str(kr_val).strip() not in ["", "-"]:
                         df_historia.at[idx, 'Kurs_Rynek'] = str(kr_val)
@@ -1019,8 +1037,8 @@ try:
     spreadsheet.worksheet("Fixtures").resize(rows=5000, cols=25)
     spreadsheet.worksheet("Results").resize(rows=10000, cols=35) 
     spreadsheet.worksheet("H2H_Mecze").resize(rows=5000, cols=15)
-    spreadsheet.worksheet("Historia_Typow").resize(rows=10000, cols=20)
-    spreadsheet.worksheet("All_Predictions").resize(rows=5000, cols=20)
+    spreadsheet.worksheet("Historia_Typow").resize(rows=10000, cols=25) # Zwiększono na wszelki wypadek szerokość
+    spreadsheet.worksheet("All_Predictions").resize(rows=5000, cols=25)
 except: pass
 
 print("Wysyłam Czysty Terminarz do Google Sheets...")
