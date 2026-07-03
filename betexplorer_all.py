@@ -154,7 +154,7 @@ def prepare_for_gsheets(df):
             if str_val in ["<NA>", "NaN", "None", "", "inf", "-inf", "-"]:
                 new_row.append("")
             else:
-                if any(k in col_name for k in ["Odd", "Avg", "Value", "PPG", "Kurs", "Szansa", "Profit", "Marża", "Yield"]):
+                if any(k in col_name for k in ["Odd", "Avg", "Value", "PPG", "Kurs", "Szansa", "Profit", "Marża", "Yield", "Consensus"]):
                     clean_val = str_val.replace("%", "").replace(",", ".").strip()
                     new_row.append(clean_val)
                 else:
@@ -496,7 +496,7 @@ def add_pred(match_id, termin, date, time, league, home, away, engine, typ, kurs
     all_generated_predictions.append({
         "Match_ID": match_id, "Termin": termin, "Data": date, "Godzina": time, "Liga": league, 
         "Gospodarz": home, "Gość": away, "Engine": engine, "Typ": typ, 
-        "Kurs_Rynek": kurs_rynek if kurs_rynek not in ["", "-", "nan"] else "",
+        "Kurs_Rynek": str(kurs_rynek) if pd.notna(kurs_rynek) and str(kurs_rynek).strip() not in ["", "-", "nan"] else "",
         "Szansa": szansa, "Kurs_Szac": kurs_szac, "Argumentacja": arg,
         "Przedzial_Kursowy": przedzial
     })
@@ -864,10 +864,19 @@ creds = Credentials.from_service_account_file("credentials.json", scopes=scope) 
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
-cols_all_pred = ["Match_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy"]
-cols_historia = ["Match_ID", "Zagrane", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Status", "Profit", "Yield_Wplyw"]
+cols_all_pred = ["Match_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score"]
+cols_historia = ["Match_ID", "Zagrane", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 
-df_all_predictions = pd.DataFrame(all_generated_predictions, columns=cols_all_pred)
+df_all_predictions = pd.DataFrame(all_generated_predictions)
+
+# --- WYLICZANIE SILNIKA KONSENSUSU ---
+if not df_all_predictions.empty:
+    df_all_predictions['Kurs_Rynek'] = df_all_predictions['Kurs_Rynek'].astype(str)
+    consensus_counts = df_all_predictions.groupby('Match_ID').size().to_dict()
+    df_all_predictions['Consensus_Score'] = df_all_predictions['Match_ID'].map(consensus_counts)
+    df_all_predictions = df_all_predictions[cols_all_pred]
+else:
+    df_all_predictions = pd.DataFrame(columns=cols_all_pred)
 
 try:
     ws_historia = spreadsheet.worksheet("Historia_Typow")
@@ -904,6 +913,7 @@ if not df_all_predictions.empty:
             map_arg = nowe_typy_df.set_index('Unikalny_Klucz')['Argumentacja'].to_dict()
             map_kr = nowe_typy_df.set_index('Unikalny_Klucz')['Kurs_Rynek'].to_dict()
             map_przedzial = nowe_typy_df.set_index('Unikalny_Klucz')['Przedzial_Kursowy'].to_dict()
+            map_consensus = nowe_typy_df.set_index('Unikalny_Klucz')['Consensus_Score'].to_dict()
             
             for idx in df_historia[w_oczek_mask].index:
                 klucz = df_historia.at[idx, 'Unikalny_Klucz']
@@ -912,6 +922,7 @@ if not df_all_predictions.empty:
                     df_historia.at[idx, 'Kurs_Szac'] = str(map_kurs[klucz])
                     df_historia.at[idx, 'Argumentacja'] = str(map_arg[klucz])
                     df_historia.at[idx, 'Przedzial_Kursowy'] = str(map_przedzial.get(klucz, ""))
+                    df_historia.at[idx, 'Consensus_Score'] = str(map_consensus.get(klucz, ""))
                     kr_val = map_kr.get(klucz, "")
                     if pd.notna(kr_val) and str(kr_val).strip() not in ["", "-"]:
                         df_historia.at[idx, 'Kurs_Rynek'] = str(kr_val)
@@ -1132,5 +1143,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Wersja Master V2 (Złota) z poprawnym formatowaniem i H2H gotowa.")
+print("Wersja z Silnikiem Konsensusu gotowa.")
 print("=" * 60)
