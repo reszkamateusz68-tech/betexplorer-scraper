@@ -479,16 +479,16 @@ all_generated_predictions = []
 
 def add_pred(match_id, termin, date, time, league, home, away, engine, typ, kurs_rynek, szansa, kurs_szac, arg):
     try:
-        kr_str = str(kurs_rynek).replace(',', '.').strip()
-        if kr_str in ["", "-", "nan", "None"]:
+        ks_str = str(kurs_szac).replace(',', '.').strip()
+        if ks_str in ["", "-", "nan", "None"]:
             przedzial = "Brak kursu"
         else:
-            kr = float(kr_str)
-            if kr < 1.10: przedzial = "do 1.09"
-            elif kr < 1.20: przedzial = "1.10 - 1.19"
-            elif kr < 1.30: przedzial = "1.20 - 1.29"
-            elif kr < 1.40: przedzial = "1.30 - 1.39"
-            elif kr < 1.50: przedzial = "1.40 - 1.49"
+            ks = float(ks_str)
+            if ks < 1.10: przedzial = "do 1.09"
+            elif ks < 1.20: przedzial = "1.10 - 1.19"
+            elif ks < 1.30: przedzial = "1.20 - 1.29"
+            elif ks < 1.40: przedzial = "1.30 - 1.39"
+            elif ks < 1.50: przedzial = "1.40 - 1.49"
             else: przedzial = "1.50+"
     except:
         przedzial = "Brak kursu"
@@ -910,7 +910,7 @@ if not df_all_predictions.empty:
                     df_historia.at[idx, 'Kurs_Szac'] = str(map_kurs[klucz])
                     df_historia.at[idx, 'Argumentacja'] = str(map_arg[klucz])
                     df_historia.at[idx, 'Przedzial_Kursowy'] = str(map_przedzial.get(klucz, ""))
-                    kr_val = map_kr[klucz]
+                    kr_val = map_kr.get(klucz, "")
                     if pd.notna(kr_val) and str(kr_val).strip() not in ["", "-"]:
                         df_historia.at[idx, 'Kurs_Rynek'] = str(kr_val)
 
@@ -1037,8 +1037,8 @@ try:
     spreadsheet.worksheet("Fixtures").resize(rows=5000, cols=25)
     spreadsheet.worksheet("Results").resize(rows=10000, cols=35) 
     spreadsheet.worksheet("H2H_Mecze").resize(rows=5000, cols=15)
-    spreadsheet.worksheet("Historia_Typow").resize(rows=10000, cols=25) # Zwiększono na wszelki wypadek szerokość
-    spreadsheet.worksheet("All_Predictions").resize(rows=5000, cols=25)
+    spreadsheet.worksheet("Historia_Typow").resize(rows=10000, cols=20)
+    spreadsheet.worksheet("All_Predictions").resize(rows=5000, cols=20)
 except: pass
 
 print("Wysyłam Czysty Terminarz do Google Sheets...")
