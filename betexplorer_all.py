@@ -154,7 +154,7 @@ def prepare_for_gsheets(df):
             if str_val in ["<NA>", "NaN", "None", "", "inf", "-inf", "-"]:
                 new_row.append("")
             else:
-                if any(k in col_name for k in ["Odd", "Avg", "Value", "PPG", "Kurs", "Szansa", "Profit", "Marża", "Yield", "Stawka", "Wygrana", "Liczba"]):
+                if any(k in col_name for k in ["Odd", "Avg", "Value", "PPG", "Kurs", "Szansa", "Profit", "Marża", "Yield", "Stawka", "Wygrana", "Liczba", "Consensus"]):
                     clean_val = str_val.replace("%", "").replace(",", ".").strip()
                     new_row.append(clean_val)
                 else:
@@ -863,18 +863,34 @@ creds = Credentials.from_service_account_file("credentials.json", scopes=scope) 
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
-# OSTATECZNE I NIEZMIENNE DEFINICJE KOLUMN (OCHRONA PRZED UTRATĄ DANYCH)
+# ZABETONOWANE DEFINICJE KOLUMN - GWARANCJA STABILNOŚCI SCHEMATU
 cols_all_pred = ["Match_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score"]
 cols_historia = ["Match_ID", "Zagrane", "Kupon_ID", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 
 df_all_predictions = pd.DataFrame(all_generated_predictions)
 
-# --- WYLICZANIE SILNIKA KONSENSUSU ---
+# --- GLOBALNA REKALKULACJA PRZEDZIAŁÓW KURSOWYCH ---
+def global_recalc_przedzial(row):
+    try:
+        ks_str = str(row['Kurs_Szac']).replace(',', '.').strip()
+        if ks_str in ["", "-", "nan", "None"]: return "Brak kursu"
+        ks = float(ks_str)
+        if ks < 1.10: return "do 1.09"
+        elif ks < 1.20: return "1.10 - 1.19"
+        elif ks < 1.30: return "1.20 - 1.29"
+        elif ks < 1.40: return "1.30 - 1.39"
+        elif ks < 1.50: return "1.40 - 1.49"
+        else: return "1.50+"
+    except: return "Brak kursu"
+
+# --- WYLICZANIE SILNIKA KONSENSUSU I PRZEDZIAŁÓW DLA NOWYCH ---
 if not df_all_predictions.empty:
     df_all_predictions['Kurs_Rynek'] = df_all_predictions['Kurs_Rynek'].astype(str)
+    df_all_predictions['Przedzial_Kursowy'] = df_all_predictions.apply(global_recalc_przedzial, axis=1)
     consensus_counts = df_all_predictions.groupby('Match_ID').size().to_dict()
     df_all_predictions['Consensus_Score'] = df_all_predictions['Match_ID'].map(consensus_counts)
-    # Zabezpieczenie przed brakiem kolumn
+    
+    # Ochrona przed brakiem kolumn
     for col in cols_all_pred:
         if col not in df_all_predictions.columns:
             df_all_predictions[col] = ""
@@ -892,7 +908,7 @@ except gspread.exceptions.WorksheetNotFound:
     ws_historia = spreadsheet.worksheet("Historia_Typow")
     df_historia = pd.DataFrame(columns=cols_historia)
 
-# Twarde dobudowanie kolumn, jeśli zostały wcześniej usunięte w arkuszu
+# TWARDE DOBUDOWANIE KOLUMN, JEŚLI W GOOGLE SHEETS ZOSTAŁY USUNIĘTE
 for col in cols_historia:
     if col not in df_historia.columns: df_historia[col] = ""
 df_historia = df_historia[cols_historia]
@@ -905,7 +921,6 @@ if not df_all_predictions.empty:
     nowe_typy_df["Profit"] = ""
     nowe_typy_df["Yield_Wplyw"] = ""
     
-    # Ponowne upewnienie się, że nowe typy mają dokładnie ten sam schemat co historia
     for col in cols_historia:
         if col not in nowe_typy_df.columns:
             nowe_typy_df[col] = ""
@@ -1033,24 +1048,8 @@ if not df_historia.empty and not results_clean.empty:
                             df_historia.at[idx, "Yield_Wplyw"] = "-100.0"
                     except: pass
 
-# --- GLOBALNA REKALKULACJA PRZEDZIAŁÓW KURSOWYCH ---
-def global_recalc_przedzial(row):
-    try:
-        ks_str = str(row['Kurs_Szac']).replace(',', '.').strip()
-        if ks_str in ["", "-", "nan", "None"]: return "Brak kursu"
-        ks = float(ks_str)
-        if ks < 1.10: return "do 1.09"
-        elif ks < 1.20: return "1.10 - 1.19"
-        elif ks < 1.30: return "1.20 - 1.29"
-        elif ks < 1.40: return "1.30 - 1.39"
-        elif ks < 1.50: return "1.40 - 1.49"
-        else: return "1.50+"
-    except: return "Brak kursu"
-
 if not df_historia.empty:
     df_historia['Przedzial_Kursowy'] = df_historia.apply(global_recalc_przedzial, axis=1)
-if not df_all_predictions.empty:
-    df_all_predictions['Przedzial_Kursowy'] = df_all_predictions.apply(global_recalc_przedzial, axis=1)
 
 # --- 7b. SYSTEM ŚLEDZENIA AKO (PORTFEL REALNY) - PEŁNA KONTROLA ---
 cols_ako = ["Kupon_ID", "Data_Zawarcia", "Mecze_Skrot", "Liczba_Zdarzen", "Kurs_AKO", "Stawka", "Status_AKO", "Wygrana_Brutto", "Profit_Netto"]
@@ -1070,21 +1069,19 @@ df_ako = df_ako[cols_ako]
 
 user_stakes = {}
 if not df_ako.empty:
-    user_stakes = df_ako.set_index('Kupon_ID')['Stawka'].to_dict()
+    user_stakes = dict(zip(df_ako['Kupon_ID'], df_ako['Stawka']))
 
 if not df_historia.empty:
     mask_zagrane = df_historia['Zagrane'].astype(str).str.upper().isin(['TRUE', 'PRAWDA', '1', 'TAK'])
     mask_bez_id = df_historia['Kupon_ID'].astype(str).str.strip() == ""
     mask_do_zaktualizowania = mask_zagrane & mask_bez_id
     
-    # Generowanie automatycznego ID TYLKO dla tych, które Ty zaznaczyłeś bez wpisywania własnej nazwy.
-    # Własne nazwy (Pełna Kontrola) np. "MOJA_TASMA" zostają nienaruszone.
     if mask_do_zaktualizowania.any():
         nowy_id = f"AKO_{datetime.now().strftime('%y%m%d_%H%M')}"
         df_historia.loc[mask_do_zaktualizowania, 'Kupon_ID'] = nowy_id
 
     nowe_ako_list = []
-    grupy_ako = df_historia[df_historia['Kupon_ID'].str.strip() != ""].groupby('Kupon_ID')
+    grupy_ako = df_historia[df_historia['Kupon_ID'].astype(str).str.strip() != ""].groupby('Kupon_ID')
 
     for k_id, group in grupy_ako:
         data_zawarcia = group['Data'].min()
@@ -1094,7 +1091,7 @@ if not df_historia.empty:
         kurs_ako = 1.0
         for _, r in group.iterrows():
             kr = str(r['Kurs_Rynek']).replace(',', '.')
-            if kr in ["", "-", "nan"]: kr = str(r['Kurs_Szac']).replace(',', '.')
+            if kr in ["", "-", "nan", "None"]: kr = str(r['Kurs_Szac']).replace(',', '.')
             try: kurs_ako *= float(kr)
             except: pass
         kurs_ako = round(kurs_ako, 2)
@@ -1154,30 +1151,37 @@ try:
 except: pass
 
 print("Wysyłam Czysty Terminarz do Google Sheets...")
+time.sleep(1.5)
 spreadsheet.worksheet("Fixtures").clear()
 if not fixtures_clean.empty: spreadsheet.worksheet("Fixtures").update(prepare_for_gsheets(fixtures_clean))
 
 print("Wysyłam Historię ze statystykami do Google Sheets...")
+time.sleep(1.5)
 spreadsheet.worksheet("Results").clear()
 if not results_clean.empty: spreadsheet.worksheet("Results").update(prepare_for_gsheets(results_clean))
 
 print("Wysyłam Tabele Ligowe...")
+time.sleep(1.5)
 spreadsheet.worksheet("League_Tables").clear()
 if not league_tables.empty: spreadsheet.worksheet("League_Tables").update(prepare_for_gsheets(league_tables))
 
 print("Wysyłam Analizę H2H do Google Sheets...")
+time.sleep(1.5)
 spreadsheet.worksheet("H2H_Mecze").clear()
 if not df_h2h.empty: spreadsheet.worksheet("H2H_Mecze").update(prepare_for_gsheets(df_h2h))
 
 print("Wysyłam Logi Systemu Backtestingu (Historia_Typow)...")
+time.sleep(1.5)
 ws_historia.clear()
 if not df_historia.empty: ws_historia.update(prepare_for_gsheets(df_historia))
 
 print("Wysyłam Moduł Portfela AKO (Kupony_AKO)...")
+time.sleep(1.5)
 ws_ako.clear()
 if not df_ako.empty: ws_ako.update(prepare_for_gsheets(df_ako))
 
 print("Wysyłam Ujednoliconą Listę Wszystkich Predykcji (All_Predictions)...")
+time.sleep(1.5)
 spreadsheet.worksheet("All_Predictions").clear()
 if not df_all_predictions.empty: spreadsheet.worksheet("All_Predictions").update(prepare_for_gsheets(df_all_predictions))
 
@@ -1222,10 +1226,11 @@ summary_data.append(["==== RAPORT POBIERANIA Z LINKÓW ====", "", ""])
 summary_data.append(["System", "URL", "Status / Wynik"])
 summary_data.extend(scrape_report)
 
+time.sleep(1.5)
 spreadsheet.worksheet("Summary").clear()
 spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Wersja z Twardą Architekturą Kolumn wdrożona i gotowa.")
+print("Wersja z Twardą Architekturą Kolumn i API Timeoutami gotowa.")
 print("=" * 60)
