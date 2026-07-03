@@ -477,11 +477,27 @@ if not fixtures_clean.empty and not valid_matches.empty:
 all_generated_predictions = []
 
 def add_pred(match_id, termin, date, time, league, home, away, engine, typ, kurs_rynek, szansa, kurs_szac, arg):
+    try:
+        ks_str = str(kurs_szac).replace(',', '.').strip()
+        if ks_str in ["", "-", "nan", "None"]:
+            przedzial = "Brak kursu"
+        else:
+            ks = float(ks_str)
+            if ks < 1.10: przedzial = "do 1.09"
+            elif ks < 1.20: przedzial = "1.10 - 1.19"
+            elif ks < 1.30: przedzial = "1.20 - 1.29"
+            elif ks < 1.40: przedzial = "1.30 - 1.39"
+            elif ks < 1.50: przedzial = "1.40 - 1.49"
+            else: przedzial = "1.50+"
+    except:
+        przedzial = "Brak kursu"
+
     all_generated_predictions.append({
         "Match_ID": match_id, "Termin": termin, "Data": date, "Godzina": time, "Liga": league, 
         "Gospodarz": home, "Gość": away, "Engine": engine, "Typ": typ, 
-        "Kurs_Rynek": kurs_rynek if kurs_rynek not in ["", "-", "nan"] else "",
-        "Szansa": szansa, "Kurs_Szac": kurs_szac, "Argumentacja": arg
+        "Kurs_Rynek": str(kurs_rynek) if pd.notna(kurs_rynek) and str(kurs_rynek).strip() not in ["", "-", "nan"] else "",
+        "Szansa": szansa, "Kurs_Szac": kurs_szac, "Argumentacja": arg,
+        "Przedzial_Kursowy": przedzial
     })
 
 print("Uruchamiam Modele Predykcyjne...")
