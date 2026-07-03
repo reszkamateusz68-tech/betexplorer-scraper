@@ -154,7 +154,7 @@ def prepare_for_gsheets(df):
             if str_val in ["<NA>", "NaN", "None", "", "inf", "-inf", "-"]:
                 new_row.append("")
             else:
-                if any(k in col_name for k in ["Odd", "Avg", "Value", "PPG", "Kurs", "Szansa", "Profit", "Marża", "Yield", "Consensus"]):
+                if any(k in col_name for k in ["Odd", "Avg", "Value", "PPG", "Kurs", "Szansa", "Profit", "Marża", "Yield", "Stawka", "Wygrana", "Liczba"]):
                     clean_val = str_val.replace("%", "").replace(",", ".").strip()
                     new_row.append(clean_val)
                 else:
@@ -471,34 +471,17 @@ if not fixtures_clean.empty and not valid_matches.empty:
     if h2h_list:
         df_h2h = pd.DataFrame(h2h_list, columns=h2h_cols)
 
-
 # ==========================================================
 # 6. SILNIKI PREDYKCYJNE (Z centralizowanym Generatorem Tekstu)
 # ==========================================================
 all_generated_predictions = []
 
 def add_pred(match_id, termin, date, time, league, home, away, engine, typ, kurs_rynek, szansa, kurs_szac, arg):
-    try:
-        ks_str = str(kurs_szac).replace(',', '.').strip()
-        if ks_str in ["", "-", "nan", "None"]:
-            przedzial = "Brak kursu"
-        else:
-            ks = float(ks_str)
-            if ks < 1.10: przedzial = "do 1.09"
-            elif ks < 1.20: przedzial = "1.10 - 1.19"
-            elif ks < 1.30: przedzial = "1.20 - 1.29"
-            elif ks < 1.40: przedzial = "1.30 - 1.39"
-            elif ks < 1.50: przedzial = "1.40 - 1.49"
-            else: przedzial = "1.50+"
-    except:
-        przedzial = "Brak kursu"
-
     all_generated_predictions.append({
         "Match_ID": match_id, "Termin": termin, "Data": date, "Godzina": time, "Liga": league, 
         "Gospodarz": home, "Gość": away, "Engine": engine, "Typ": typ, 
-        "Kurs_Rynek": str(kurs_rynek) if pd.notna(kurs_rynek) and str(kurs_rynek).strip() not in ["", "-", "nan"] else "",
-        "Szansa": szansa, "Kurs_Szac": kurs_szac, "Argumentacja": arg,
-        "Przedzial_Kursowy": przedzial
+        "Kurs_Rynek": kurs_rynek if kurs_rynek not in ["", "-", "nan"] else "",
+        "Szansa": szansa, "Kurs_Szac": kurs_szac, "Argumentacja": arg
     })
 
 print("Uruchamiam Modele Predykcyjne...")
@@ -865,7 +848,7 @@ client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
 cols_all_pred = ["Match_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score"]
-cols_historia = ["Match_ID", "Zagrane", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
+cols_historia = ["Match_ID", "Zagrane", "Kupon_ID", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 
 df_all_predictions = pd.DataFrame(all_generated_predictions)
 
@@ -894,7 +877,8 @@ df_historia = df_historia[cols_historia]
 
 if not df_all_predictions.empty:
     nowe_typy_df = df_all_predictions.copy()
-    nowe_typy_df.insert(1, "Zagrane", "") 
+    nowe_typy_df.insert(1, "Zagrane", "")
+    nowe_typy_df.insert(2, "Kupon_ID", "")
     nowe_typy_df["Status"] = "W OCZEKIWANIU"
     nowe_typy_df["Profit"] = ""
     nowe_typy_df["Yield_Wplyw"] = ""
@@ -1041,6 +1025,74 @@ if not df_historia.empty:
 if not df_all_predictions.empty:
     df_all_predictions['Przedzial_Kursowy'] = df_all_predictions.apply(global_recalc_przedzial, axis=1)
 
+# --- 7b. SYSTEM ŚLEDZENIA AKO (PORTFEL REALNY) ---
+cols_ako = ["Kupon_ID", "Data_Zawarcia", "Mecze_Skrot", "Liczba_Zdarzen", "Kurs_AKO", "Stawka", "Status_AKO", "Wygrana_Brutto", "Profit_Netto"]
+try:
+    ws_ako = spreadsheet.worksheet("Kupony_AKO")
+    ako_dane = ws_ako.get_all_values()
+    if len(ako_dane) > 0: df_ako = pd.DataFrame(ako_dane[1:], columns=ako_dane[0])
+    else: df_ako = pd.DataFrame(columns=cols_ako)
+except gspread.exceptions.WorksheetNotFound:
+    spreadsheet.add_worksheet(title="Kupony_AKO", rows=1000, cols=15)
+    ws_ako = spreadsheet.worksheet("Kupony_AKO")
+    df_ako = pd.DataFrame(columns=cols_ako)
+
+for col in cols_ako:
+    if col not in df_ako.columns: df_ako[col] = ""
+df_ako = df_ako[cols_ako]
+
+user_stakes = {}
+if not df_ako.empty:
+    user_stakes = df_ako.set_index('Kupon_ID')['Stawka'].to_dict()
+
+if not df_historia.empty:
+    mask_zagrane = df_historia['Zagrane'].astype(str).str.upper().isin(['TRUE', 'PRAWDA', '1', 'TAK'])
+    mask_bez_id = df_historia['Kupon_ID'].astype(str).str.strip() == ""
+    mask_do_zaktualizowania = mask_zagrane & mask_bez_id
+    
+    if mask_do_zaktualizowania.any():
+        nowy_id = f"AKO_{datetime.now().strftime('%y%m%d_%H%M')}"
+        df_historia.loc[mask_do_zaktualizowania, 'Kupon_ID'] = nowy_id
+
+    nowe_ako_list = []
+    grupy_ako = df_historia[df_historia['Kupon_ID'].str.strip() != ""].groupby('Kupon_ID')
+
+    for k_id, group in grupy_ako:
+        data_zawarcia = group['Data'].min()
+        liczba_zdarzen = len(group)
+        mecze_skrot = " | ".join(group['Gospodarz'].str[:3] + "-" + group['Gość'].str[:3])
+        
+        kurs_ako = 1.0
+        for _, r in group.iterrows():
+            kr = str(r['Kurs_Rynek']).replace(',', '.')
+            if kr in ["", "-", "nan"]: kr = str(r['Kurs_Szac']).replace(',', '.')
+            try: kurs_ako *= float(kr)
+            except: pass
+        kurs_ako = round(kurs_ako, 2)
+        
+        statusy = group['Status'].tolist()
+        if "PRZEGRANA" in statusy: status_ako = "PRZEGRANA"
+        elif "W OCZEKIWANIU" in statusy: status_ako = "W OCZEKIWANIU"
+        elif all(s == "WYGRANA" for s in statusy): status_ako = "WYGRANA"
+        else: status_ako = "ZWRÓCONY"
+        
+        stawka_str = str(user_stakes.get(k_id, "100")).replace(',', '.')
+        if stawka_str.strip() == "": stawka_str = "100"
+        try: stawka = float(stawka_str)
+        except: stawka = 100.0
+        
+        wygrana_brutto = round(kurs_ako * stawka, 2) if status_ako == "WYGRANA" else 0.0
+        
+        if status_ako == "WYGRANA": profit = round(wygrana_brutto - stawka, 2)
+        elif status_ako == "PRZEGRANA": profit = -stawka
+        else: profit = 0.0
+        
+        nowe_ako_list.append([k_id, data_zawarcia, mecze_skrot, liczba_zdarzen, kurs_ako, stawka, status_ako, wygrana_brutto, profit])
+
+    df_ako = pd.DataFrame(nowe_ako_list, columns=cols_ako)
+    df_ako = df_ako.sort_values(by="Data_Zawarcia", ascending=False)
+
+
 if not df_historia.empty:
     df_historia['Data_Sort'] = pd.to_datetime(df_historia['Data'].astype(str) + ' ' + df_historia['Godzina'].astype(str).replace('', '00:00').replace('-', '00:00'), errors='coerce')
     mask_oczek = df_historia['Status'] == 'W OCZEKIWANIU'
@@ -1055,7 +1107,7 @@ if not df_all_predictions.empty:
 # ==========================================
 # 8. WYSYŁKA GOOGLE SHEETS
 # ==========================================
-all_sheets = ["Summary", "Fixtures", "Results", "League_Tables", "H2H_Mecze", "Historia_Typow", "All_Predictions"]
+all_sheets = ["Summary", "Fixtures", "Results", "League_Tables", "H2H_Mecze", "Historia_Typow", "All_Predictions", "Kupony_AKO"]
 
 for old_sheet in ["Predictions_1X", "Predictions_Builder", "Predictions_Multigol", "Predictions_Corners", "Predictions_Shots", "Predictions_ColdShower", "Predictions_HiddenForm", "Predictions_CornerAnomalies", "Predictions_GoalAnomalies"]:
     try: spreadsheet.del_worksheet(spreadsheet.worksheet(old_sheet))
@@ -1092,6 +1144,10 @@ if not df_h2h.empty: spreadsheet.worksheet("H2H_Mecze").update(prepare_for_gshee
 print("Wysyłam Logi Systemu Backtestingu (Historia_Typow)...")
 ws_historia.clear()
 if not df_historia.empty: ws_historia.update(prepare_for_gsheets(df_historia))
+
+print("Wysyłam Moduł Portfela AKO (Kupony_AKO)...")
+ws_ako.clear()
+if not df_ako.empty: ws_ako.update(prepare_for_gsheets(df_ako))
 
 print("Wysyłam Ujednoliconą Listę Wszystkich Predykcji (All_Predictions)...")
 spreadsheet.worksheet("All_Predictions").clear()
@@ -1143,5 +1199,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Wersja z Silnikiem Konsensusu gotowa.")
+print("Wersja z Modułem Portfela AKO wdrożona i gotowa.")
 print("=" * 60)
