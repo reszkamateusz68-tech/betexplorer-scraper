@@ -893,6 +893,8 @@ if not df_all_predictions.empty:
     
     if not df_historia.empty:
         df_historia['Unikalny_Klucz'] = df_historia['Match_ID'] + df_historia['Engine'] + df_historia['Typ']
+        df_historia = df_historia.drop_duplicates(subset=['Unikalny_Klucz'], keep='last')
+        
         nowe_typy_df['Unikalny_Klucz'] = nowe_typy_df['Match_ID'] + nowe_typy_df['Engine'] + nowe_typy_df['Typ']
         
         w_oczek_mask = df_historia['Status'] == "W OCZEKIWANIU"
@@ -1008,6 +1010,25 @@ if not df_historia.empty and not results_clean.empty:
                             df_historia.at[idx, "Profit"] = "-1.0"
                             df_historia.at[idx, "Yield_Wplyw"] = "-100.0"
                     except: pass
+
+# --- GLOBALNA REKALKULACJA PRZEDZIAŁÓW KURSOWYCH ---
+def global_recalc_przedzial(row):
+    try:
+        ks_str = str(row['Kurs_Szac']).replace(',', '.').strip()
+        if ks_str in ["", "-", "nan", "None"]: return "Brak kursu"
+        ks = float(ks_str)
+        if ks < 1.10: return "do 1.09"
+        elif ks < 1.20: return "1.10 - 1.19"
+        elif ks < 1.30: return "1.20 - 1.29"
+        elif ks < 1.40: return "1.30 - 1.39"
+        elif ks < 1.50: return "1.40 - 1.49"
+        else: return "1.50+"
+    except: return "Brak kursu"
+
+if not df_historia.empty:
+    df_historia['Przedzial_Kursowy'] = df_historia.apply(global_recalc_przedzial, axis=1)
+if not df_all_predictions.empty:
+    df_all_predictions['Przedzial_Kursowy'] = df_all_predictions.apply(global_recalc_przedzial, axis=1)
 
 if not df_historia.empty:
     df_historia['Data_Sort'] = pd.to_datetime(df_historia['Data'].astype(str) + ' ' + df_historia['Godzina'].astype(str).replace('', '00:00').replace('-', '00:00'), errors='coerce')
