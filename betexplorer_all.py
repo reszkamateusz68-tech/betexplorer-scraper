@@ -55,7 +55,6 @@ def split_datetime(value):
     if pd.isna(value): return "", ""
     value = str(value).strip()
     
-    # 1. Obsługa słów kluczowych
     if value.lower().startswith("today"): 
         parts = value.split()
         return today.strftime('%Y-%m-%d'), parts[1] if len(parts) > 1 else ""
@@ -66,7 +65,6 @@ def split_datetime(value):
         parts = value.split()
         return (today - timedelta(days=1)).strftime('%Y-%m-%d'), parts[1] if len(parts) > 1 else ""
         
-    # 2. Obsługa formatów z godziną np. "20.03.2027 16:00"
     parts = value.split()
     if len(parts) == 2:
         date_part, time_part = parts[0], parts[1]
@@ -79,7 +77,6 @@ def split_datetime(value):
                     return datetime.strptime(date_part, "%d.%m.%Y").strftime('%Y-%m-%d'), time_part
             except: pass
             
-    # 3. Obsługa samych dat (bez godziny)
     else:
         if len(value.split('.')) >= 3:
             try:
@@ -157,7 +154,6 @@ def prepare_for_gsheets(df):
             if str_val in ["<NA>", "NaN", "None", "", "inf", "-inf", "-"]:
                 new_row.append("")
             else:
-                # Wymuszenie czystych liczb (z kropką) dla Looker Studio
                 if any(k in col_name for k in ["Odd", "Avg", "Value", "PPG", "Kurs", "Szansa", "Profit", "Marża", "Yield"]):
                     clean_val = str_val.replace("%", "").replace(",", ".").strip()
                     new_row.append(clean_val)
@@ -457,22 +453,23 @@ if not league_tables.empty:
 
 # --- GENERATOR H2H DLA ZAKŁADKI "H2H_Mecze" ---
 h2h_list = []
-df_h2h = pd.DataFrame(columns=["Nadchodzący Mecz", "Data Meczu", "Liga", "Data H2H", "Gospodarz H2H", "Gość H2H", "Wynik H2H", "Gole HT", "Rożne H2H"])
+h2h_cols = ["Match_ID", "Nadchodzący Mecz", "Data Meczu", "Liga", "Data H2H", "Gospodarz H2H", "Gość H2H", "Wynik H2H", "Gole HT", "Rożne H2H"]
+df_h2h = pd.DataFrame(columns=h2h_cols)
 
 if not fixtures_clean.empty and not valid_matches.empty:
     upcoming = fixtures_clean[fixtures_clean['Status_Kursów'] == 'Są Kursy']
     for _, f in upcoming.iterrows():
-        f_home, f_away, f_date, f_league = f['Home'], f['Away'], f['Date'], f['League']
+        f_match_id, f_home, f_away, f_date, f_league = f['Match_ID'], f['Home'], f['Away'], f['Date'], f['League']
         base_lg = get_base_league(f_league)
         h2h_m = valid_matches[(valid_matches['Base_League'] == base_lg) & (((valid_matches['Home'] == f_home) & (valid_matches['Away'] == f_away)) | ((valid_matches['Home'] == f_away) & (valid_matches['Away'] == f_home)))].head(5)
         for _, h in h2h_m.iterrows():
             h2h_list.append([
-                f"{f_home} - {f_away}", f_date, f_league,
+                f_match_id, f"{f_home} - {f_away}", f_date, f_league,
                 h['Date'], h['Home'], h['Away'], f"{int(h['FTHG'])}:{int(h['FTAG'])}",
                 str(h['HT_Total']).replace('.0', ''), str(h['Total_Corners']).replace('.0', '')
             ])
     if h2h_list:
-        df_h2h = pd.DataFrame(h2h_list, columns=["Nadchodzący Mecz", "Data Meczu", "Liga", "Data H2H", "Gospodarz H2H", "Gość H2H", "Wynik H2H", "Gole HT", "Rożne H2H"])
+        df_h2h = pd.DataFrame(h2h_list, columns=h2h_cols)
 
 
 # ==========================================================
@@ -580,7 +577,7 @@ for idx, row in fixtures_clean.iterrows():
             add_pred(match_id, d_termin, d_date, d_time, league, home, away, "1X Pro", typ_kod, str(buk_odd_1x), round(final_prob*100, 1), round(fair_odd, 2), arg)
 
     # ----------------------------------------------------
-    # 6b. BETBUILDER PRO (Taśmy)
+    # 6b. BETBUILDER PRO
     # ----------------------------------------------------
     PROG_OVER = 0.88
     PROG_UNDER = 0.88
@@ -635,7 +632,7 @@ for idx, row in fixtures_clean.iterrows():
             add_pred(match_id, d_termin, d_date, d_time, league, home, away, "BetBuilder Pro", "+".join(builder_blocks_code), "", final_builder_safety, round(estimated_bb_odd, 2), uzasadnienie)
 
     # ----------------------------------------------------
-    # 6c. MULTIGOL (Regresja z Dokładnymi Wynikami)
+    # 6c. MULTIGOL
     # ----------------------------------------------------
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
         h_last_goals = get_last_match_goals(fixture_base, home)
@@ -676,7 +673,6 @@ for idx, row in fixtures_clean.iterrows():
     if len(h_tot_all_c) >= 8 and len(a_tot_all_c) >= 8 and len(h_dom_c) >= 3 and len(a_wyj_c) >= 3:
         h_tot_all_c['Team_C_For'] = np.where(h_tot_all_c['Home'] == home, h_tot_all_c['Corners_H'], h_tot_all_c['Corners_A'])
         a_tot_all_c['Team_C_For'] = np.where(a_tot_all_c['Home'] == away, a_tot_all_c['Corners_H'], a_tot_all_c['Corners_A'])
-        
         max_match = max(h_dom_c['Total_Corners'].max(), a_wyj_c['Total_Corners'].max())
         max_h = h_dom_c['Corners_H'].max()
         max_a = a_wyj_c['Corners_A'].max()
@@ -853,7 +849,7 @@ client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
 cols_all_pred = ["Match_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja"]
-cols_historia = ["Match_ID", "Zagrane", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja", "Status", "Profit", "Yield_Wplyw"]
+cols_historia = ["Match_ID", "Zagrane", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja", "Status", "Profit", "Yield_Wplyw"]
 
 df_all_predictions = pd.DataFrame(all_generated_predictions, columns=cols_all_pred)
 
@@ -867,7 +863,6 @@ except gspread.exceptions.WorksheetNotFound:
     ws_historia = spreadsheet.worksheet("Historia_Typow")
     df_historia = pd.DataFrame(columns=cols_historia)
 
-# Wymuszenie czystej struktury nagłówków
 for col in cols_historia:
     if col not in df_historia.columns: df_historia[col] = ""
 df_historia = df_historia[cols_historia]
@@ -996,7 +991,6 @@ if not df_historia.empty and not results_clean.empty:
                             df_historia.at[idx, "Yield_Wplyw"] = "-100.0"
                     except: pass
 
-# --- INTELIGENTNE SORTOWANIE ---
 if not df_historia.empty:
     df_historia['Data_Sort'] = pd.to_datetime(df_historia['Data'].astype(str) + ' ' + df_historia['Godzina'].astype(str).replace('', '00:00').replace('-', '00:00'), errors='coerce')
     mask_oczek = df_historia['Status'] == 'W OCZEKIWANIU'
@@ -1099,5 +1093,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Wersja Master V2 z poprawnym formatowaniem gotowa.")
+print("Wersja Master V2 (Złota) z poprawnym formatowaniem i H2H gotowa.")
 print("=" * 60)
