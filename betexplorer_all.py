@@ -863,6 +863,7 @@ creds = Credentials.from_service_account_file("credentials.json", scopes=scope) 
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
+# OSTATECZNE I NIEZMIENNE DEFINICJE KOLUMN (OCHRONA PRZED UTRATĄ DANYCH)
 cols_all_pred = ["Match_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score"]
 cols_historia = ["Match_ID", "Zagrane", "Kupon_ID", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 
@@ -873,6 +874,10 @@ if not df_all_predictions.empty:
     df_all_predictions['Kurs_Rynek'] = df_all_predictions['Kurs_Rynek'].astype(str)
     consensus_counts = df_all_predictions.groupby('Match_ID').size().to_dict()
     df_all_predictions['Consensus_Score'] = df_all_predictions['Match_ID'].map(consensus_counts)
+    # Zabezpieczenie przed brakiem kolumn
+    for col in cols_all_pred:
+        if col not in df_all_predictions.columns:
+            df_all_predictions[col] = ""
     df_all_predictions = df_all_predictions[cols_all_pred]
 else:
     df_all_predictions = pd.DataFrame(columns=cols_all_pred)
@@ -883,21 +888,27 @@ try:
     if len(historia_dane) > 0: df_historia = pd.DataFrame(historia_dane[1:], columns=historia_dane[0])
     else: df_historia = pd.DataFrame(columns=cols_historia)
 except gspread.exceptions.WorksheetNotFound:
-    spreadsheet.add_worksheet(title="Historia_Typow", rows=10000, cols=20)
+    spreadsheet.add_worksheet(title="Historia_Typow", rows=10000, cols=len(cols_historia))
     ws_historia = spreadsheet.worksheet("Historia_Typow")
     df_historia = pd.DataFrame(columns=cols_historia)
 
+# Twarde dobudowanie kolumn, jeśli zostały wcześniej usunięte w arkuszu
 for col in cols_historia:
     if col not in df_historia.columns: df_historia[col] = ""
 df_historia = df_historia[cols_historia]
 
 if not df_all_predictions.empty:
     nowe_typy_df = df_all_predictions.copy()
-    nowe_typy_df.insert(1, "Zagrane", "")
-    nowe_typy_df.insert(2, "Kupon_ID", "")
+    nowe_typy_df["Zagrane"] = ""
+    nowe_typy_df["Kupon_ID"] = ""
     nowe_typy_df["Status"] = "W OCZEKIWANIU"
     nowe_typy_df["Profit"] = ""
     nowe_typy_df["Yield_Wplyw"] = ""
+    
+    # Ponowne upewnienie się, że nowe typy mają dokładnie ten sam schemat co historia
+    for col in cols_historia:
+        if col not in nowe_typy_df.columns:
+            nowe_typy_df[col] = ""
     nowe_typy_df = nowe_typy_df[cols_historia]
     
     if not df_historia.empty:
@@ -1041,7 +1052,7 @@ if not df_historia.empty:
 if not df_all_predictions.empty:
     df_all_predictions['Przedzial_Kursowy'] = df_all_predictions.apply(global_recalc_przedzial, axis=1)
 
-# --- 7b. SYSTEM ŚLEDZENIA AKO (PORTFEL REALNY) ---
+# --- 7b. SYSTEM ŚLEDZENIA AKO (PORTFEL REALNY) - PEŁNA KONTROLA ---
 cols_ako = ["Kupon_ID", "Data_Zawarcia", "Mecze_Skrot", "Liczba_Zdarzen", "Kurs_AKO", "Stawka", "Status_AKO", "Wygrana_Brutto", "Profit_Netto"]
 try:
     ws_ako = spreadsheet.worksheet("Kupony_AKO")
@@ -1066,6 +1077,8 @@ if not df_historia.empty:
     mask_bez_id = df_historia['Kupon_ID'].astype(str).str.strip() == ""
     mask_do_zaktualizowania = mask_zagrane & mask_bez_id
     
+    # Generowanie automatycznego ID TYLKO dla tych, które Ty zaznaczyłeś bez wpisywania własnej nazwy.
+    # Własne nazwy (Pełna Kontrola) np. "MOJA_TASMA" zostają nienaruszone.
     if mask_do_zaktualizowania.any():
         nowy_id = f"AKO_{datetime.now().strftime('%y%m%d_%H%M')}"
         df_historia.loc[mask_do_zaktualizowania, 'Kupon_ID'] = nowy_id
@@ -1108,7 +1121,6 @@ if not df_historia.empty:
     df_ako = pd.DataFrame(nowe_ako_list, columns=cols_ako)
     df_ako = df_ako.sort_values(by="Data_Zawarcia", ascending=False)
 
-
 if not df_historia.empty:
     df_historia['Data_Sort'] = pd.to_datetime(df_historia['Data'].astype(str) + ' ' + df_historia['Godzina'].astype(str).replace('', '00:00').replace('-', '00:00'), errors='coerce')
     mask_oczek = df_historia['Status'] == 'W OCZEKIWANIU'
@@ -1137,7 +1149,7 @@ try:
     spreadsheet.worksheet("Fixtures").resize(rows=5000, cols=25)
     spreadsheet.worksheet("Results").resize(rows=10000, cols=35) 
     spreadsheet.worksheet("H2H_Mecze").resize(rows=5000, cols=15)
-    spreadsheet.worksheet("Historia_Typow").resize(rows=10000, cols=20)
+    spreadsheet.worksheet("Historia_Typow").resize(rows=10000, cols=25)
     spreadsheet.worksheet("All_Predictions").resize(rows=5000, cols=20)
 except: pass
 
@@ -1215,5 +1227,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Wersja z Modułem Portfela AKO wdrożona i gotowa.")
+print("Wersja z Twardą Architekturą Kolumn wdrożona i gotowa.")
 print("=" * 60)
