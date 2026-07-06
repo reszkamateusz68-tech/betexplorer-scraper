@@ -477,27 +477,11 @@ if not fixtures_clean.empty and not valid_matches.empty:
 all_generated_predictions = []
 
 def add_pred(match_id, termin, date, time, league, home, away, engine, typ, kurs_rynek, szansa, kurs_szac, arg):
-    try:
-        ks_str = str(kurs_szac).replace(',', '.').strip()
-        if ks_str in ["", "-", "nan", "None"]:
-            przedzial = "Brak kursu"
-        else:
-            ks = float(ks_str)
-            if ks < 1.10: przedzial = "do 1.09"
-            elif ks < 1.20: przedzial = "1.10 - 1.19"
-            elif ks < 1.30: przedzial = "1.20 - 1.29"
-            elif ks < 1.40: przedzial = "1.30 - 1.39"
-            elif ks < 1.50: przedzial = "1.40 - 1.49"
-            else: przedzial = "1.50+"
-    except:
-        przedzial = "Brak kursu"
-
     all_generated_predictions.append({
         "Match_ID": match_id, "Termin": termin, "Data": date, "Godzina": time, "Liga": league, 
         "Gospodarz": home, "Gość": away, "Engine": engine, "Typ": typ, 
         "Kurs_Rynek": str(kurs_rynek) if pd.notna(kurs_rynek) and str(kurs_rynek).strip() not in ["", "-", "nan"] else "",
-        "Szansa": szansa, "Kurs_Szac": kurs_szac, "Argumentacja": arg,
-        "Przedzial_Kursowy": przedzial
+        "Szansa": szansa, "Kurs_Szac": kurs_szac, "Argumentacja": arg
     })
 
 print("Uruchamiam Modele Predykcyjne...")
@@ -863,11 +847,9 @@ creds = Credentials.from_service_account_file("credentials.json", scopes=scope) 
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
-# ZABETONOWANE DEFINICJE KOLUMN - GWARANCJA STABILNOŚCI SCHEMATU
-cols_all_pred = ["Match_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score"]
+# OSTATECZNE DEFINICJE KOLUMN DLA OBU TABEL (ZABEZPIECZENIE PRZED AWARIAMI)
+cols_all_pred = ["Match_ID", "Zagrane", "Kupon_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 cols_historia = ["Match_ID", "Zagrane", "Kupon_ID", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
-
-df_all_predictions = pd.DataFrame(all_generated_predictions)
 
 # --- GLOBALNA REKALKULACJA PRZEDZIAŁÓW KURSOWYCH ---
 def global_recalc_przedzial(row):
@@ -883,14 +865,23 @@ def global_recalc_przedzial(row):
         else: return "1.50+"
     except: return "Brak kursu"
 
-# --- WYLICZANIE SILNIKA KONSENSUSU I PRZEDZIAŁÓW DLA NOWYCH ---
+df_all_predictions = pd.DataFrame(all_generated_predictions)
+
+# --- WYLICZANIE SILNIKA KONSENSUSU I UZUPEŁNIANIE STRUKTURY DLA ALL_PREDICTIONS ---
 if not df_all_predictions.empty:
     df_all_predictions['Kurs_Rynek'] = df_all_predictions['Kurs_Rynek'].astype(str)
     df_all_predictions['Przedzial_Kursowy'] = df_all_predictions.apply(global_recalc_przedzial, axis=1)
     consensus_counts = df_all_predictions.groupby('Match_ID').size().to_dict()
     df_all_predictions['Consensus_Score'] = df_all_predictions['Match_ID'].map(consensus_counts)
     
-    # Ochrona przed brakiem kolumn
+    # Dodanie pustych kolumn operacyjnych do zakładki All_Predictions
+    df_all_predictions['Zagrane'] = ""
+    df_all_predictions['Kupon_ID'] = ""
+    df_all_predictions['Status'] = "W OCZEKIWANIU"
+    df_all_predictions['Profit'] = ""
+    df_all_predictions['Yield_Wplyw'] = ""
+
+    # Upewnienie się, że zachowany jest sztywny układ dla Looker Studio
     for col in cols_all_pred:
         if col not in df_all_predictions.columns:
             df_all_predictions[col] = ""
@@ -908,19 +899,18 @@ except gspread.exceptions.WorksheetNotFound:
     ws_historia = spreadsheet.worksheet("Historia_Typow")
     df_historia = pd.DataFrame(columns=cols_historia)
 
-# TWARDE DOBUDOWANIE KOLUMN, JEŚLI W GOOGLE SHEETS ZOSTAŁY USUNIĘTE
+# Twarde dobudowanie kolumn dla Historii Typów
 for col in cols_historia:
     if col not in df_historia.columns: df_historia[col] = ""
 df_historia = df_historia[cols_historia]
 
 if not df_all_predictions.empty:
     nowe_typy_df = df_all_predictions.copy()
-    nowe_typy_df["Zagrane"] = ""
-    nowe_typy_df["Kupon_ID"] = ""
-    nowe_typy_df["Status"] = "W OCZEKIWANIU"
-    nowe_typy_df["Profit"] = ""
-    nowe_typy_df["Yield_Wplyw"] = ""
     
+    # Czyszczenie kolumn, które występują w cols_all_pred, ale których nie chcemy nadpisywać z automatu w Historii
+    if 'Termin' in nowe_typy_df.columns:
+        nowe_typy_df = nowe_typy_df.drop(columns=['Termin'])
+        
     for col in cols_historia:
         if col not in nowe_typy_df.columns:
             nowe_typy_df[col] = ""
@@ -1048,9 +1038,6 @@ if not df_historia.empty and not results_clean.empty:
                             df_historia.at[idx, "Yield_Wplyw"] = "-100.0"
                     except: pass
 
-if not df_historia.empty:
-    df_historia['Przedzial_Kursowy'] = df_historia.apply(global_recalc_przedzial, axis=1)
-
 # --- 7b. SYSTEM ŚLEDZENIA AKO (PORTFEL REALNY) - PEŁNA KONTROLA ---
 cols_ako = ["Kupon_ID", "Data_Zawarcia", "Mecze_Skrot", "Liczba_Zdarzen", "Kurs_AKO", "Stawka", "Status_AKO", "Wygrana_Brutto", "Profit_Netto"]
 try:
@@ -1147,7 +1134,7 @@ try:
     spreadsheet.worksheet("Results").resize(rows=10000, cols=35) 
     spreadsheet.worksheet("H2H_Mecze").resize(rows=5000, cols=15)
     spreadsheet.worksheet("Historia_Typow").resize(rows=10000, cols=25)
-    spreadsheet.worksheet("All_Predictions").resize(rows=5000, cols=20)
+    spreadsheet.worksheet("All_Predictions").resize(rows=5000, cols=25)
 except: pass
 
 print("Wysyłam Czysty Terminarz do Google Sheets...")
@@ -1232,5 +1219,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Wersja z Twardą Architekturą Kolumn i API Timeoutami gotowa.")
+print("Wersja z ujednoliconymi schematami dla Looker Studio gotowa.")
 print("=" * 60)
