@@ -42,6 +42,14 @@
 
     <!-- Osadzenie Twojego konkretnego Looker Studio -->
     <iframe src="https://datastudio.google.com/embed/reporting/99821c8b-06f8-4b96-b5d4-2384420e2b75/page/p_l5i56wlc5d"></iframe>
-
+<script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('sw.js')
+                    .then(reg => console.log('Service Worker zarejestrowany', reg))
+                    .catch(err => console.log('Błąd rejestracji SW', err));
+            });
+        }
+    </script>
 </body>
 </html>
