@@ -1,8 +1,8 @@
 {
   "name": "Golden Pick System",
   "short_name": "GoldenPick",
-  "start_url": "/betexplorer-scraper/",
-  "scope": "/betexplorer-scraper/",
+  "start_url": "./index.html",
+  "scope": "./",
   "display": "standalone",
   "background_color": "#000000",
   "theme_color": "#000000",
