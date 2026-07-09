@@ -16,73 +16,6 @@ from collections import Counter
 
 today = datetime.now()
 
-import requests
-import json
-import time
-
-# ==========================================================
-# MODUŁ TELEGRAM VIP - GOLDEN PICK SYSTEM
-# ==========================================================
-def wyslij_typ_vip_na_telegram(mecz_row):
-    """
-    Wysyła sformatowaną wiadomość z interaktywnym przyciskiem na Telegram.
-    """
-    # Twoje twarde dane uwierzytelniające
-    bot_token = "8905463018:AAHcBKiPhOwlV7T2FEKSOWvvVmzfUBujpYM"
-    chat_id = "-1003525389019"
-    link_dashboardu = "https://reszkamateusz68-tech.github.io/betexplorer-scraper/"
-    
-    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    
-    # Pobieranie danych z rzędu DataFrame (z zabezpieczeniem przed pustymi polami)
-    gospodarz = str(mecz_row.get('Gospodarz', 'Brak'))
-    gosc = str(mecz_row.get('Gość', 'Brak'))
-    liga = str(mecz_row.get('Liga', 'Brak'))
-    typ = str(mecz_row.get('Typ', 'Brak'))
-    szansa = str(mecz_row.get('Szansa', '0'))
-    
-    # Jeśli kurs rynkowy jest pusty, bierzemy szacowany
-    kurs = str(mecz_row.get('Kurs_Rynek', ''))
-    if kurs == '' or kurs == 'Brak danych' or kurs == 'nan':
-        kurs = str(mecz_row.get('Kurs_Szac', 'Brak danych'))
-        
-    arg = str(mecz_row.get('Argumentacja', 'Brak danych'))
-
-    # Szablon wiadomości w formacie HTML
-    wiadomosc = f"""⚡️ <b>GOLDEN PICK SYSTEM | Wartość Dnia</b> ⚡️
-🏆 <i>{liga}</i>
-
-⚽️ <b>{gospodarz} vs {gosc}</b>
-🎯 Typ: <b>{typ}</b>
-
-📊 <b>Statystyki Algorytmu:</b>
-🟢 Szansa wygranej: <b>{szansa}%</b>
-📈 Kurs: <b>{kurs}</b>
-💡 <i>Argumentacja:</i> {arg}"""
-
-    # Interaktywny przycisk
-    klawiatura = {
-        "inline_keyboard": [
-            [{"text": "📊 Otwórz Panel VIP", "url": link_dashboardu}]
-        ]
-    }
-    
-    payload = {
-        "chat_id": chat_id,
-        "text": wiadomosc,
-        "parse_mode": "HTML",
-        "reply_markup": json.dumps(klawiatura)
-    }
-    
-    try:
-        response = requests.post(url, data=payload)
-        if response.status_code == 200:
-            print(f"✅ Sukces: Wysłano typ na Telegram ({gospodarz} vs {gosc})")
-        else:
-            print(f"❌ Błąd API Telegrama: {response.text}")
-    except Exception as e:
-        print(f"❌ Błąd połączenia z Telegramem: {e}")
-
 # ==========================================================
 # FUNKCJE MATEMATYCZNE BUKMACHERA (POISSON I KORELACJE)
 # ==========================================================
@@ -1287,31 +1220,4 @@ spreadsheet.worksheet("Summary").update(summary_data)
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
 print("Wersja z ujednoliconymi schematami dla Looker Studio gotowa.")
-print("=" * 60)
-
-# ==========================================================
-# GŁÓWNA LOGIKA WYSYŁKI TELEGRAM VIP NA KONIEC SKRYPTU
-# ==========================================================
-print("\n[TELEGRAM] Rozpoczynam selekcję najlepszego typu dnia...")
-
-# Upewniamy się, że zmienna df_all_predictions (lub podobna ramka z danymi) istnieje
-if 'df_all_predictions' in locals() and not df_all_predictions.empty:
-    # Filtrujemy tylko mecze, które jeszcze się nie odbyły
-    kandydaci = df_all_predictions[df_all_predictions['Status'] == 'W OCZEKIWANIU'].copy()
-    
-    if not kandydaci.empty:
-        # Konwertujemy 'Szansa' na liczby, by móc je posortować (ignorujemy błędy)
-        import pandas as pd
-        kandydaci['Szansa_float'] = pd.to_numeric(kandydaci['Szansa'], errors='coerce').fillna(0)
-        
-        # Bierzemy 1 mecz z absolutnie najwyższą szansą matematyczną
-        najlepsze_mecze = kandydaci.sort_values(by='Szansa_float', ascending=False).head(1)
-        
-        for index, mecz in najlepsze_mecze.iterrows():
-            wyslij_typ_vip_na_telegram(mecz)
-            time.sleep(2) # Zabezpieczenie przed blokadą antyspamową Telegrama
-    else:
-        print("[TELEGRAM] Brak nowych meczów 'W OCZEKIWANIU'.")
-else:
-    print("[TELEGRAM] Brak danych o predykcjach do wysłania.")
 print("=" * 60)
