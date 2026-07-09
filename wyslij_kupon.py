@@ -10,7 +10,6 @@ TELEGRAM_CHAT_ID = "-1003525389019"
 LINK_DASHBOARDU = "https://datastudio.google.com/embed/reporting/99821c8b-06f8-4b96-b5d4-2384420e2b75/page/p_oeivgwp54d"
 
 # --- KONFIGURACJA GOOGLE SHEETS ---
-# Używasz tych samych poświadczeń co w betexplorer_all.py
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
 client = gspread.authorize(creds)
@@ -23,14 +22,15 @@ def generuj_i_wyslij_ako():
     kupon_mecze = []
     wiersze_do_wyczyszczenia = []
     
-    # Przeszukujemy arkusz (zakładamy, że dodałeś kolumnę 'Wyslij_AKO')
+    # Przeszukujemy arkusz pod kątem zaznaczonych checkboxów (TRUE) lub wpisanego X
     for index, wiersz in enumerate(wszystkie_dane):
-        if str(wiersz.get('Wyslij_AKO', '')).upper() == 'X':
+        wartosc_pola = str(wiersz.get('Wyslij_AKO', '')).upper()
+        if wartosc_pola == 'TRUE' or wartosc_pola == 'X':
             kupon_mecze.append(wiersz)
             wiersze_do_wyczyszczenia.append(index + 2) # +2 bo gspread liczy od 1, a 1 to nagłówek
             
     if not kupon_mecze:
-        print("Nie zaznaczono żadnego meczu ('X' w kolumnie Wyslij_AKO).")
+        print("Nie zaznaczono żadnego meczu (brak zaznaczonych checkboxów w kolumnie Wyslij_AKO).")
         return
 
     # --- OBLICZANIE MATEMATYKI KUPONU ---
@@ -47,7 +47,12 @@ def generuj_i_wyslij_ako():
         try:
             kurs_wartosc = float(kurs_str)
         except ValueError:
-            kurs_wartosc = 1.0 # Bezpiecznik, jeśli kursu brakuje
+            try:
+                # Jeśli Kurs_Rynek zawiedzie, próbujemy pobrać Kurs_Szac
+                kurs_str_szac = str(mecz.get('Kurs_Szac', '1.0')).replace(',', '.')
+                kurs_wartosc = float(kurs_str_szac)
+            except ValueError:
+                kurs_wartosc = 1.0 # Ostateczny bezpiecznik
             
         laczny_kurs *= kurs_wartosc
         
@@ -60,15 +65,15 @@ def generuj_i_wyslij_ako():
     potencjalna_wygrana = stawka * wspolczynnik * laczny_kurs
 
     # --- FORMATOWANIE WIADOMOŚCI ---
-    wiadomosc = f"""🔥 <b>GOTOWY KUPON AKO (Algorytm + Weryfikacja)</b> 🔥\n\n"""
+    wiadomosc = f"""🔥 <b>GOTOWY KUPON AKO (Weryfikacja Ekspercka)</b> 🔥\n\n"""
     wiadomosc += lista_tekstowa
     wiadomosc += f"""───────────────
 📊 <b>Podsumowanie Kuponu:</b>
 📈 Łączny kurs: <b>{laczny_kurs:.2f}</b>
-💰 Stawka: <b>{stawka} PLN</b>
-💸 Do wygrania: <b>{potencjalna_wygrana:.2f} PLN</b> <i>(po odliczeniu podatku 12%)</i>"""
+💰 Stawka sugerowana: <b>{stawka} PLN</b>
+💸 Do wygrania: <b>{potencjalna_wygrana:.2f} PLN</b> <i>(po odliczeniu podatku)</i>"""
 
-    klawiatura = {"inline_keyboard": [[{"text": "📊 Otwórz Pełny Dashboard", "url": LINK_DASHBOARDU}]]}
+    klawiatura = {"inline_keyboard": [[{"text": "📊 Otwórz Pełny Raport Algorytmu", "url": LINK_DASHBOARDU}]]}
     
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
@@ -83,11 +88,13 @@ def generuj_i_wyslij_ako():
     
     if resp.status_code == 200:
         print("✅ Kupon AKO wysłany na Telegram!")
-        # Czyszczenie 'X' w arkuszu, żeby nie dublować przy kolejnym uruchomieniu
+        # Zmiana statusu na FALSE odznaczy checkboxy w Google Sheets
+        kolumna_wyslij_ako_index = len(wszystkie_dane[0]) 
         for wiersz_idx in wiersze_do_wyczyszczenia:
-            arkusz.update_cell(wiersz_idx, len(wszystkie_dane[0]), "") # Aktualizuje ostatnią kolumnę
-        print("🧹 Wyszyszczono arkusz ze znaczników.")
+            arkusz.update_cell(wiersz_idx, kolumna_wyslij_ako_index, "FALSE")
+        print("🧹 Odznaczono checkboxy w arkuszu.")
     else:
         print(f"❌ Błąd wysyłki: {resp.text}")
 
-generuj_i_wyslij_ako()
+if __name__ == "__main__":
+    generuj_i_wyslij_ako()
