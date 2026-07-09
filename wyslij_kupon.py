@@ -14,7 +14,7 @@ LINK_DASHBOARDU = "https://datastudio.google.com/embed/reporting/99821c8b-06f8-4
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
 client = gspread.authorize(creds)
-arkusz = client.open("NAZWA_TWOJEGO_ARKUSZA").worksheet("NAZWA_ZAKŁADKI")
+arkusz = client.open("BetExplorer").worksheet("All_Predictions")
 
 def generuj_i_wyslij_ako():
     print("Łączę z Google Sheets w poszukiwaniu zaznaczonych typów...")
