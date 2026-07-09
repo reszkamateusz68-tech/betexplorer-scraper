@@ -42,9 +42,9 @@
     <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/betexplorer-scraper/sw.js', { scope: '/betexplorer-scraper/' })
-                    .then(reg => console.log('Service Worker zarejestrowany! Scope:', reg.scope))
-                    .catch(err => console.log('Błąd rejestracji SW:', err));
+                navigator.serviceWorker.register('./sw.js')
+                    .then(reg => console.log('Service Worker gotowy!', reg.scope))
+                    .catch(err => console.log('Błąd SW:', err));
             });
         }
     </script>
