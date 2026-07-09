@@ -29,7 +29,7 @@ def wyslij_typ_vip_na_telegram(mecz_row):
     """
     # Twoje twarde dane uwierzytelniające
     bot_token = "8905463018:AAHcBKiPhOwlV7T2FEKSOWvvVmzfUBujpYM"
-    chat_id = "-3525389019"
+    chat_id = "-1003525389019"
     link_dashboardu = "https://reszkamateusz68-tech.github.io/betexplorer-scraper/"
     
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
