@@ -476,41 +476,61 @@ if not fixtures_clean.empty and not valid_matches.empty:
 # ==========================================================
 all_generated_predictions = []
 
-# Słownik bazowych kursów (kotwice kalibracyjne) z dokumentacji matematycznej
+# Pełny słownik bazowych kursów, w tym wprowadzające asymetrię połowy i drużyny (Ultra-Safe)
 KOTWICE_KURSOWE = {
     'O0.5': 1.03, 'U3.5': 1.31, 'U4.5': 1.1, 'U5.5': 1.02, 'U6.5': 1.01,
-    'HT_U1.5': 1.42, 'HT_U2.5': 1.09, 'O0.5+U5.5': 1.09, 'O0.5+U6.5': 1.05,
+    'HT_U1.5': 1.42, 'HT_U2.5': 1.09, 'HT_U3.5': 1.01, 'HT_U4.5': 1.01,
+    '2H_U3.5': 1.02, '2H_U4.5': 1.01,
+    'O0.5+U5.5': 1.09, 'O0.5+U6.5': 1.05,
     'C_U8.5': 2.78, 'C_U9.5': 2.02, 'C_U10.5': 1.59, 'C_U11.5': 1.33,
-    'C_U12.5': 1.17, 'C_U13.5': 1.07, 'C_U14.5': 1.01, 'HC_U4.5': 2.59,
-    'HC_U5.5': 1.75, 'HC_U6.5': 1.35, 'HC_U7.5': 1.14, 'HC_U8.5': 1.03,
-    'AC_U4.5': 1.74, 'AC_U5.5': 1.32, 'AC_U6.5': 1.11, 'AC_U7.5': 1.01,
-    'AC_U8.5': 1.01, 'HC_O4.5': 1.44, 'AC_O4.5': 1.98, 'S_1': 1.34, 'ST_1': 1.64,
-    'HT_U3.5': 1.01, 'HT_U4.5': 1.01, '2H_U3.5': 1.02, '2H_U4.5': 1.01,
-    'HU2.5': 1.12, 'HU3.5': 1.01, 'HU4.5': 1.01, 'AU2.5': 1.12, 'AU3.5': 1.01, 'AU4.5': 1.01
+    'C_U12.5': 1.17, 'C_U13.5': 1.07, 'C_U14.5': 1.01, 
+    'HC_U4.5': 2.59, 'HC_U5.5': 1.75, 'HC_U6.5': 1.35, 'HC_U7.5': 1.14, 'HC_U8.5': 1.03,
+    'AC_U4.5': 1.74, 'AC_U5.5': 1.32, 'AC_U6.5': 1.11, 'AC_U7.5': 1.01, 'AC_U8.5': 1.01, 
+    'HC_O4.5': 1.44, 'AC_O4.5': 1.98, 
+    'HU2.5': 1.12, 'HU3.5': 1.01, 'HU4.5': 1.01,
+    'AU2.5': 1.12, 'AU3.5': 1.01, 'AU4.5': 1.01,
+    'S_1': 1.34, 'ST_1': 1.64
 }
 
 def add_pred(match_id, termin, date, time, league, home, away, engine, typ, kurs_rynek, szansa, kurs_szac, arg):
-    # Logika Nadpisywania Kursu Szacunkowego przez Kotwice
     typ_k = str(typ).strip()
     
-    # Dla BetBuildera parsujemy elementy, aby oszacować łączny kurs bazowy przy użyciu zmiennej gamma
-    if "+" in typ_k and "O0.5+U" not in typ_k:
+    # Inteligentna logika naśladująca narzuty krzyżowe bukmacherów dla zakładów BetBuilder
+    if engine == "BetBuilder Pro":
+        skladniki = typ_k.split("+")
+        kursy_skladowe = [KOTWICE_KURSOWE.get(sk.strip(), 1.05) for sk in skladniki]
+        kursy_skladowe.sort(reverse=True)
+        
+        # Wyznaczanie dynamicznego mnożnika (tzw. minimum leg multiplier) 
+        # Im dłuższa taśma bezpiecznych zdarzeń, tym wyższą marżę krzyżową ładuje bukmacher.
+        min_multiplier = 1.04
+        if len(kursy_skladowe) == 3: min_multiplier = 1.05
+        elif len(kursy_skladowe) == 4: min_multiplier = 1.06
+        elif len(kursy_skladowe) >= 5: min_multiplier = 1.07
+        
+        laczny_kurs = kursy_skladowe[0] if kursy_skladowe else 1.0
+        for k in kursy_skladowe[1:]:
+            laczny_kurs *= max(k, min_multiplier)
+            
+        kurs_docelowy = round(laczny_kurs, 2)
+        
+    elif "+" in typ_k and "O0.5+U" not in typ_k: 
+        # Zdarzenia takie jak kombinacje Corners Pro (np. HC_U6.5+AC_U5.5)
         skladniki = typ_k.split("+")
         laczny_kurs = 1.0
-        # Wskaźnik korelacji i redukcji wg modelu Skellama/Kopuły (gamma)
         for sk in skladniki:
             laczny_kurs *= KOTWICE_KURSOWE.get(sk.strip(), 1.05)
-        # Na podstawie wyliczeń dla silnej korelacji bramkowej, mnożnik wariancji wynosi ok 0.92, 
-        # ale dla bezpieczeństwa operacyjnego w kuponach zakłada się mocniejszą korektę korelacyjną (rho=0.75 dla HT)
-        kurs_docelowy = round(max(1.05, laczny_kurs * 0.90), 2) 
+        # Typowa redukcja ze względu na korelację stochastyczną dla tych rynków
+        kurs_docelowy = round(max(1.05, laczny_kurs * 0.90), 2)
+        
     else:
-        # Nadpisanie prostego zdarzenia jeśli mamy ustaloną rynkową kotwicę
+        # Zwykłe zdarzenia lub Multigol definiowany bezpośrednio w Kotwicach (np. O0.5+U5.5)
         if typ_k in KOTWICE_KURSOWE:
             kurs_docelowy = KOTWICE_KURSOWE[typ_k]
         else:
             kurs_docelowy = kurs_szac
 
-    # Zabezpieczenie minimalnego kursu przed ujemnym prawdopodobieństwem (Floor Limit)
+    # Bezwzględny Floor Limit
     if kurs_docelowy < 1.015:
         kurs_docelowy = 1.01
 
@@ -551,7 +571,7 @@ for idx, row in fixtures_clean.iterrows():
         a_tot_all['Team_GA'] = np.where(a_tot_all['Home'] == away, a_tot_all['FTAG'], a_tot_all['FTHG'])
 
     # ----------------------------------------------------
-    # 6a. 1X PRO (Poprawiona matematyka rynkowa)
+    # 6a. 1X PRO
     # ----------------------------------------------------
     lg_matches = valid_matches[valid_matches['Base_League'] == fixture_base]
     if len(lg_matches) >= 20 and len(h_tot_all) >= 5 and len(a_tot_all) >= 5 and len(h_dom) > 0 and len(a_wyj) > 0:
@@ -577,7 +597,6 @@ for idx, row in fixtures_clean.iterrows():
         else: typ_kod, final_prob = "X2", min(prob_x2, 0.95)
 
         if final_prob >= 0.70:
-            # Prawidłowe wyliczenie Kurs_Szac na podstawie realnych kursów rynkowych
             try:
                 o1 = float(str(o1_raw).replace(',','.'))
                 ox = float(str(ox_raw).replace(',','.'))
@@ -585,7 +604,7 @@ for idx, row in fixtures_clean.iterrows():
                 if typ_kod == "1X": fair_odd = round((o1 * ox) / (o1 + ox), 2)
                 else: fair_odd = round((o2 * ox) / (o2 + ox), 2)
             except:
-                fair_odd = round(1 / final_prob, 2) # Fallback, gdy brak kursów rynkowych
+                fair_odd = round(1 / final_prob, 2)
             
             if typ_kod == "1X":
                 h_1x_c = sum(h_dom['FTHG'] >= h_dom['FTAG'])
@@ -633,10 +652,6 @@ for idx, row in fixtures_clean.iterrows():
         h_tot_all['HT_Total'] = pd.to_numeric(h_tot_all['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(h_tot_all['HTAG'], errors='coerce').fillna(0)
         a_tot_all['HT_Total'] = pd.to_numeric(a_tot_all['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(a_tot_all['HTAG'], errors='coerce').fillna(0)
         
-        # Obliczenia strzałów poszczególnych drużyn dla nowych kotwic
-        h_dom_s = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Home'] == home)]
-        a_wyj_s = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Away'] == away)]
-
         builder_blocks_code, block_probabilities, arg_blocks = [], [], []
         
         h_o05 = sum(h_dom['Total_Goals'] >= 1)
@@ -673,8 +688,6 @@ for idx, row in fixtures_clean.iterrows():
                 arg_blocks.append(f"HT_U{line} (D: {h_u_1h}/{len(h_dom)}, W: {a_u_1h}/{len(a_wyj)} | Ogół Gosp: {h_tot_u_1h}/{len(h_tot_all)}, Gość: {a_tot_u_1h}/{len(a_tot_all)})")
                 break
                 
-        # Nowe rynki z dokumentu (2ndH Unders, Team Unders)
-        # 2nd Half Unders
         h_dom['2H_Total'] = pd.to_numeric(h_dom['Total_Goals'], errors='coerce').fillna(0) - h_dom['HT_Total']
         a_wyj['2H_Total'] = pd.to_numeric(a_wyj['Total_Goals'], errors='coerce').fillna(0) - a_wyj['HT_Total']
         
@@ -688,7 +701,6 @@ for idx, row in fixtures_clean.iterrows():
                 arg_blocks.append(f"2H_U{line} (D: {h_u_2h}/{len(h_dom)}, W: {a_u_2h}/{len(a_wyj)})")
                 break
                 
-        # Team Unders (Home & Away)
         for t_code, t_df, t_goals_col, opp_code, opp_df, opp_goals_col in [("H", h_dom, "FTHG", "A", a_wyj, "FTAG")]:
             for line in [2.5, 3.5, 4.5]:
                 t_u = sum(t_df[t_goals_col] < line)
