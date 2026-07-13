@@ -1,0 +1,30 @@
+name: 🧾 ROZLICZENIE I PODSUMOWANIE KUPONU (Telegram)
+
+on: 
+  workflow_dispatch:
+
+jobs:
+  rozlicz_telegram:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Pobranie kodu repozytorium
+        uses: actions/checkout@v3
+
+      - name: Instalacja środowiska Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Instalacja wymaganych bibliotek
+        run: |
+          pip install requests gspread oauth2client pandas
+
+      - name: Przygotowanie klucza Google API (credentials.json)
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: |
+          echo "$GOOGLE_CREDENTIALS" > credentials.json
+
+      - name: Uruchomienie skryptu podsumowującego
+        run: python podsumuj_kupon.py
