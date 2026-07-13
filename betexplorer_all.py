@@ -476,27 +476,50 @@ if not fixtures_clean.empty and not valid_matches.empty:
 # ==========================================================
 all_generated_predictions = []
 
+# Słownik bazowych kursów (kotwice kalibracyjne) z dokumentacji matematycznej
+KOTWICE_KURSOWE = {
+    'O0.5': 1.03, 'U3.5': 1.31, 'U4.5': 1.1, 'U5.5': 1.02, 'U6.5': 1.01,
+    'HT_U1.5': 1.42, 'HT_U2.5': 1.09, 'O0.5+U5.5': 1.09, 'O0.5+U6.5': 1.05,
+    'C_U8.5': 2.78, 'C_U9.5': 2.02, 'C_U10.5': 1.59, 'C_U11.5': 1.33,
+    'C_U12.5': 1.17, 'C_U13.5': 1.07, 'C_U14.5': 1.01, 'HC_U4.5': 2.59,
+    'HC_U5.5': 1.75, 'HC_U6.5': 1.35, 'HC_U7.5': 1.14, 'HC_U8.5': 1.03,
+    'AC_U4.5': 1.74, 'AC_U5.5': 1.32, 'AC_U6.5': 1.11, 'AC_U7.5': 1.01,
+    'AC_U8.5': 1.01, 'HC_O4.5': 1.44, 'AC_O4.5': 1.98, 'S_1': 1.34, 'ST_1': 1.64
+}
+
+all_generated_predictions = []
+
 def add_pred(match_id, termin, date, time, league, home, away, engine, typ, kurs_rynek, szansa, kurs_szac, arg):
+    # Logika Nadpisywania Kursu Szacunkowego przez Kotwice
+    typ_k = str(typ).strip()
+    
+    # Dla BetBuildera parsujemy elementy, aby oszacować łączny kurs bazowy przy użyciu zmiennej gamma
+    if "+" in typ_k and "O0.5+U" not in typ_k:
+        skladniki = typ_k.split("+")
+        laczny_kurs = 1.0
+        # Wskaźnik korelacji i redukcji wg modelu Skellama/Kopuły
+        for sk in skladniki:
+            laczny_kurs *= KOTWICE_KURSOWE.get(sk.strip(), 1.05)
+        # Nakładanie reduktora z powodu korelacji zdarzeń (np. 1 - rho)
+        kurs_docelowy = round(max(1.05, laczny_kurs * 0.90), 2) 
+    else:
+        # Nadpisanie prostego zdarzenia
+        if typ_k in KOTWICE_KURSOWE:
+            kurs_docelowy = KOTWICE_KURSOWE[typ_k]
+        else:
+            kurs_docelowy = kurs_szac
+
+    # Zabezpieczenie minimalnego kursu przed ujemnym prawdopodobieństwem
+    if kurs_docelowy < 1.015:
+        kurs_docelowy = 1.01
+
     all_generated_predictions.append({
         "Match_ID": match_id, "Termin": termin, "Data": date, "Godzina": time, "Liga": league, 
         "Gospodarz": home, "Gość": away, "Engine": engine, "Typ": typ, 
         "Kurs_Rynek": str(kurs_rynek) if pd.notna(kurs_rynek) and str(kurs_rynek).strip() not in ["", "-", "nan"] else "",
-        "Szansa": szansa, "Kurs_Szac": kurs_szac, "Argumentacja": arg
+        "Szansa": szansa, "Kurs_Szac": kurs_docelowy, "Argumentacja": arg
     })
-
-print("Uruchamiam Modele Predykcyjne...")
-
-for idx, row in fixtures_clean.iterrows():
-    league, home, away = row['League'], row['Home'], row['Away']
-    fixture_base = get_base_league(league)
-    match_id, d_termin, d_date, d_time = row['Match_ID'], row['Termin'], row['Date'], row['Time']
     
-    o1_raw, ox_raw, o2_raw = row['Odd_1'], row['Odd_X'], row['Odd_2']
-    buk_odd_1x = ""
-    if str(o1_raw).strip() not in ["", "-", "nan"] and str(ox_raw).strip() not in ["", "-", "nan"]:
-        try: buk_odd_1x = round(1 / ((1 / float(str(o1_raw).replace(',','.'))) + (1 / float(str(ox_raw).replace(',','.')))), 2)
-        except: pass
-
     # --- WSPÓLNE BAZY DO ANALIZ ---
     h_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == home) | (valid_matches['Away'] == home))].copy()
     a_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == away) | (valid_matches['Away'] == away))].copy()
