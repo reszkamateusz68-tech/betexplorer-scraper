@@ -514,7 +514,7 @@ for idx, row in fixtures_clean.iterrows():
         a_tot_all['Team_GA'] = np.where(a_tot_all['Home'] == away, a_tot_all['FTAG'], a_tot_all['FTHG'])
 
     # ----------------------------------------------------
-    # 6a. 1X PRO
+    # 6a. 1X PRO (Poprawiona matematyka rynkowa)
     # ----------------------------------------------------
     lg_matches = valid_matches[valid_matches['Base_League'] == fixture_base]
     if len(lg_matches) >= 20 and len(h_tot_all) >= 5 and len(a_tot_all) >= 5 and len(h_dom) > 0 and len(a_wyj) > 0:
@@ -540,7 +540,15 @@ for idx, row in fixtures_clean.iterrows():
         else: typ_kod, final_prob = "X2", min(prob_x2, 0.95)
 
         if final_prob >= 0.70:
-            fair_odd = round((1 / final_prob) * 0.93, 2)
+            # Prawidłowe wyliczenie Kurs_Szac na podstawie realnych kursów rynkowych
+            try:
+                o1 = float(str(o1_raw).replace(',','.'))
+                ox = float(str(ox_raw).replace(',','.'))
+                o2 = float(str(o2_raw).replace(',','.'))
+                if typ_kod == "1X": fair_odd = round((o1 * ox) / (o1 + ox), 2)
+                else: fair_odd = round((o2 * ox) / (o2 + ox), 2)
+            except:
+                fair_odd = round(1 / final_prob, 2) # Fallback, gdy brak kursów rynkowych
             
             if typ_kod == "1X":
                 h_1x_c = sum(h_dom['FTHG'] >= h_dom['FTAG'])
@@ -631,7 +639,7 @@ for idx, row in fixtures_clean.iterrows():
             add_pred(match_id, d_termin, d_date, d_time, league, home, away, "BetBuilder Pro", "+".join(builder_blocks_code), "", final_builder_safety, round(estimated_bb_odd, 2), uzasadnienie)
 
     # ----------------------------------------------------
-    # 6c. MULTIGOL
+    # 6c. MULTIGOL (Ujednolicenie formatu do O+U)
     # ----------------------------------------------------
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
         h_last_goals = get_last_match_goals(fixture_base, home)
@@ -651,13 +659,14 @@ for idx, row in fixtures_clean.iterrows():
             prob_1_6 = (h_16/len(h_dom) + a_16/len(a_wyj)) / 2
             
             if prob_1_5 >= 0.90 or prob_1_6 >= 0.90:
-                typ_kod, pewnosc, hc, ac, htc, atc = ("MG_1-5", prob_1_5, h_15, a_15, h_tot_15, a_tot_15) if prob_1_5 >= 0.90 else ("MG_1-6", prob_1_6, h_16, a_16, h_tot_16, a_tot_16)
+                # Zamiana formatu
+                typ_kod, pewnosc, hc, ac, htc, atc = ("O0.5+U5.5", prob_1_5, h_15, a_15, h_tot_15, a_tot_15) if prob_1_5 >= 0.90 else ("O0.5+U6.5", prob_1_6, h_16, a_16, h_tot_16, a_tot_16)
                 est_odd = round(1.0 + (((1/pewnosc) - 1.0) / 1.5), 2)
                 
                 h_scores = ", ".join([f"{int(m['FTHG'])}:{int(m['FTAG'])}" for _, m in h_tot_all.head(3).iterrows()])
                 a_scores = ", ".join([f"{int(m['FTHG'])}:{int(m['FTAG'])}" for _, m in a_tot_all.head(3).iterrows()])
                 
-                arg = f"Regresja po anomalii (Wyniki Gosp ost. 3: {h_scores} | Gość ost. 3: {a_scores}). Historycznie {typ_kod} wchodzi u Gosp: {hc}/{len(h_dom)} (Ogół: {htc}/{len(h_tot_all)}), u Gości: {ac}/{len(a_wyj)} (Ogół: {atc}/{len(a_tot_all)})."
+                arg = f"Regresja po anomalii (Wyniki Gosp ost. 3: {h_scores} | Gość ost. 3: {a_scores}). Historycznie MG pokryte u Gosp: {hc}/{len(h_dom)} (Ogół: {htc}/{len(h_tot_all)}), u Gości: {ac}/{len(a_wyj)} (Ogół: {atc}/{len(a_tot_all)})."
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Multigol", typ_kod, "", round(pewnosc*100, 1), round(est_odd, 2), arg)
 
     # ----------------------------------------------------
