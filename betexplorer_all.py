@@ -484,10 +484,10 @@ KOTWICE_KURSOWE = {
     'C_U12.5': 1.17, 'C_U13.5': 1.07, 'C_U14.5': 1.01, 'HC_U4.5': 2.59,
     'HC_U5.5': 1.75, 'HC_U6.5': 1.35, 'HC_U7.5': 1.14, 'HC_U8.5': 1.03,
     'AC_U4.5': 1.74, 'AC_U5.5': 1.32, 'AC_U6.5': 1.11, 'AC_U7.5': 1.01,
-    'AC_U8.5': 1.01, 'HC_O4.5': 1.44, 'AC_O4.5': 1.98, 'S_1': 1.34, 'ST_1': 1.64
+    'AC_U8.5': 1.01, 'HC_O4.5': 1.44, 'AC_O4.5': 1.98, 'S_1': 1.34, 'ST_1': 1.64,
+    'HT_U3.5': 1.01, 'HT_U4.5': 1.01, '2H_U3.5': 1.02, '2H_U4.5': 1.01,
+    'HU2.5': 1.12, 'HU3.5': 1.01, 'HU4.5': 1.01, 'AU2.5': 1.12, 'AU3.5': 1.01, 'AU4.5': 1.01
 }
-
-all_generated_predictions = []
 
 def add_pred(match_id, termin, date, time, league, home, away, engine, typ, kurs_rynek, szansa, kurs_szac, arg):
     # Logika Nadpisywania Kursu Szacunkowego przez Kotwice
@@ -497,19 +497,20 @@ def add_pred(match_id, termin, date, time, league, home, away, engine, typ, kurs
     if "+" in typ_k and "O0.5+U" not in typ_k:
         skladniki = typ_k.split("+")
         laczny_kurs = 1.0
-        # Wskaźnik korelacji i redukcji wg modelu Skellama/Kopuły
+        # Wskaźnik korelacji i redukcji wg modelu Skellama/Kopuły (gamma)
         for sk in skladniki:
             laczny_kurs *= KOTWICE_KURSOWE.get(sk.strip(), 1.05)
-        # Nakładanie reduktora z powodu korelacji zdarzeń (np. 1 - rho)
+        # Na podstawie wyliczeń dla silnej korelacji bramkowej, mnożnik wariancji wynosi ok 0.92, 
+        # ale dla bezpieczeństwa operacyjnego w kuponach zakłada się mocniejszą korektę korelacyjną (rho=0.75 dla HT)
         kurs_docelowy = round(max(1.05, laczny_kurs * 0.90), 2) 
     else:
-        # Nadpisanie prostego zdarzenia
+        # Nadpisanie prostego zdarzenia jeśli mamy ustaloną rynkową kotwicę
         if typ_k in KOTWICE_KURSOWE:
             kurs_docelowy = KOTWICE_KURSOWE[typ_k]
         else:
             kurs_docelowy = kurs_szac
 
-    # Zabezpieczenie minimalnego kursu przed ujemnym prawdopodobieństwem
+    # Zabezpieczenie minimalnego kursu przed ujemnym prawdopodobieństwem (Floor Limit)
     if kurs_docelowy < 1.015:
         kurs_docelowy = 1.01
 
@@ -519,7 +520,20 @@ def add_pred(match_id, termin, date, time, league, home, away, engine, typ, kurs
         "Kurs_Rynek": str(kurs_rynek) if pd.notna(kurs_rynek) and str(kurs_rynek).strip() not in ["", "-", "nan"] else "",
         "Szansa": szansa, "Kurs_Szac": kurs_docelowy, "Argumentacja": arg
     })
+
+print("Uruchamiam Modele Predykcyjne...")
+
+for idx, row in fixtures_clean.iterrows():
+    league, home, away = row['League'], row['Home'], row['Away']
+    fixture_base = get_base_league(league)
+    match_id, d_termin, d_date, d_time = row['Match_ID'], row['Termin'], row['Date'], row['Time']
     
+    o1_raw, ox_raw, o2_raw = row['Odd_1'], row['Odd_X'], row['Odd_2']
+    buk_odd_1x = ""
+    if str(o1_raw).strip() not in ["", "-", "nan"] and str(ox_raw).strip() not in ["", "-", "nan"]:
+        try: buk_odd_1x = round(1 / ((1 / float(str(o1_raw).replace(',','.'))) + (1 / float(str(ox_raw).replace(',','.')))), 2)
+        except: pass
+
     # --- WSPÓLNE BAZY DO ANALIZ ---
     h_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == home) | (valid_matches['Away'] == home))].copy()
     a_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == away) | (valid_matches['Away'] == away))].copy()
@@ -619,6 +633,10 @@ def add_pred(match_id, termin, date, time, league, home, away, engine, typ, kurs
         h_tot_all['HT_Total'] = pd.to_numeric(h_tot_all['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(h_tot_all['HTAG'], errors='coerce').fillna(0)
         a_tot_all['HT_Total'] = pd.to_numeric(a_tot_all['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(a_tot_all['HTAG'], errors='coerce').fillna(0)
         
+        # Obliczenia strzałów poszczególnych drużyn dla nowych kotwic
+        h_dom_s = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Home'] == home)]
+        a_wyj_s = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Away'] == away)]
+
         builder_blocks_code, block_probabilities, arg_blocks = [], [], []
         
         h_o05 = sum(h_dom['Total_Goals'] >= 1)
@@ -643,7 +661,7 @@ def add_pred(match_id, termin, date, time, league, home, away, engine, typ, kurs
                 arg_blocks.append(f"U{line} (D: {h_u}/{len(h_dom)}, W: {a_u}/{len(a_wyj)} | Ogół Gosp: {h_tot_u}/{len(h_tot_all)}, Gość: {a_tot_u}/{len(a_tot_all)})")
                 break
 
-        for line in [1.5, 2.5]:
+        for line in [1.5, 2.5, 3.5, 4.5]:
             h_u_1h = sum(h_dom['HT_Total'] < line)
             a_u_1h = sum(a_wyj['HT_Total'] < line)
             h_tot_u_1h = sum(h_tot_all['HT_Total'] < line)
@@ -654,6 +672,44 @@ def add_pred(match_id, termin, date, time, league, home, away, engine, typ, kurs
                 block_probabilities.append(prob_u_1h)
                 arg_blocks.append(f"HT_U{line} (D: {h_u_1h}/{len(h_dom)}, W: {a_u_1h}/{len(a_wyj)} | Ogół Gosp: {h_tot_u_1h}/{len(h_tot_all)}, Gość: {a_tot_u_1h}/{len(a_tot_all)})")
                 break
+                
+        # Nowe rynki z dokumentu (2ndH Unders, Team Unders)
+        # 2nd Half Unders
+        h_dom['2H_Total'] = pd.to_numeric(h_dom['Total_Goals'], errors='coerce').fillna(0) - h_dom['HT_Total']
+        a_wyj['2H_Total'] = pd.to_numeric(a_wyj['Total_Goals'], errors='coerce').fillna(0) - a_wyj['HT_Total']
+        
+        for line in [3.5, 4.5]:
+             h_u_2h = sum(h_dom['2H_Total'] < line)
+             a_u_2h = sum(a_wyj['2H_Total'] < line)
+             prob_u_2h = (h_u_2h/len(h_dom) + a_u_2h/len(a_wyj)) / 2
+             if prob_u_2h >= PROG_UNDER:
+                builder_blocks_code.append(f"2H_U{line}")
+                block_probabilities.append(prob_u_2h)
+                arg_blocks.append(f"2H_U{line} (D: {h_u_2h}/{len(h_dom)}, W: {a_u_2h}/{len(a_wyj)})")
+                break
+                
+        # Team Unders (Home & Away)
+        for t_code, t_df, t_goals_col, opp_code, opp_df, opp_goals_col in [("H", h_dom, "FTHG", "A", a_wyj, "FTAG")]:
+            for line in [2.5, 3.5, 4.5]:
+                t_u = sum(t_df[t_goals_col] < line)
+                opp_u = sum(opp_df[opp_goals_col] < line)
+                prob_t_u = (t_u/len(t_df) + opp_u/len(opp_df)) / 2
+                if prob_t_u >= PROG_UNDER:
+                    builder_blocks_code.append(f"{t_code}U{line}")
+                    block_probabilities.append(prob_t_u)
+                    arg_blocks.append(f"{t_code}U{line} (D: {t_u}/{len(t_df)}, W: {opp_u}/{len(opp_df)})")
+                    break
+        
+        for t_code, t_df, t_goals_col, opp_code, opp_df, opp_goals_col in [("A", a_wyj, "FTAG", "H", h_dom, "FTHG")]:
+             for line in [2.5, 3.5, 4.5]:
+                t_u = sum(t_df[t_goals_col] < line)
+                opp_u = sum(opp_df[opp_goals_col] < line)
+                prob_t_u = (t_u/len(t_df) + opp_u/len(opp_df)) / 2
+                if prob_t_u >= PROG_UNDER:
+                    builder_blocks_code.append(f"{t_code}U{line}")
+                    block_probabilities.append(prob_t_u)
+                    arg_blocks.append(f"{t_code}U{line} (D: {opp_u}/{len(opp_df)}, W: {t_u}/{len(t_df)})")
+                    break
 
         if len(builder_blocks_code) >= MIN_BLOKOW:
             final_builder_safety = round(np.mean(block_probabilities) * 100, 1)
@@ -682,7 +738,6 @@ def add_pred(match_id, termin, date, time, league, home, away, engine, typ, kurs
             prob_1_6 = (h_16/len(h_dom) + a_16/len(a_wyj)) / 2
             
             if prob_1_5 >= 0.90 or prob_1_6 >= 0.90:
-                # Zamiana formatu
                 typ_kod, pewnosc, hc, ac, htc, atc = ("O0.5+U5.5", prob_1_5, h_15, a_15, h_tot_15, a_tot_15) if prob_1_5 >= 0.90 else ("O0.5+U6.5", prob_1_6, h_16, a_16, h_tot_16, a_tot_16)
                 est_odd = round(1.0 + (((1/pewnosc) - 1.0) / 1.5), 2)
                 
