@@ -476,7 +476,7 @@ if not fixtures_clean.empty and not valid_matches.empty:
 # ==========================================================
 all_generated_predictions = []
 
-# Pełny słownik bazowych kursów (Kotwice) uwzględniający rynki połówkowe i drużynowe
+# Pełny słownik bazowych kursów, w tym wprowadzające asymetrię połowy i drużyny (Ultra-Safe)
 KOTWICE_KURSOWE = {
     'O0.5': 1.03, 'U3.5': 1.31, 'U4.5': 1.1, 'U5.5': 1.02, 'U6.5': 1.01,
     'HT_U1.5': 1.42, 'HT_U2.5': 1.09, 'HT_U3.5': 1.01, 'HT_U4.5': 1.01,
@@ -501,13 +501,16 @@ def add_pred(match_id, termin, date, time, league, home, away, engine, typ, kurs
     except:
         kurs_bazowy = 1.05
 
+    is_anchor = False
+
     # Inteligentna logika naśladująca narzuty krzyżowe bukmacherów dla zakładów BetBuilder
     if engine == "BetBuilder Pro":
         skladniki = typ_k.split("+")
         kursy_skladowe = [KOTWICE_KURSOWE.get(sk.strip(), 1.05) for sk in skladniki]
         kursy_skladowe.sort(reverse=True)
         
-        # Wyznaczanie dynamicznego mnożnika (tzw. minimum leg multiplier)
+        # Wyznaczanie dynamicznego mnożnika (tzw. minimum leg multiplier) 
+        # Im dłuższa taśma bezpiecznych zdarzeń, tym wyższą marżę krzyżową ładuje bukmacher.
         min_multiplier = 1.04
         if len(kursy_skladowe) == 3: min_multiplier = 1.05
         elif len(kursy_skladowe) == 4: min_multiplier = 1.06
@@ -520,23 +523,28 @@ def add_pred(match_id, termin, date, time, league, home, away, engine, typ, kurs
         kurs_docelowy = round(laczny_kurs, 2)
         
     elif "+" in typ_k and "O0.5+U" not in typ_k: 
+        # Zdarzenia takie jak kombinacje Corners Pro (np. HC_U6.5+AC_U5.5)
         skladniki = typ_k.split("+")
         laczny_kurs = 1.0
         for sk in skladniki:
             laczny_kurs *= KOTWICE_KURSOWE.get(sk.strip(), 1.05)
+        # Typowa redukcja ze względu na korelację stochastyczną dla tych rynków
         kurs_docelowy = round(max(1.05, laczny_kurs * 0.90), 2)
         
     else:
+        # Zwykłe zdarzenia lub Multigol definiowany bezpośrednio w Kotwicach (np. O0.5+U5.5)
         if typ_k in KOTWICE_KURSOWE:
             kurs_docelowy = KOTWICE_KURSOWE[typ_k]
+            is_anchor = True
         else:
             kurs_docelowy = kurs_bazowy
-            
-            # KOREKTA MATEMATYCZNA DLA KURSÓW (Zaniżenie zawyżonego ryzyka)
-            if kurs_docelowy >= 1.50:
-                kurs_docelowy = round(kurs_docelowy * 0.95, 2)
-            elif 1.20 <= kurs_docelowy < 1.50:
-                kurs_docelowy = round(kurs_docelowy * 0.975, 2)
+
+    # KOREKTA MATEMATYCZNA DLA KURSÓW WYLICZONYCH (Zaniżenie zawyżonego ryzyka)
+    if not is_anchor:
+        if kurs_docelowy >= 1.50:
+            kurs_docelowy = round(kurs_docelowy * 0.95, 2)
+        elif 1.20 <= kurs_docelowy < 1.50:
+            kurs_docelowy = round(kurs_docelowy * 0.975, 2)
 
     # Bezwzględny Floor Limit
     if kurs_docelowy < 1.015:
@@ -758,13 +766,13 @@ for idx, row in fixtures_clean.iterrows():
             prob_1_6 = (h_16/len(h_dom) + a_16/len(a_wyj)) / 2
             
             if prob_1_5 >= 0.90 or prob_1_6 >= 0.90:
-                typ_kod, pewnosc, hc, ac, htc, atc = ("O0.5+U5.5", prob_1_5, h_15, a_15, h_tot_15, a_tot_15) if prob_1_5 >= 0.90 else ("O0.5+U6.5", prob_1_6, h_16, a_16, h_tot_16, a_tot_16)
+                typ_kod, pewnosc, hc, ac, htc, atc = ("MG_1-5", prob_1_5, h_15, a_15, h_tot_15, a_tot_15) if prob_1_5 >= 0.90 else ("MG_1-6", prob_1_6, h_16, a_16, h_tot_16, a_tot_16)
                 est_odd = round(1.0 + (((1/pewnosc) - 1.0) / 1.5), 2)
                 
                 h_scores = ", ".join([f"{int(m['FTHG'])}:{int(m['FTAG'])}" for _, m in h_tot_all.head(3).iterrows()])
                 a_scores = ", ".join([f"{int(m['FTHG'])}:{int(m['FTAG'])}" for _, m in a_tot_all.head(3).iterrows()])
                 
-                arg = f"Regresja po anomalii (Wyniki Gosp ost. 3: {h_scores} | Gość ost. 3: {a_scores}). Historycznie MG pokryte u Gosp: {hc}/{len(h_dom)} (Ogół: {htc}/{len(h_tot_all)}), u Gości: {ac}/{len(a_wyj)} (Ogół: {atc}/{len(a_tot_all)})."
+                arg = f"Regresja po anomalii (Wyniki Gosp ost. 3: {h_scores} | Gość ost. 3: {a_scores}). Historycznie {typ_kod} wchodzi u Gosp: {hc}/{len(h_dom)} (Ogół: {htc}/{len(h_tot_all)}), u Gości: {ac}/{len(a_wyj)} (Ogół: {atc}/{len(a_tot_all)})."
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Multigol", typ_kod, "", round(pewnosc*100, 1), round(est_odd, 2), arg)
 
     # ----------------------------------------------------
@@ -943,6 +951,7 @@ for idx, row in fixtures_clean.iterrows():
             arg = f"Anomalia underowa. Średnia sezonu obu ekip: {round(season_avg, 2)}. Ost. 2 mecze: tylko {round(last_2_avg, 2)} goli. Oczekiwane przełamanie."
             add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Anomalies", "O1.5", "", 85.0, round(est_odd, 2), arg)
 
+
 # ==========================================================
 # 7. SYSTEM ŚLEDZENIA SKUTECZNOŚCI I YIELDU (BACKTESTER)
 # ==========================================================
@@ -953,7 +962,7 @@ creds = Credentials.from_service_account_file("credentials.json", scopes=scope) 
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
-# Dodano kolumny Wyslij_AKO oraz Jednostki dla Kuponów
+# Dodano kolumny Wyslij_AKO oraz Jednostki dla Kuponów w sposób rygorystyczny
 cols_all_pred = ["Match_ID", "Zagrane", "Wyslij_AKO", "Kupon_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 cols_historia = ["Match_ID", "Zagrane", "Kupon_ID", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 
@@ -978,22 +987,23 @@ if not df_all_predictions.empty:
     consensus_counts = df_all_predictions.groupby('Match_ID').size().to_dict()
     df_all_predictions['Consensus_Score'] = df_all_predictions['Match_ID'].map(consensus_counts)
     
-    df_all_predictions['Zagrane'] = ""
-    df_all_predictions['Wyslij_AKO'] = ""
-    df_all_predictions['Kupon_ID'] = ""
-    df_all_predictions['Status'] = "W OCZEKIWANIU"
-    df_all_predictions['Profit'] = ""
-    df_all_predictions['Yield_Wplyw'] = ""
-    
-    # Próba pobrania starych checkboxów Wyslij_AKO przed zresetowaniem pliku
+    # Próba pobrania starych checkboxów Wyslij_AKO przed nadpisaniem
+    map_wyslij = {}
     try:
         old_all_ws = spreadsheet.worksheet("All_Predictions").get_all_records()
         if old_all_ws:
             old_all_df = pd.DataFrame(old_all_ws)
             if 'Wyslij_AKO' in old_all_df.columns:
                 map_wyslij = dict(zip(old_all_df['Match_ID'].astype(str) + old_all_df['Typ'].astype(str), old_all_df['Wyslij_AKO']))
-                df_all_predictions['Wyslij_AKO'] = (df_all_predictions['Match_ID'] + df_all_predictions['Typ']).map(map_wyslij).fillna("")
     except: pass
+    
+    df_all_predictions['Wyslij_AKO'] = (df_all_predictions['Match_ID'] + df_all_predictions['Typ']).map(map_wyslij).fillna("")
+    
+    df_all_predictions['Zagrane'] = ""
+    df_all_predictions['Kupon_ID'] = ""
+    df_all_predictions['Status'] = "W OCZEKIWANIU"
+    df_all_predictions['Profit'] = ""
+    df_all_predictions['Yield_Wplyw'] = ""
 
     for col in cols_all_pred:
         if col not in df_all_predictions.columns:
