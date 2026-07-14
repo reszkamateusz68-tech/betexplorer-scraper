@@ -8,7 +8,7 @@ from google.oauth2.service_account import Credentials
 # ==========================================
 # KONFIGURACJA FINANSOWA I API
 # ==========================================
-WARTOSC_JEDNOSTKI_PLN = 100.0  # 1j = 100 PLN
+WARTOSC_JEDNOSTKI_PLN = 100.0  # Ustaw ile PLN to 1 jednostka (np. 100.0)
 PODATEK_BUKMACHERSKI = 0.88    # Legalni bukmacherzy w PL (12% podatku od stawki)
 
 # ==========================================
@@ -22,8 +22,8 @@ SZABLON_NOWY = """
 {mecze}───────────────
 📊 <b>Podsumowanie Kuponu:</b>
 📈 Łączny kurs: {kurs}
-💰 Stawka: {stawka_j}j ({stawka_pln} PLN)
-💸 Czysty zysk: +{zysk_j}j (+{zysk_pln} PLN po odliczeniu podatku)
+💰 Stawka: {stawka_j}j ({stawka_pln} PLN przy 1j={wartosc_j}zł)
+💸 Do wygrania: +{zysk_j}j (+{zysk_pln} PLN po odliczeniu podatku)
 """
 
 SZABLON_WYGRANA = """
@@ -33,7 +33,7 @@ SZABLON_WYGRANA = """
 ───────────────
 {mecze}───────────────
 📈 Łączny kurs: {kurs}
-💰 Wygrana na czysto: +{zysk_j}j (+{zysk_pln} PLN)
+💰 Wygrana: +{zysk_j}j (+{zysk_pln} PLN po odliczeniu podatku)
 """
 
 SZABLON_PRZEGRANA = """
@@ -113,13 +113,14 @@ if 'Wyslij_AKO' in df_pred.columns:
                 kurs=f"{kurs_ako:.2f}",
                 stawka_j=stawka_j,
                 stawka_pln=stawka_pln,
+                wartosc_j=int(WARTOSC_JEDNOSTKI_PLN),
                 zysk_j=zysk_j,
                 zysk_pln=zysk_pln
             )
             
             send_telegram(wiadomosc)
             
-        # Odznaczanie po wysłaniu w All_Predictions
+        # Oznaczanie kuponów jako wysłane
         komorki_do_odznaczenia = []
         ws_pred_data = ws_pred.get_all_values()
         idx_wyslij = ws_pred_data[0].index("Wyslij_AKO")
@@ -135,12 +136,10 @@ if 'Wyslij_AKO' in df_pred.columns:
 # ==========================================
 # 2. WYSYŁKA PODSUMOWAŃ ROZLICZONYCH KUPONÓW
 # ==========================================
-# Upewniamy się, że kolumna sterująca powiadomieniami istnieje w Kupony_AKO
+# Gwarancja istnienia kolumny powiadomień
 if 'Telegram_Status' not in df_ako.columns:
     df_ako['Telegram_Status'] = ""
-    # Aktualizacja arkusza o nową kolumnę
     ws_ako.update([df_ako.columns.values.tolist()] + df_ako.fillna("").values.tolist())
-    print("Dodano kolumnę 'Telegram_Status' do zakładki Kupony_AKO.")
 
 do_podsumowania = df_ako[
     (df_ako['Status_AKO'].isin(['WYGRANA', 'PRZEGRANA'])) & 
@@ -167,7 +166,7 @@ if not do_podsumowania.empty:
             status_meczu = str(m.get('Status', '')).upper()
             if status_meczu == "WYGRANA": emoji = "🟢"
             elif status_meczu == "PRZEGRANA": emoji = "🔴"
-            else: emoji = "⚪" # Zwrot / Inne
+            else: emoji = "⚪" # Zwroty, odwołane mecze, inne zdarzenia techniczne
             
             lista_meczow_txt += f"{emoji} {m['Gospodarz']} - {m['Gość']} | Typ: <b>{m['Typ']}</b>\n"
         
@@ -194,7 +193,6 @@ if not do_podsumowania.empty:
             
         send_telegram(wiadomosc)
         
-        # Odszukaj wiersz w arkuszu i przygotuj do aktualizacji statusu
         for r_idx, row in enumerate(ws_ako_data):
             if row[idx_kupon] == kupon_id:
                 komorki_ako_do_aktualizacji.append(gspread.Cell(row=r_idx+1, col=idx_tel_status+1, value="WYSŁANO"))
