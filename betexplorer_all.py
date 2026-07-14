@@ -476,85 +476,12 @@ if not fixtures_clean.empty and not valid_matches.empty:
 # ==========================================================
 all_generated_predictions = []
 
-# Pełny słownik bazowych kursów, w tym wprowadzające asymetrię połowy i drużyny (Ultra-Safe)
-KOTWICE_KURSOWE = {
-    'O0.5': 1.03, 'U3.5': 1.31, 'U4.5': 1.1, 'U5.5': 1.02, 'U6.5': 1.01,
-    'HT_U1.5': 1.42, 'HT_U2.5': 1.09, 'HT_U3.5': 1.01, 'HT_U4.5': 1.01,
-    '2H_U3.5': 1.02, '2H_U4.5': 1.01,
-    'O0.5+U5.5': 1.09, 'O0.5+U6.5': 1.05,
-    'C_U8.5': 2.78, 'C_U9.5': 2.02, 'C_U10.5': 1.59, 'C_U11.5': 1.33,
-    'C_U12.5': 1.17, 'C_U13.5': 1.07, 'C_U14.5': 1.01, 
-    'HC_U4.5': 2.59, 'HC_U5.5': 1.75, 'HC_U6.5': 1.35, 'HC_U7.5': 1.14, 'HC_U8.5': 1.03,
-    'AC_U4.5': 1.74, 'AC_U5.5': 1.32, 'AC_U6.5': 1.11, 'AC_U7.5': 1.01, 'AC_U8.5': 1.01, 
-    'HC_O4.5': 1.44, 'AC_O4.5': 1.98, 
-    'HU2.5': 1.12, 'HU3.5': 1.01, 'HU4.5': 1.01,
-    'AU2.5': 1.12, 'AU3.5': 1.01, 'AU4.5': 1.01,
-    'S_1': 1.34, 'ST_1': 1.64
-}
-
 def add_pred(match_id, termin, date, time, league, home, away, engine, typ, kurs_rynek, szansa, kurs_szac, arg):
-    typ_k = str(typ).strip()
-    
-    # Bezpieczne łapanie kursu jako liczby
-    try:
-        kurs_bazowy = float(str(kurs_szac).replace(',', '.'))
-    except:
-        kurs_bazowy = 1.05
-
-    is_anchor = False
-
-    # Inteligentna logika naśladująca narzuty krzyżowe bukmacherów dla zakładów BetBuilder
-    if engine == "BetBuilder Pro":
-        skladniki = typ_k.split("+")
-        kursy_skladowe = [KOTWICE_KURSOWE.get(sk.strip(), 1.05) for sk in skladniki]
-        kursy_skladowe.sort(reverse=True)
-        
-        # Wyznaczanie dynamicznego mnożnika (tzw. minimum leg multiplier) 
-        # Im dłuższa taśma bezpiecznych zdarzeń, tym wyższą marżę krzyżową ładuje bukmacher.
-        min_multiplier = 1.04
-        if len(kursy_skladowe) == 3: min_multiplier = 1.05
-        elif len(kursy_skladowe) == 4: min_multiplier = 1.06
-        elif len(kursy_skladowe) >= 5: min_multiplier = 1.07
-        
-        laczny_kurs = kursy_skladowe[0] if kursy_skladowe else 1.0
-        for k in kursy_skladowe[1:]:
-            laczny_kurs *= max(k, min_multiplier)
-            
-        kurs_docelowy = round(laczny_kurs, 2)
-        
-    elif "+" in typ_k and "O0.5+U" not in typ_k: 
-        # Zdarzenia takie jak kombinacje Corners Pro (np. HC_U6.5+AC_U5.5)
-        skladniki = typ_k.split("+")
-        laczny_kurs = 1.0
-        for sk in skladniki:
-            laczny_kurs *= KOTWICE_KURSOWE.get(sk.strip(), 1.05)
-        # Typowa redukcja ze względu na korelację stochastyczną dla tych rynków
-        kurs_docelowy = round(max(1.05, laczny_kurs * 0.90), 2)
-        
-    else:
-        # Zwykłe zdarzenia lub Multigol definiowany bezpośrednio w Kotwicach (np. O0.5+U5.5)
-        if typ_k in KOTWICE_KURSOWE:
-            kurs_docelowy = KOTWICE_KURSOWE[typ_k]
-            is_anchor = True
-        else:
-            kurs_docelowy = kurs_bazowy
-
-    # KOREKTA MATEMATYCZNA DLA KURSÓW WYLICZONYCH (Zaniżenie zawyżonego ryzyka)
-    if not is_anchor:
-        if kurs_docelowy >= 1.50:
-            kurs_docelowy = round(kurs_docelowy * 0.95, 2)
-        elif 1.20 <= kurs_docelowy < 1.50:
-            kurs_docelowy = round(kurs_docelowy * 0.975, 2)
-
-    # Bezwzględny Floor Limit
-    if kurs_docelowy < 1.015:
-        kurs_docelowy = 1.01
-
     all_generated_predictions.append({
-        "Match_ID": match_id, "Zagrane": "", "Wyslij_AKO": "", "Kupon_ID": "", "Termin": termin, "Data": date, "Godzina": time, "Liga": league, 
+        "Match_ID": match_id, "Termin": termin, "Data": date, "Godzina": time, "Liga": league, 
         "Gospodarz": home, "Gość": away, "Engine": engine, "Typ": typ, 
         "Kurs_Rynek": str(kurs_rynek) if pd.notna(kurs_rynek) and str(kurs_rynek).strip() not in ["", "-", "nan"] else "",
-        "Szansa": szansa, "Kurs_Szac": kurs_docelowy, "Argumentacja": arg
+        "Szansa": szansa, "Kurs_Szac": kurs_szac, "Argumentacja": arg
     })
 
 print("Uruchamiam Modele Predykcyjne...")
@@ -613,14 +540,7 @@ for idx, row in fixtures_clean.iterrows():
         else: typ_kod, final_prob = "X2", min(prob_x2, 0.95)
 
         if final_prob >= 0.70:
-            try:
-                o1 = float(str(o1_raw).replace(',','.'))
-                ox = float(str(ox_raw).replace(',','.'))
-                o2 = float(str(o2_raw).replace(',','.'))
-                if typ_kod == "1X": fair_odd = round((o1 * ox) / (o1 + ox), 2)
-                else: fair_odd = round((o2 * ox) / (o2 + ox), 2)
-            except:
-                fair_odd = round(1 / final_prob, 2)
+            fair_odd = round((1 / final_prob) * 0.93, 2)
             
             if typ_kod == "1X":
                 h_1x_c = sum(h_dom['FTHG'] >= h_dom['FTAG'])
@@ -692,7 +612,7 @@ for idx, row in fixtures_clean.iterrows():
                 arg_blocks.append(f"U{line} (D: {h_u}/{len(h_dom)}, W: {a_u}/{len(a_wyj)} | Ogół Gosp: {h_tot_u}/{len(h_tot_all)}, Gość: {a_tot_u}/{len(a_tot_all)})")
                 break
 
-        for line in [1.5, 2.5, 3.5, 4.5]:
+        for line in [1.5, 2.5]:
             h_u_1h = sum(h_dom['HT_Total'] < line)
             a_u_1h = sum(a_wyj['HT_Total'] < line)
             h_tot_u_1h = sum(h_tot_all['HT_Total'] < line)
@@ -703,41 +623,6 @@ for idx, row in fixtures_clean.iterrows():
                 block_probabilities.append(prob_u_1h)
                 arg_blocks.append(f"HT_U{line} (D: {h_u_1h}/{len(h_dom)}, W: {a_u_1h}/{len(a_wyj)} | Ogół Gosp: {h_tot_u_1h}/{len(h_tot_all)}, Gość: {a_tot_u_1h}/{len(a_tot_all)})")
                 break
-                
-        h_dom['2H_Total'] = pd.to_numeric(h_dom['Total_Goals'], errors='coerce').fillna(0) - h_dom['HT_Total']
-        a_wyj['2H_Total'] = pd.to_numeric(a_wyj['Total_Goals'], errors='coerce').fillna(0) - a_wyj['HT_Total']
-        
-        for line in [3.5, 4.5]:
-             h_u_2h = sum(h_dom['2H_Total'] < line)
-             a_u_2h = sum(a_wyj['2H_Total'] < line)
-             prob_u_2h = (h_u_2h/len(h_dom) + a_u_2h/len(a_wyj)) / 2
-             if prob_u_2h >= PROG_UNDER:
-                builder_blocks_code.append(f"2H_U{line}")
-                block_probabilities.append(prob_u_2h)
-                arg_blocks.append(f"2H_U{line} (D: {h_u_2h}/{len(h_dom)}, W: {a_u_2h}/{len(a_wyj)})")
-                break
-                
-        for t_code, t_df, t_goals_col, opp_code, opp_df, opp_goals_col in [("H", h_dom, "FTHG", "A", a_wyj, "FTAG")]:
-            for line in [2.5, 3.5, 4.5]:
-                t_u = sum(t_df[t_goals_col] < line)
-                opp_u = sum(opp_df[opp_goals_col] < line)
-                prob_t_u = (t_u/len(t_df) + opp_u/len(opp_df)) / 2
-                if prob_t_u >= PROG_UNDER:
-                    builder_blocks_code.append(f"{t_code}U{line}")
-                    block_probabilities.append(prob_t_u)
-                    arg_blocks.append(f"{t_code}U{line} (D: {t_u}/{len(t_df)}, W: {opp_u}/{len(opp_df)})")
-                    break
-        
-        for t_code, t_df, t_goals_col, opp_code, opp_df, opp_goals_col in [("A", a_wyj, "FTAG", "H", h_dom, "FTHG")]:
-             for line in [2.5, 3.5, 4.5]:
-                t_u = sum(t_df[t_goals_col] < line)
-                opp_u = sum(opp_df[opp_goals_col] < line)
-                prob_t_u = (t_u/len(t_df) + opp_u/len(opp_df)) / 2
-                if prob_t_u >= PROG_UNDER:
-                    builder_blocks_code.append(f"{t_code}U{line}")
-                    block_probabilities.append(prob_t_u)
-                    arg_blocks.append(f"{t_code}U{line} (D: {opp_u}/{len(opp_df)}, W: {t_u}/{len(t_df)})")
-                    break
 
         if len(builder_blocks_code) >= MIN_BLOKOW:
             final_builder_safety = round(np.mean(block_probabilities) * 100, 1)
@@ -791,7 +676,7 @@ for idx, row in fixtures_clean.iterrows():
         max_h = h_dom_c['Corners_H'].max()
         max_a = a_wyj_c['Corners_A'].max()
 
-        c_blocks_code, c_probs, c_odds, arg_c = [], [], [], []
+        c_blocks_code, c_probs, c_odds, arg_c = [], [], []
 
         for line in [8.5, 9.5, 10.5, 11.5, 12.5, 13.5, 14.5]:
             if line > max_match - 2:
@@ -962,8 +847,8 @@ creds = Credentials.from_service_account_file("credentials.json", scopes=scope) 
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
-# Dodano kolumny Wyslij_AKO oraz Jednostki dla Kuponów w sposób rygorystyczny
-cols_all_pred = ["Match_ID", "Zagrane", "Wyslij_AKO", "Kupon_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
+# OSTATECZNE DEFINICJE KOLUMN DLA OBU TABEL
+cols_all_pred = ["Match_ID", "Zagrane", "Kupon_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 cols_historia = ["Match_ID", "Zagrane", "Kupon_ID", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 
 def global_recalc_przedzial(row):
@@ -986,18 +871,6 @@ if not df_all_predictions.empty:
     df_all_predictions['Przedzial_Kursowy'] = df_all_predictions.apply(global_recalc_przedzial, axis=1)
     consensus_counts = df_all_predictions.groupby('Match_ID').size().to_dict()
     df_all_predictions['Consensus_Score'] = df_all_predictions['Match_ID'].map(consensus_counts)
-    
-    # Próba pobrania starych checkboxów Wyslij_AKO przed nadpisaniem
-    map_wyslij = {}
-    try:
-        old_all_ws = spreadsheet.worksheet("All_Predictions").get_all_records()
-        if old_all_ws:
-            old_all_df = pd.DataFrame(old_all_ws)
-            if 'Wyslij_AKO' in old_all_df.columns:
-                map_wyslij = dict(zip(old_all_df['Match_ID'].astype(str) + old_all_df['Typ'].astype(str), old_all_df['Wyslij_AKO']))
-    except: pass
-    
-    df_all_predictions['Wyslij_AKO'] = (df_all_predictions['Match_ID'] + df_all_predictions['Typ']).map(map_wyslij).fillna("")
     
     df_all_predictions['Zagrane'] = ""
     df_all_predictions['Kupon_ID'] = ""
@@ -1028,8 +901,9 @@ df_historia = df_historia[cols_historia]
 
 if not df_all_predictions.empty:
     nowe_typy_df = df_all_predictions.copy()
-    if 'Termin' in nowe_typy_df.columns: nowe_typy_df = nowe_typy_df.drop(columns=['Termin'])
-    if 'Wyslij_AKO' in nowe_typy_df.columns: nowe_typy_df = nowe_typy_df.drop(columns=['Wyslij_AKO'])
+    
+    if 'Termin' in nowe_typy_df.columns:
+        nowe_typy_df = nowe_typy_df.drop(columns=['Termin'])
         
     for col in cols_historia:
         if col not in nowe_typy_df.columns:
@@ -1159,7 +1033,7 @@ if not df_historia.empty and not results_clean.empty:
                     except: pass
 
 # --- 7b. SYSTEM ŚLEDZENIA AKO (PORTFEL REALNY) - PEŁNA KONTROLA ---
-cols_ako = ["Kupon_ID", "Data_Zawarcia", "Mecze_Skrot", "Liczba_Zdarzen", "Kurs_AKO", "Stawka", "Jednostki", "Status_AKO", "Wygrana_Brutto", "Profit_Netto", "Wyslij_Podsumowanie"]
+cols_ako = ["Kupon_ID", "Data_Zawarcia", "Mecze_Skrot", "Liczba_Zdarzen", "Kurs_AKO", "Stawka", "Status_AKO", "Wygrana_Brutto", "Profit_Netto"]
 try:
     ws_ako = spreadsheet.worksheet("Kupony_AKO")
     ako_dane = ws_ako.get_all_values()
@@ -1174,16 +1048,21 @@ for col in cols_ako:
     if col not in df_ako.columns: df_ako[col] = ""
 df_ako = df_ako[cols_ako]
 
-user_stakes, user_units, user_pods = {}, {}, {}
+user_stakes = {}
 if not df_ako.empty:
     user_stakes = dict(zip(df_ako['Kupon_ID'], df_ako['Stawka']))
-    user_units = dict(zip(df_ako['Kupon_ID'], df_ako['Jednostki']))
-    user_pods = dict(zip(df_ako['Kupon_ID'], df_ako['Wyslij_Podsumowanie']))
 
 if not df_historia.empty:
     mask_zagrane = df_historia['Zagrane'].astype(str).str.upper().isin(['TRUE', 'PRAWDA', '1', 'TAK'])
     mask_bez_id = df_historia['Kupon_ID'].astype(str).str.strip() == ""
-    mask_do_zaktualizowania = mask_zagrane & mask_bez_id
+    
+    # KRYTYCZNA POPRAWKA: Blokada zgrupowania historii (Efekt odkurzacza). Grupujemy tylko dzisiejsze lub przyszłe mecze.
+    try:
+        mask_dzis = pd.to_datetime(df_historia['Data'], errors='coerce').dt.date >= datetime.now().date()
+    except:
+        mask_dzis = pd.Series([True]*len(df_historia))
+        
+    mask_do_zaktualizowania = mask_zagrane & mask_bez_id & mask_dzis
     
     if mask_do_zaktualizowania.any():
         nowy_id = f"AKO_{datetime.now().strftime('%y%m%d_%H%M')}"
@@ -1199,9 +1078,13 @@ if not df_historia.empty:
         
         kurs_ako = 1.0
         for _, r in group.iterrows():
-            kr = str(r['Kurs_Rynek']).replace(',', '.')
-            if kr in ["", "-", "nan", "None"]: kr = str(r['Kurs_Szac']).replace(',', '.')
-            try: kurs_ako *= float(kr)
+            kr_str = str(r['Kurs_Rynek']).replace(',', '.').strip()
+            if kr_str in ["", "-", "nan", "None"]: kr_str = str(r['Kurs_Szac']).replace(',', '.').strip()
+            try: 
+                kr = float(kr_str)
+                # DETEKTOR LITERÓWEK: Jeśli ktoś wpisze "85.0" w Kurs_Rynek lub "125" zamiast "1.25", skrypt go pomija
+                if kr > 20.0: kr = 1.0
+                kurs_ako *= kr
             except: pass
         kurs_ako = round(kurs_ako, 2)
         
@@ -1216,16 +1099,14 @@ if not df_historia.empty:
         try: stawka = float(stawka_str)
         except: stawka = 100.0
         
-        jednostki_str = str(user_units.get(k_id, "1j"))
-        wyslij_pod = str(user_pods.get(k_id, ""))
-        
-        wygrana_brutto = round(kurs_ako * stawka, 2) if status_ako == "WYGRANA" else 0.0
+        # UJEDNOLICENIE MATEMATYKI PODATKOWEJ (Zgodnie z Telegramem)
+        wygrana_brutto = round(kurs_ako * stawka * 0.88, 2) if status_ako == "WYGRANA" else 0.0
         
         if status_ako == "WYGRANA": profit = round(wygrana_brutto - stawka, 2)
         elif status_ako == "PRZEGRANA": profit = -stawka
         else: profit = 0.0
         
-        nowe_ako_list.append([k_id, data_zawarcia, mecze_skrot, liczba_zdarzen, kurs_ako, stawka, jednostki_str, status_ako, wygrana_brutto, profit, wyslij_pod])
+        nowe_ako_list.append([k_id, data_zawarcia, mecze_skrot, liczba_zdarzen, kurs_ako, stawka, status_ako, wygrana_brutto, profit])
 
     df_ako = pd.DataFrame(nowe_ako_list, columns=cols_ako)
     df_ako = df_ako.sort_values(by="Data_Zawarcia", ascending=False)
@@ -1344,5 +1225,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Wersja z ujednoliconymi schematami dla Looker Studio gotowa.")
+print("Wersja stabilna 3.0 (Naprawione ID, Podatki i Zabezpieczenia).")
 print("=" * 60)
