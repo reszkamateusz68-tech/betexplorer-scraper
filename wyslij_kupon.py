@@ -10,7 +10,7 @@ from google.oauth2.service_account import Credentials
 # Zmienne w klamrach {} zostaną automatycznie podmienione.
 # ==========================================
 SZABLON_NOWEGO_KUPONU = """
-🚨 <b>NOWY KUPON ALGGORYTMU</b> 🚨
+🚨 <b>NOWY KUPON ALGORYTMU</b> 🚨
 🆔 <i>{id_kuponu}</i>
 
 {mecze}
@@ -20,8 +20,13 @@ SZABLON_NOWEGO_KUPONU = """
 """
 # ==========================================
 
+# Inteligentna autoryzacja - działa i lokalnie i na GitHub Actions
 scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-creds = Credentials.from_service_account_info(json.loads(os.environ["GOOGLE_CREDENTIALS"]), scopes=scope)
+if os.path.exists("credentials.json"):
+    creds = Credentials.from_service_account_file("credentials.json", scopes=scope)
+else:
+    creds = Credentials.from_service_account_info(json.loads(os.environ["GOOGLE_CREDENTIALS"]), scopes=scope)
+
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
