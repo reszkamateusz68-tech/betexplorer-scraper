@@ -7,10 +7,10 @@ from google.oauth2.service_account import Credentials
 
 # ==========================================
 # KONFIGURACJA WIADOMOŚCI - MOŻESZ DOWOLNIE ZMIENIAĆ!
-# Zmienne w klamrach {} zostaną podmienione przez skrypt.
+# Zmienne w klamrach {} zostaną automatycznie podmienione.
 # ==========================================
 SZABLON_NOWEGO_KUPONU = """
-🚨 <b>NOWY KUPON SYSTEMOWY</b> 🚨
+🚨 <b>NOWY KUPON ALGGORYTMU</b> 🚨
 🆔 <i>{id_kuponu}</i>
 
 {mecze}
