@@ -676,7 +676,8 @@ for idx, row in fixtures_clean.iterrows():
         max_h = h_dom_c['Corners_H'].max()
         max_a = a_wyj_c['Corners_A'].max()
 
-        c_blocks_code, c_probs, c_odds, arg_c = [], [], []
+        # POPRAWIONA LINIJKA: Dodano czwartą pustą listę []
+        c_blocks_code, c_probs, c_odds, arg_c = [], [], [], []
 
         for line in [8.5, 9.5, 10.5, 11.5, 12.5, 13.5, 14.5]:
             if line > max_match - 2:
