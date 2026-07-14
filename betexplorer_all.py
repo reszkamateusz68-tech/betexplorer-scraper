@@ -169,7 +169,7 @@ try:
         slownik = json.load(f)
         mapowanie_fd = slownik.get("FootballData_To_BetExplorer", {})
         mapowanie_ss = slownik.get("SoccerStats_To_BetExplorer", {})
-except Exception: mapowanie_fd, mapowanie_ss = {}
+except Exception: mapowanie_fd, mapowanie_ss = {}, {}
 
 # ==========================================
 # 1. POBIERANIE Z BETEXPLORER 
@@ -962,10 +962,11 @@ creds = Credentials.from_service_account_file("credentials.json", scopes=scope) 
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
-# OSTATECZNE DEFINICJE KOLUMN DLA OBU TABEL
+# OSTATECZNE DEFINICJE KOLUMN DLA OBU TABEL (ZABEZPIECZENIE PRZED AWARIAMI I TELEGRAM)
 cols_all_pred = ["Match_ID", "Zagrane", "Wyslij_AKO", "Kupon_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 cols_historia = ["Match_ID", "Zagrane", "Kupon_ID", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 
+# --- GLOBALNA REKALKULACJA PRZEDZIAŁÓW KURSOWYCH ---
 def global_recalc_przedzial(row):
     try:
         ks_str = str(row['Kurs_Szac']).replace(',', '.').strip()
@@ -981,29 +982,36 @@ def global_recalc_przedzial(row):
 
 df_all_predictions = pd.DataFrame(all_generated_predictions)
 
+# --- WYLICZANIE SILNIKA KONSENSUSU I UZUPEŁNIANIE STRUKTURY DLA ALL_PREDICTIONS ---
 if not df_all_predictions.empty:
     df_all_predictions['Kurs_Rynek'] = df_all_predictions['Kurs_Rynek'].astype(str)
     df_all_predictions['Przedzial_Kursowy'] = df_all_predictions.apply(global_recalc_przedzial, axis=1)
     consensus_counts = df_all_predictions.groupby('Match_ID').size().to_dict()
     df_all_predictions['Consensus_Score'] = df_all_predictions['Match_ID'].map(consensus_counts)
     
-    # Próba pobrania starych checkboxów Wyslij_AKO przed nadpisaniem
-    map_wyslij = {}
+    # Próba pobrania starych checkboxów Wyslij_AKO oraz Zagrane przed nadpisaniem
+    map_wyslij, map_zagrane, map_kupon = {}, {}, {}
     try:
         old_all_ws = spreadsheet.worksheet("All_Predictions").get_all_records()
         if old_all_ws:
             old_all_df = pd.DataFrame(old_all_ws)
             if 'Wyslij_AKO' in old_all_df.columns:
                 map_wyslij = dict(zip(old_all_df['Match_ID'].astype(str) + old_all_df['Typ'].astype(str), old_all_df['Wyslij_AKO']))
+            if 'Zagrane' in old_all_df.columns:
+                map_zagrane = dict(zip(old_all_df['Match_ID'].astype(str) + old_all_df['Typ'].astype(str), old_all_df['Zagrane']))
+            if 'Kupon_ID' in old_all_df.columns:
+                map_kupon = dict(zip(old_all_df['Match_ID'].astype(str) + old_all_df['Typ'].astype(str), old_all_df['Kupon_ID']))
     except: pass
     
     df_all_predictions['Wyslij_AKO'] = (df_all_predictions['Match_ID'] + df_all_predictions['Typ']).map(map_wyslij).fillna("")
-    df_all_predictions['Zagrane'] = ""
-    df_all_predictions['Kupon_ID'] = ""
+    df_all_predictions['Zagrane'] = (df_all_predictions['Match_ID'] + df_all_predictions['Typ']).map(map_zagrane).fillna("")
+    df_all_predictions['Kupon_ID'] = (df_all_predictions['Match_ID'] + df_all_predictions['Typ']).map(map_kupon).fillna("")
+    
     df_all_predictions['Status'] = "W OCZEKIWANIU"
     df_all_predictions['Profit'] = ""
     df_all_predictions['Yield_Wplyw'] = ""
 
+    # Upewnienie się, że zachowany jest sztywny układ dla Looker Studio
     for col in cols_all_pred:
         if col not in df_all_predictions.columns:
             df_all_predictions[col] = ""
@@ -1021,6 +1029,7 @@ except gspread.exceptions.WorksheetNotFound:
     ws_historia = spreadsheet.worksheet("Historia_Typow")
     df_historia = pd.DataFrame(columns=cols_historia)
 
+# Twarde dobudowanie kolumn dla Historii Typów
 for col in cols_historia:
     if col not in df_historia.columns: df_historia[col] = ""
 df_historia = df_historia[cols_historia]
@@ -1028,9 +1037,10 @@ df_historia = df_historia[cols_historia]
 if not df_all_predictions.empty:
     nowe_typy_df = df_all_predictions.copy()
     
+    # Czyszczenie kolumn, które występują w cols_all_pred, ale których nie chcemy nadpisywać z automatu w Historii
     if 'Termin' in nowe_typy_df.columns:
         nowe_typy_df = nowe_typy_df.drop(columns=['Termin'])
-    if 'Wyslij_AKO' in nowe_typy_df.columns: 
+    if 'Wyslij_AKO' in nowe_typy_df.columns:
         nowe_typy_df = nowe_typy_df.drop(columns=['Wyslij_AKO'])
         
     for col in cols_historia:
@@ -1161,7 +1171,7 @@ if not df_historia.empty and not results_clean.empty:
                     except: pass
 
 # --- 7b. SYSTEM ŚLEDZENIA AKO (PORTFEL REALNY) - PEŁNA KONTROLA ---
-cols_ako = ["Kupon_ID", "Data_Zawarcia", "Mecze_Skrot", "Liczba_Zdarzen", "Kurs_AKO", "Stawka", "Jednostki", "Status_AKO", "Wygrana_Brutto", "Profit_Netto", "Wyslij_Podsumowanie"]
+cols_ako = ["Kupon_ID", "Data_Zawarcia", "Mecze_Skrot", "Liczba_Zdarzen", "Kurs_AKO", "Stawka", "Jednostki", "Status_AKO", "Wygrana_Brutto", "Profit_Netto", "Wyslij_Podsumowanie", "Telegram_Status"]
 try:
     ws_ako = spreadsheet.worksheet("Kupony_AKO")
     ako_dane = ws_ako.get_all_values()
@@ -1176,11 +1186,12 @@ for col in cols_ako:
     if col not in df_ako.columns: df_ako[col] = ""
 df_ako = df_ako[cols_ako]
 
-user_stakes, user_units, user_pods = {}, {}, {}
+user_stakes, user_units, user_pods, user_tel_stat = {}, {}, {}, {}
 if not df_ako.empty:
     user_stakes = dict(zip(df_ako['Kupon_ID'], df_ako['Stawka']))
-    user_units = dict(zip(df_ako['Kupon_ID'], df_ako['Jednostki']))
-    user_pods = dict(zip(df_ako['Kupon_ID'], df_ako['Wyslij_Podsumowanie']))
+    user_units = dict(zip(df_ako['Kupon_ID'], df_ako.get('Jednostki', ['1j']*len(df_ako))))
+    user_pods = dict(zip(df_ako['Kupon_ID'], df_ako.get('Wyslij_Podsumowanie', ['']*len(df_ako))))
+    user_tel_stat = dict(zip(df_ako['Kupon_ID'], df_ako.get('Telegram_Status', ['']*len(df_ako))))
 
 if not df_historia.empty:
     mask_zagrane = df_historia['Zagrane'].astype(str).str.upper().isin(['TRUE', 'PRAWDA', '1', 'TAK'])
@@ -1231,15 +1242,16 @@ if not df_historia.empty:
         
         jednostki_str = str(user_units.get(k_id, "1j"))
         wyslij_pod = str(user_pods.get(k_id, ""))
+        tel_status = str(user_tel_stat.get(k_id, ""))
         
-        # Ujednolicenie matematyki podatkowej
+        # Ujednolicenie matematyki podatkowej (odliczenie 12%)
         wygrana_brutto = round(kurs_ako * stawka * 0.88, 2) if status_ako == "WYGRANA" else 0.0
         
         if status_ako == "WYGRANA": profit = round(wygrana_brutto - stawka, 2)
         elif status_ako == "PRZEGRANA": profit = -stawka
         else: profit = 0.0
         
-        nowe_ako_list.append([k_id, data_zawarcia, mecze_skrot, liczba_zdarzen, kurs_ako, stawka, jednostki_str, status_ako, wygrana_brutto, profit, wyslij_pod])
+        nowe_ako_list.append([k_id, data_zawarcia, mecze_skrot, liczba_zdarzen, kurs_ako, stawka, jednostki_str, status_ako, wygrana_brutto, profit, wyslij_pod, tel_status])
 
     df_ako = pd.DataFrame(nowe_ako_list, columns=cols_ako)
     df_ako = df_ako.sort_values(by="Data_Zawarcia", ascending=False)
@@ -1358,5 +1370,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Wersja Ultimate - Kalibracja, Podatki, Zabezpieczenia i Telegram.")
+print("Wersja Ultimate - Kalibracja, Podatki, Zabezpieczenia i Telegram gotowa.")
 print("=" * 60)
