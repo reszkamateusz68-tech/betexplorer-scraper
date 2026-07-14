@@ -1,102 +1,81 @@
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-import requests
+import os
 import json
+import requests
+import gspread
 import pandas as pd
+from google.oauth2.service_account import Credentials
 
-# --- KONFIGURACJA TELEGRAM ---
-TELEGRAM_TOKEN = "8905463018:AAHcBKiPhOwlV7T2FEKSOWvvVmzfUBujpYM"
-TELEGRAM_CHAT_ID = "-1003525389019"
-LINK_DASHBOARDU = "https://datastudio.google.com/embed/reporting/99821c8b-06f8-4b96-b5d4-2384420e2b75/page/p_oeivgwp54d"
+# ==========================================
+# KONFIGURACJA WIADOMOŚCI - MOŻESZ DOWOLNIE ZMIENIAĆ!
+# Zmienne w klamrach {} zostaną podmienione przez skrypt.
+# ==========================================
+SZABLON_NOWEGO_KUPONU = """
+🚨 <b>NOWY KUPON SYSTEMOWY</b> 🚨
+🆔 <i>{id_kuponu}</i>
 
-# --- KONFIGURACJA GOOGLE SHEETS ---
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+{mecze}
+
+📊 <b>Łączny Kurs:</b> {kurs}
+💰 <b>Stawka:</b> {stawka} PLN ({jednostki})
+"""
+# ==========================================
+
+scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+creds = Credentials.from_service_account_info(json.loads(os.environ["GOOGLE_CREDENTIALS"]), scopes=scope)
 client = gspread.authorize(creds)
+spreadsheet = client.open("BetExplorer")
 
-arkusz_historia = client.open("BetExplorer").worksheet("Historia_Typow")
-arkusz_ako = client.open("BetExplorer").worksheet("Kupony_AKO")
+# Pobranie Kuponów
+ws_ako = spreadsheet.worksheet("Kupony_AKO")
+dane_ako = ws_ako.get_all_values()
+df_ako = pd.DataFrame(dane_ako[1:], columns=dane_ako[0])
 
-def podsumuj_i_wyslij():
-    print("Łączę z Google Sheets w poszukiwaniu rozliczonych kuponów do wysłania...")
-    
-    # Pobieramy dane jako DataFrame dla łatwiejszego filtrowania
-    dane_ako_raw = arkusz_ako.get_all_records()
-    df_historia = pd.DataFrame(arkusz_historia.get_all_records())
-    
-    wiersze_do_wyczyszczenia = []
-    kupony_do_wyslania = []
+# Pobranie Predykcji, żeby zobaczyć co wysłać
+ws_pred = spreadsheet.worksheet("All_Predictions")
+dane_pred = ws_pred.get_all_values()
+df_pred = pd.DataFrame(dane_pred[1:], columns=dane_pred[0])
 
-    for index, wiersz in enumerate(dane_ako_raw):
-        wartosc_pola = str(wiersz.get('Wyslij_Podsumowanie', '')).upper()
-        if wartosc_pola == 'TRUE' or wartosc_pola == 'X':
-            kupony_do_wyslania.append(wiersz)
-            wiersze_do_wyczyszczenia.append(index + 2) # +2 ze względu na nagłówek
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-    if not kupony_do_wyslania:
-        print("Nie zaznaczono żadnego kuponu do podsumowania.")
-        return
+def send_telegram(text):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
+    requests.post(url, json=payload)
 
-    for kupon in kupony_do_wyslania:
-        kupon_id = str(kupon.get('Kupon_ID', ''))
-        status_ako = str(kupon.get('Status_AKO', ''))
-        kurs_ako = str(kupon.get('Kurs_AKO', ''))
-        profit_netto = str(kupon.get('Profit_Netto', ''))
+do_wysylki = df_pred[df_pred['Wyslij_AKO'].astype(str).str.upper().isin(['TRUE', 'TAK', '1'])]
+
+if not do_wysylki.empty:
+    for kupon_id in do_wysylki['Kupon_ID'].unique():
+        kupon_data = df_ako[df_ako['Kupon_ID'] == kupon_id]
+        if kupon_data.empty: continue
         
-        # Pobieramy mecze składowe dla tego konkretnego kuponu
-        mecze_składowe = df_historia[df_historia['Kupon_ID'] == kupon_id]
+        rekord = kupon_data.iloc[0]
+        mecze_df = do_wysylki[do_wysylki['Kupon_ID'] == kupon_id]
         
-        if status_ako == "WYGRANA":
-            naglowek = "✅ <b>KUPON ZAKOŃCZONY ZYSKIEM!</b> ✅"
-            profit_tekst = f"💰 Czysty zysk: <b>+{profit_netto} PLN</b>"
-        elif status_ako == "PRZEGRANA":
-            naglowek = "❌ <b>KUPON ZAKOŃCZONY PORAŻKĄ</b> ❌"
-            profit_tekst = f"📉 Strata: <b>{profit_netto} PLN</b>"
-        else:
-            naglowek = "⏳ <b>KUPON W GRZE / ZWROT</b> ⏳"
-            profit_tekst = f"Saldo: <b>{profit_netto} PLN</b>"
-
-        lista_meczow_tekst = ""
-        for _, mecz in mecze_składowe.iterrows():
-            gosp = mecz.get('Gospodarz', '')
-            gosc = mecz.get('Gość', '')
-            typ = mecz.get('Typ', '')
-            status_meczu = mecz.get('Status', '')
+        lista_meczow_txt = ""
+        for _, m in mecze_df.iterrows():
+            lista_meczow_txt += f"⚽️ {m['Gospodarz']} vs {m['Gość']}\n👉 Typ: <b>{m['Typ']}</b> (Kurs: {m['Kurs_Szac']})\n"
             
-            if status_meczu == "WYGRANA":
-                ikona = "🟢"
-            elif status_meczu == "PRZEGRANA":
-                ikona = "🔴"
-            else:
-                ikona = "⚪"
-                
-            lista_meczow_tekst += f"{ikona} {gosp} - {gosc} | Typ: {typ}\n"
-
-        wiadomosc = f"""{naglowek}\n\n<b>ID Kuponu:</b> #{kupon_id.split('_')[-1]}\n───────────────\n{lista_meczow_tekst}───────────────\n📈 Łączny kurs: <b>{kurs_ako}</b>\n{profit_tekst}"""
-
-        klawiatura = {"inline_keyboard": [[{"text": "📊 Zobacz pełną historię systemu", "url": LINK_DASHBOARDU}]]}
-        payload = {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": wiadomosc,
-            "parse_mode": "HTML",
-            "reply_markup": json.dumps(klawiatura)
-        }
-
-        # Wysyłka
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        resp = requests.post(url, data=payload)
+        wiadomosc = SZABLON_NOWEGO_KUPONU.format(
+            id_kuponu=kupon_id,
+            mecze=lista_meczow_txt,
+            kurs=rekord['Kurs_AKO'],
+            stawka=rekord['Stawka'],
+            jednostki=rekord['Jednostki'] if 'Jednostki' in rekord else "1j"
+        )
         
-        if resp.status_code == 200:
-            print(f"✅ Podsumowanie dla {kupon_id} wysłane!")
-        else:
-            print(f"❌ Błąd wysyłki dla {kupon_id}: {resp.text}")
-
-    # Czyszczenie checkboxów
-    if wiersze_do_wyczyszczenia:
-        kolumna_wyslij_index = len(dane_ako_raw[0])
-        for wiersz_idx in wiersze_do_wyczyszczenia:
-            arkusz_ako.update_cell(wiersz_idx, kolumna_wyslij_index, "FALSE")
-        print("🧹 Odznaczono checkboxy wysyłki w arkuszu Kupony_AKO.")
-
-if __name__ == "__main__":
-    podsumuj_i_wyslij()
+        send_telegram(wiadomosc)
+        
+    # Odznaczanie po wysłaniu
+    komorki_do_odznaczenia = []
+    ws_pred_data = ws_pred.get_all_values()
+    idx_wyslij = ws_pred_data[0].index("Wyslij_AKO")
+    
+    for r_idx, row in enumerate(ws_pred_data):
+        if row[idx_wyslij].upper() in ['TRUE', 'TAK', '1']:
+            komorki_do_odznaczenia.append(gspread.Cell(row=r_idx+1, col=idx_wyslij+1, value="FALSE"))
+            
+    if komorki_do_odznaczenia:
+        ws_pred.update_cells(komorki_do_odznaczenia)
+    print("Wysłano powiadomienia i odznaczono checkboxy.")
