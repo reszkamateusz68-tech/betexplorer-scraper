@@ -179,11 +179,11 @@ def calc_betbuilder_odd(probs, correlation_factor=0.65, margin=0.92):
 # ==========================================================
 # FUNKCJE ANALITYCZNE I KONTROLA RYZYKA (TIME DECAY & BAYES)
 # ==========================================================
-def get_weighted_stats(df, target_col, condition_lambda, prior_prob=0.5, alpha=1.5):
+def get_weighted_stats(df, target_col, condition_lambda, prior_prob=0.5, alpha=2.0):
     """
-    Zwraca: (ważone_prawdopodobieństwo, trafienia_suma, ogólna_liczba_meczów, is_smoothed)
-    Wagi faworyzują najświeższe 10 spotkań (1.0), następnie spadają (0.9, 0.8, 0.7).
-    Moduł zawiera zabezpieczenie (Wygładzanie Bayesowskie) zapobiegające anomaliom małej próby.
+    Zwraca: (ważone_prawdopodobieństwo, trafienia_suma, ogólna_liczba_meczów, czy_użyto_bayes)
+    Wagi faworyzują najświeższe 10 spotkań. Wbudowano Wygładzanie Bayesowskie, które 
+    koryguje ekstremalne szanse z próbek mniejszych niż 12 meczów.
     """
     if df.empty or target_col not in df.columns: 
         return 0.0, 0, 0, False
@@ -213,7 +213,6 @@ def get_weighted_stats(df, target_col, condition_lambda, prior_prob=0.5, alpha=1
     raw_prob = weighted_hits / total_weight if total_weight > 0 else 0.0
     
     is_smoothed = False
-    # Interwencja statystyczna jeśli rozmiar próby jest mniejszy niż 12 meczów
     if 0 < total_len < 12 and alpha > 0:
         prob = (weighted_hits + (alpha * prior_prob)) / (total_weight + alpha)
         is_smoothed = True
@@ -221,7 +220,6 @@ def get_weighted_stats(df, target_col, condition_lambda, prior_prob=0.5, alpha=1
         prob = raw_prob
         
     return prob, total_hits, total_len, is_smoothed
-
 
 scrape_report = []
 try:
@@ -532,7 +530,7 @@ if not fixtures_clean.empty and not valid_matches.empty:
         df_h2h = pd.DataFrame(h2h_list, columns=h2h_cols)
 
 # ==========================================================
-# 6. SILNIKI PREDYKCYJNE (Z centralizowanym Generatorem Ryzyka)
+# 6. SILNIKI PREDYKCYJNE (Z Centralnym Generatorem Ryzyka)
 # ==========================================================
 all_generated_predictions = []
 
@@ -587,8 +585,8 @@ def add_pred(match_id, termin, date, time, league, home, away, engine, typ, kurs
         elif 1.20 <= kurs_docelowy < 1.50: kurs_docelowy = round(kurs_docelowy * 0.975, 2)
     if kurs_docelowy < 1.015: kurs_docelowy = 1.01
 
-    # --- Centralny Silnik Wyceny Ryzyka ---
-    prob_decimal = szansa / 100.0
+    # --- Centralny Silnik Wyceny Ryzyka i Etykiet ---
+    prob_decimal = float(szansa) / 100.0
     if prob_decimal >= 0.95 and kurs_docelowy >= 1.20:
         risk_tag = "👑 GOLDEN PICK"
     elif prob_decimal >= 0.95:
@@ -626,6 +624,7 @@ for idx, row in fixtures_clean.iterrows():
         try: buk_odd_1x = round(1 / ((1 / float(str(o1_raw).replace(',','.'))) + (1 / float(str(ox_raw).replace(',','.')))), 2)
         except: pass
 
+    # --- WSPÓLNE BAZY DO ANALIZ ---
     h_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == home) | (valid_matches['Away'] == home))].copy()
     a_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == away) | (valid_matches['Away'] == away))].copy()
     h_dom = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Home'] == home)].copy()
@@ -713,7 +712,7 @@ for idx, row in fixtures_clean.iterrows():
     # 6b. GOAL LINE PRO
     # ----------------------------------------------------
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
-        # Under
+        # Analiza dla linii Under
         for line in [2.5, 3.5, 4.5, 5.5, 6.5]:
             prob_h_u, h_th, h_tl, h_sm = get_weighted_stats(h_dom, 'Total_Goals', lambda x: pd.notna(x) and x < line, prior_prob=0.75)
             prob_a_u, a_th, a_tl, a_sm = get_weighted_stats(a_wyj, 'Total_Goals', lambda x: pd.notna(x) and x < line, prior_prob=0.75)
@@ -722,11 +721,11 @@ for idx, row in fixtures_clean.iterrows():
             
             avg_prob_u = (prob_h_u + prob_a_u) / 2
             if avg_prob_u >= 0.70:
-                arg = f"U{line} | Ważone szanse: Gosp {round(prob_h_u*100)}%, Gość {round(prob_a_u*100)}%. Trafienia (dom/wyj): Gosp {h_th}/{h_tl}, Gość {a_th}/{a_tl}. Ogółem: Gosp {ht_th}/{ht_tl}, Gość {at_th}/{at_tl}."
+                arg = f"U{line} | Ważone szanse: Gosp {round(prob_h_u*100)}%, Gość {round(prob_a_u*100)}%. Trafienia (dom/wyj): Gosp {h_th}/{h_tl}, Gość {a_th}/{a_tl}. Ogółem (wszystkie mecze): Gosp {ht_th}/{ht_tl}, Gość {at_th}/{at_tl}."
                 if h_sm or a_sm: arg += " | ⚠️ Wygładzenie Bayesowskie (Mała próba)"
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Line Pro", f"U{line}", "", round(avg_prob_u*100, 1), KOTWICE_KURSOWE.get(f"U{line}", 1.10), arg)
 
-        # Over
+        # Analiza dla linii Over
         for line in [0.5, 1.5, 2.5]:
             prob_h_o, h_th, h_tl, h_sm = get_weighted_stats(h_dom, 'Total_Goals', lambda x: pd.notna(x) and x > line, prior_prob=0.30)
             prob_a_o, a_th, a_tl, a_sm = get_weighted_stats(a_wyj, 'Total_Goals', lambda x: pd.notna(x) and x > line, prior_prob=0.30)
@@ -735,7 +734,7 @@ for idx, row in fixtures_clean.iterrows():
             
             avg_prob_o = (prob_h_o + prob_a_o) / 2
             if avg_prob_o >= 0.70: 
-                arg = f"O{line} | Ważone szanse: Gosp {round(prob_h_o*100)}%, Gość {round(prob_a_o*100)}%. Trafienia (dom/wyj): Gosp {h_th}/{h_tl}, Gość {a_th}/{a_tl}. Ogółem: Gosp {ht_th}/{ht_tl}, Gość {at_th}/{at_tl}."
+                arg = f"O{line} | Ważone szanse: Gosp {round(prob_h_o*100)}%, Gość {round(prob_a_o*100)}%. Trafienia (dom/wyj): Gosp {h_th}/{h_tl}, Gość {a_th}/{a_tl}. Ogółem (wszystkie mecze): Gosp {ht_th}/{ht_tl}, Gość {at_th}/{at_tl}."
                 if h_sm or a_sm: arg += " | ⚠️ Wygładzenie Bayesowskie (Mała próba)"
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Line Pro", f"O{line}", "", round(avg_prob_o*100, 1), KOTWICE_KURSOWE.get(f"O{line}", 1.10), arg)
 
@@ -971,7 +970,12 @@ for idx, row in fixtures_clean.iterrows():
             h_tot_s_win = sum((h_tot_all_s['Team_S'] - h_tot_all_s['Opp_S']) > 0)
             a_tot_s_lose = sum((a_tot_all_s['Team_S'] - a_tot_all_s['Opp_S']) < 0)
             
-            prob_h_s = ((h_s_win/len(h_dom_s))*4.0 + (a_s_lose/len(a_wyj_s))*1.0) / 5.0
+            h_len = len(h_dom_s)
+            a_len = len(a_wyj_s)
+            
+            h_s_win_prob = (h_s_win + 1.5 * 0.6) / (h_len + 1.5) if h_len < 12 else h_s_win / h_len
+            a_s_lose_prob = (a_s_lose + 1.5 * 0.6) / (a_len + 1.5) if a_len < 12 else a_s_lose / a_len
+            prob_h_s = (h_s_win_prob * 4.0 + a_s_lose_prob * 1.0) / 5.0
 
             h_st_win = sum((h_dom_s['ShotsTarget_H'] - h_dom_s['ShotsTarget_A']) > 0)
             a_st_lose = sum((a_wyj_s['ShotsTarget_A'] - a_wyj_s['ShotsTarget_H']) < 0)
@@ -984,16 +988,22 @@ for idx, row in fixtures_clean.iterrows():
             h_tot_st_win = sum((h_tot_all_s['Team_ST'] - h_tot_all_s['Opp_ST']) > 0)
             a_tot_st_lose = sum((a_tot_all_s['Team_ST'] - a_tot_all_s['Opp_ST']) < 0)
             
-            prob_h_st = ((h_st_win/len(h_dom_s))*4.0 + (a_st_lose/len(a_wyj_s))*1.0) / 5.0
+            h_st_win_prob = (h_st_win + 1.5 * 0.6) / (h_len + 1.5) if h_len < 12 else h_st_win / h_len
+            a_st_lose_prob = (a_st_lose + 1.5 * 0.6) / (a_len + 1.5) if a_len < 12 else a_st_lose / a_len
+            prob_h_st = (h_st_win_prob * 4.0 + a_st_lose_prob * 1.0) / 5.0
+            
+            any_sm = h_len < 12 or a_len < 12
 
             if prob_h_s > 0.80:
                 est_odd_s = round(1.0 + (((1/prob_h_s) - 1.0) / 1.5), 2) if prob_h_s < 1.0 else 1.01
-                arg = f"Strzały Ogółem: Gosp win u siebie {h_s_win}/{len(h_dom_s)} (Ogółem: {h_tot_s_win}/{len(h_tot_all_s)}). Gość lose wyjazd {a_s_lose}/{len(a_wyj_s)} (Ogółem: {a_tot_s_lose}/{len(a_tot_all_s)})."
+                arg = f"Strzały Ogółem: Gosp win u siebie {h_s_win}/{h_len} (Ogółem: {h_tot_s_win}/{len(h_tot_all_s)}). Gość lose wyjazd {a_s_lose}/{a_len} (Ogółem: {a_tot_s_lose}/{len(a_tot_all_s)})."
+                if any_sm: arg += " | ⚠️ Wygładzenie Bayesowskie (Mała próba)"
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Shots Pro", "S_1", "", round(prob_h_s*100, 1), round(est_odd_s, 2), arg)
             
             if prob_h_st > 0.80:
                 est_odd_st = round(1.0 + (((1/prob_h_st) - 1.0) / 1.5), 2) if prob_h_st < 1.0 else 1.01
-                arg = f"Strzały Celne: Gosp win u siebie {h_st_win}/{len(h_dom_s)} (Ogółem: {h_tot_st_win}/{len(h_tot_all_s)}). Gość lose wyjazd {a_st_lose}/{len(a_wyj_s)} (Ogółem: {a_tot_st_lose}/{len(a_tot_all_s)})."
+                arg = f"Strzały Celne: Gosp win u siebie {h_st_win}/{h_len} (Ogółem: {h_tot_st_win}/{len(h_tot_all_s)}). Gość lose wyjazd {a_st_lose}/{a_len} (Ogółem: {a_tot_st_lose}/{len(a_tot_all_s)})."
+                if any_sm: arg += " | ⚠️ Wygładzenie Bayesowskie (Mała próba)"
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Shots Pro", "ST_1", "", round(prob_h_st*100, 1), round(est_odd_st, 2), arg)
 
     # ----------------------------------------------------
@@ -1083,24 +1093,27 @@ cols_historia = ["Match_ID", "Zagrane", "Kupon_ID", "Data", "Godzina", "Liga", "
 
 df_all_predictions = pd.DataFrame(all_generated_predictions)
 
+# --- WYLICZANIE SILNIKA KONSENSUSU I UZUPEŁNIANIE STRUKTURY DLA ALL_PREDICTIONS ---
 if not df_all_predictions.empty:
     df_all_predictions['Kurs_Rynek'] = df_all_predictions['Kurs_Rynek'].astype(str)
     df_all_predictions['Przedzial_Kursowy'] = df_all_predictions.apply(global_recalc_przedzial, axis=1)
     consensus_counts = df_all_predictions.groupby('Match_ID').size().to_dict()
     df_all_predictions['Consensus_Score'] = df_all_predictions['Match_ID'].map(consensus_counts)
     
+    # UNIKALNY KLUCZ (Zabezpieczony w 100% przed duplikatami)
+    df_all_predictions['Unikalny_Klucz'] = df_all_predictions['Match_ID'].astype(str) + "_" + df_all_predictions['Engine'].astype(str) + "_" + df_all_predictions['Typ'].astype(str)
+    
     map_wyslij, map_zagrane, map_kupon = {}, {}, {}
     try:
         old_all_ws = spreadsheet.worksheet("All_Predictions").get_all_records()
         if old_all_ws:
             old_all_df = pd.DataFrame(old_all_ws)
-            old_all_df['Unikalny_Klucz'] = old_all_df['Match_ID'].astype(str) + old_all_df['Typ'].astype(str)
+            old_all_df['Unikalny_Klucz'] = old_all_df['Match_ID'].astype(str) + "_" + old_all_df['Engine'].astype(str) + "_" + old_all_df['Typ'].astype(str)
             if 'Wyslij_AKO' in old_all_df.columns: map_wyslij = dict(zip(old_all_df['Unikalny_Klucz'], old_all_df['Wyslij_AKO']))
             if 'Zagrane' in old_all_df.columns: map_zagrane = dict(zip(old_all_df['Unikalny_Klucz'], old_all_df['Zagrane']))
             if 'Kupon_ID' in old_all_df.columns: map_kupon = dict(zip(old_all_df['Unikalny_Klucz'], old_all_df['Kupon_ID']))
     except: pass
     
-    df_all_predictions['Unikalny_Klucz'] = df_all_predictions['Match_ID'].astype(str) + df_all_predictions['Typ'].astype(str)
     df_all_predictions['Wyslij_AKO'] = df_all_predictions['Unikalny_Klucz'].map(map_wyslij).fillna("")
     df_all_predictions['Zagrane'] = df_all_predictions['Unikalny_Klucz'].map(map_zagrane).fillna("")
     df_all_predictions['Kupon_ID'] = df_all_predictions['Unikalny_Klucz'].map(map_kupon).fillna("")
@@ -1139,9 +1152,10 @@ if not df_all_predictions.empty:
     nowe_typy_df = nowe_typy_df[cols_historia]
     
     if not df_historia.empty:
-        df_historia['Unikalny_Klucz'] = df_historia['Match_ID'] + df_historia['Engine'] + df_historia['Typ']
+        df_historia['Unikalny_Klucz'] = df_historia['Match_ID'].astype(str) + "_" + df_historia['Engine'].astype(str) + "_" + df_historia['Typ'].astype(str)
         df_historia = df_historia.drop_duplicates(subset=['Unikalny_Klucz'], keep='last')
-        nowe_typy_df['Unikalny_Klucz'] = nowe_typy_df['Match_ID'] + nowe_typy_df['Engine'] + nowe_typy_df['Typ']
+        
+        nowe_typy_df['Unikalny_Klucz'] = nowe_typy_df['Match_ID'].astype(str) + "_" + nowe_typy_df['Engine'].astype(str) + "_" + nowe_typy_df['Typ'].astype(str)
         
         w_oczek_mask = df_historia['Status'] == "W OCZEKIWANIU"
         if w_oczek_mask.any():
@@ -1151,6 +1165,8 @@ if not df_all_predictions.empty:
             map_kr = nowe_typy_df.set_index('Unikalny_Klucz')['Kurs_Rynek'].to_dict()
             map_przedzial = nowe_typy_df.set_index('Unikalny_Klucz')['Przedzial_Kursowy'].to_dict()
             map_consensus = nowe_typy_df.set_index('Unikalny_Klucz')['Consensus_Score'].to_dict()
+            map_kupon_upd = nowe_typy_df.set_index('Unikalny_Klucz')['Kupon_ID'].to_dict()
+            map_zagrane_upd = nowe_typy_df.set_index('Unikalny_Klucz')['Zagrane'].to_dict()
             
             for idx in df_historia[w_oczek_mask].index:
                 klucz = df_historia.at[idx, 'Unikalny_Klucz']
@@ -1163,6 +1179,15 @@ if not df_all_predictions.empty:
                     kr_val = map_kr.get(klucz, "")
                     if pd.notna(kr_val) and str(kr_val).strip() not in ["", "-"]:
                         df_historia.at[idx, 'Kurs_Rynek'] = str(kr_val)
+                        
+                    # Bezpieczna aktualizacja Kupon_ID z All_Predictions
+                    k_id_val = map_kupon_upd.get(klucz, "")
+                    if k_id_val and str(df_historia.at[idx, 'Kupon_ID']).strip() == "":
+                        df_historia.at[idx, 'Kupon_ID'] = str(k_id_val)
+                        
+                    zag_val = map_zagrane_upd.get(klucz, "")
+                    if zag_val:
+                        df_historia.at[idx, 'Zagrane'] = str(zag_val)
 
         do_dodania = nowe_typy_df[~nowe_typy_df['Unikalny_Klucz'].isin(df_historia['Unikalny_Klucz'])].copy()
         do_dodania = do_dodania.drop(columns=['Unikalny_Klucz'])
@@ -1283,24 +1308,21 @@ if not df_ako.empty:
     user_tel_stat = dict(zip(df_ako['Kupon_ID'], df_ako.get('Telegram_Status', ['']*len(df_ako))))
 
 if not df_historia.empty:
+    # Automatyczne nadawanie ID jeśli puste (jako fallback dla samego Zagrane=TRUE)
     mask_zagrane = df_historia['Zagrane'].astype(str).str.upper().isin(['TRUE', 'PRAWDA', '1', 'TAK'])
     mask_bez_id = df_historia['Kupon_ID'].astype(str).str.strip() == ""
-    
-    try: mask_dzis = pd.to_datetime(df_historia['Data'], errors='coerce').dt.date >= datetime.now().date()
-    except: mask_dzis = pd.Series([True]*len(df_historia))
-        
-    mask_do_zaktualizowania = mask_zagrane & mask_bez_id & mask_dzis
+    mask_do_zaktualizowania = mask_zagrane & mask_bez_id
     
     if mask_do_zaktualizowania.any():
         nowy_id = f"AKO_{datetime.now().strftime('%y%m%d_%H%M')}"
         df_historia.loc[mask_do_zaktualizowania, 'Kupon_ID'] = nowy_id
 
-    # ZAPISYWANIE WYGENEROWANEGO KUPON_ID Z POWROTEM DO ALL_PREDICTIONS
-    df_historia['Unikalny_Klucz'] = df_historia['Match_ID'].astype(str) + df_historia['Typ'].astype(str)
+    # CRITICAL FIX: ZAPISYWANIE WYGENEROWANEGO KUPON_ID Z POWROTEM DO ALL_PREDICTIONS
+    df_historia['Unikalny_Klucz'] = df_historia['Match_ID'].astype(str) + "_" + df_historia['Engine'].astype(str) + "_" + df_historia['Typ'].astype(str)
     hist_kupon_map = df_historia[df_historia['Kupon_ID'].astype(str).str.strip() != ""].set_index('Unikalny_Klucz')['Kupon_ID'].to_dict()
     
     if not df_all_predictions.empty:
-        df_all_predictions['Unikalny_Klucz'] = df_all_predictions['Match_ID'].astype(str) + df_all_predictions['Typ'].astype(str)
+        df_all_predictions['Unikalny_Klucz'] = df_all_predictions['Match_ID'].astype(str) + "_" + df_all_predictions['Engine'].astype(str) + "_" + df_all_predictions['Typ'].astype(str)
         df_all_predictions['Kupon_ID'] = df_all_predictions['Unikalny_Klucz'].map(hist_kupon_map).fillna(df_all_predictions['Kupon_ID'])
 
     nowe_ako_list = []
