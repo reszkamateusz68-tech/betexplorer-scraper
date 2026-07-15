@@ -3,6 +3,7 @@ import json
 import requests
 import gspread
 import pandas as pd
+from datetime import datetime
 from google.oauth2.service_account import Credentials
 
 # ==========================================
@@ -88,12 +89,41 @@ if 'Wyslij_AKO' in df_pred.columns:
     do_wysylki = df_pred[df_pred['Wyslij_AKO'].astype(str).str.upper().isin(['TRUE', 'TAK', '1'])]
     
     if not do_wysylki.empty:
-        print(f"Znaleziono {len(do_wysylki['Kupon_ID'].unique())} nowych kuponów do wysyłki.")
+        print(f"Znaleziono {len(do_wysylki)} wytypowanych wierszy do wysyłki.")
+        
+        # 1a. AUTOMATYCZNE GENEROWANIE KUPON_ID JEŚLI JEST PUSTE
+        # Ten blok sprawia, że wystarczy zaznaczyć Wyslij_AKO w arkuszu. Skrypt wygeneruje ID i wyśle telegram.
+        empty_mask = do_wysylki['Kupon_ID'].astype(str).str.strip() == ""
+        if empty_mask.any():
+            new_id = f"AKO_{datetime.now().strftime('%y%m%d_%H%M')}"
+            print(f"Automatyczne nadanie nowego Kupon_ID: {new_id} dla {empty_mask.sum()} meczów bez ID.")
+            df_pred.loc[empty_mask[empty_mask].index, 'Kupon_ID'] = new_id
+            do_wysylki.loc[empty_mask[empty_mask].index, 'Kupon_ID'] = new_id
+            
+            # Bezpieczny zapis z powrotem do Google Sheets bez psucia kluczy (szuka po Match_ID i Typ)
+            cells_to_update = []
+            ws_pred_data = ws_pred.get_all_values()
+            headers = ws_pred_data[0]
+            idx_kupon = headers.index("Kupon_ID")
+            idx_match = headers.index("Match_ID")
+            idx_typ = headers.index("Typ")
+            
+            new_id_map = {}
+            for _, r in do_wysylki[empty_mask].iterrows():
+                new_id_map[(str(r['Match_ID']), str(r['Typ']))] = new_id
+                
+            for r_idx, row in enumerate(ws_pred_data[1:], start=2):
+                key = (str(row[idx_match]), str(row[idx_typ]))
+                if key in new_id_map:
+                    cells_to_update.append(gspread.Cell(row=r_idx, col=idx_kupon+1, value=new_id))
+            
+            if cells_to_update:
+                ws_pred.update_cells(cells_to_update)
+
         wyslane_id = []
 
         for kupon_id in do_wysylki['Kupon_ID'].unique():
             if str(kupon_id).strip() == "": 
-                print("Ostrzeżenie: Próba wysyłki kuponu bez nadanego ID. Uruchom najpierw główny skrypt.")
                 continue
             
             kupon_data = df_ako[df_ako['Kupon_ID'] == kupon_id]
@@ -104,7 +134,8 @@ if 'Wyslij_AKO' in df_pred.columns:
 
             for _, m in mecze_df.iterrows():
                 lista_meczow_txt += f"⚽ {m['Gospodarz']} vs {m['Gość']}\n📅 {m['Data']} ⏰ {m['Godzina']} | 🎯 Typ: <b>{m['Typ']}</b> | 📈 {m['Kurs_Szac']}\n\n"
-                # Fallback w przypadku braku danych w Kupony_AKO
+                
+                # Zabezpieczone obliczanie kursu przed wysłaniem
                 try: 
                     k_str = str(m.get('Kurs_Rynek', '')).replace(',', '.')
                     if k_str in ["", "-", "nan", "None"]: k_str = str(m.get('Kurs_Szac', '1.0')).replace(',', '.')
@@ -114,7 +145,7 @@ if 'Wyslij_AKO' in df_pred.columns:
             
             dynamic_kurs = round(dynamic_kurs, 2)
 
-            # Pobieranie danych z Kupony_AKO lub z fallbacku
+            # Pobieranie danych z Kupony_AKO lub zastosowanie czystego wyliczenia (dla świeżo nadanego ID)
             if not kupon_data.empty:
                 rekord = kupon_data.iloc[0]
                 try: stawka_pln = float(str(rekord.get('Stawka', '100')).replace(',', '.'))
@@ -143,20 +174,20 @@ if 'Wyslij_AKO' in df_pred.columns:
             if send_telegram(wiadomosc):
                 wyslane_id.append(kupon_id)
             
-        # Oznaczanie tylko faktycznie wysłanych kuponów
+        # Oznaczanie wysłanych kuponów w Arkuszu na Wysłane (Wyslij_AKO = FALSE)
         if wyslane_id:
             komorki_do_odznaczenia = []
             ws_pred_data = ws_pred.get_all_values()
             idx_wyslij = ws_pred_data[0].index("Wyslij_AKO")
             idx_kupon = ws_pred_data[0].index("Kupon_ID")
             
-            for r_idx, row in enumerate(ws_pred_data):
+            for r_idx, row in enumerate(ws_pred_data[1:], start=2):
                 if row[idx_wyslij].upper() in ['TRUE', 'TAK', '1'] and row[idx_kupon] in wyslane_id:
-                    komorki_do_odznaczenia.append(gspread.Cell(row=r_idx+1, col=idx_wyslij+1, value="FALSE"))
+                    komorki_do_odznaczenia.append(gspread.Cell(row=r_idx, col=idx_wyslij+1, value="FALSE"))
                     
             if komorki_do_odznaczenia:
                 ws_pred.update_cells(komorki_do_odznaczenia)
-                print(f"Pomyślnie oznaczono {len(wyslane_id)} nowe kupony jako wysłane.")
+                print(f"Pomyślnie odznaczono {len(wyslane_id)} wysłane kupony w arkuszu.")
 
 # ==========================================
 # 2. WYSYŁKA PODSUMOWAŃ ROZLICZONYCH KUPONÓW
