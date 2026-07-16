@@ -9,12 +9,9 @@ from google.oauth2.service_account import Credentials
 # ==========================================
 # KONFIGURACJA FINANSOWA I API
 # ==========================================
-WARTOSC_JEDNOSTKI_PLN = 100.0  # Ustaw ile PLN to 1 jednostka (np. 100.0)
-PODATEK_BUKMACHERSKI = 0.88    # Legalni bukmacherzy w PL (12% podatku od stawki)
+WARTOSC_JEDNOSTKI_PLN = 100.0
+PODATEK_BUKMACHERSKI = 0.88
 
-# ==========================================
-# SZABLONY WIADOMOŚCI
-# ==========================================
 SZABLON_NOWY = """
 🔥 <b>PROPOZYCJA AKO</b> 🔥
 
@@ -48,14 +45,10 @@ SZABLON_PRZEGRANA = """
 """
 
 # ==========================================
-# INICJALIZACJA GOOGLE SHEETS
+# INICJALIZACJA
 # ==========================================
 scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-if os.path.exists("credentials.json"):
-    creds = Credentials.from_service_account_file("credentials.json", scopes=scope)
-else:
-    creds = Credentials.from_service_account_info(json.loads(os.environ["GOOGLE_CREDENTIALS"]), scopes=scope)
-
+creds = Credentials.from_service_account_file("credentials.json", scopes=scope) if os.path.exists("credentials.json") else Credentials.from_service_account_info(json.loads(os.environ["GOOGLE_CREDENTIALS"]), scopes=scope)
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
@@ -63,199 +56,93 @@ ws_pred = spreadsheet.worksheet("All_Predictions")
 ws_ako = spreadsheet.worksheet("Kupony_AKO")
 ws_hist = spreadsheet.worksheet("Historia_Typow")
 
+# Wczytanie danych z kluczami
 df_pred = pd.DataFrame(ws_pred.get_all_records())
 df_ako = pd.DataFrame(ws_ako.get_all_records())
 df_hist = pd.DataFrame(ws_hist.get_all_records())
+
+# Definicja unikalnego klucza (Match_ID + Typ)
+df_pred['Unikalny_Klucz'] = df_pred['Match_ID'].astype(str) + "_" + df_pred['Typ'].astype(str)
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 def send_telegram(text):
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Brak danych uwierzytelniających Telegram (Token / Chat_ID).")
-        return False
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return False
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
-    response = requests.post(url, json=payload)
-    if response.status_code != 200:
-        print(f"Błąd wysyłki Telegram: {response.text}")
-        return False
-    return True
+    return requests.post(url, json=payload).status_code == 200
 
 # ==========================================
 # 1. WYSYŁKA NOWYCH KUPONÓW
 # ==========================================
 if 'Wyslij_AKO' in df_pred.columns:
-    do_wysylki = df_pred[df_pred['Wyslij_AKO'].astype(str).str.upper().isin(['TRUE', 'TAK', '1'])]
+    # Pobierz tylko te zaznaczone do wysyłki
+    do_wysylki = df_pred[df_pred['Wyslij_AKO'].astype(str).str.upper().isin(['TRUE', 'TAK', '1'])].copy()
     
     if not do_wysylki.empty:
-        print(f"Znaleziono {len(do_wysylki)} wytypowanych wierszy do wysyłki.")
-        
-        # 1a. AUTOMATYCZNE GENEROWANIE KUPON_ID JEŚLI JEST PUSTE
-        # Ten blok sprawia, że wystarczy zaznaczyć Wyslij_AKO w arkuszu. Skrypt wygeneruje ID i wyśle telegram.
+        # Automatyczne nadanie Kupon_ID dla pustych wierszy
         empty_mask = do_wysylki['Kupon_ID'].astype(str).str.strip() == ""
         if empty_mask.any():
             new_id = f"AKO_{datetime.now().strftime('%y%m%d_%H%M')}"
-            print(f"Automatyczne nadanie nowego Kupon_ID: {new_id} dla {empty_mask.sum()} meczów bez ID.")
-            df_pred.loc[empty_mask[empty_mask].index, 'Kupon_ID'] = new_id
-            do_wysylki.loc[empty_mask[empty_mask].index, 'Kupon_ID'] = new_id
+            do_wysylki.loc[empty_mask, 'Kupon_ID'] = new_id
             
-            # Bezpieczny zapis z powrotem do Google Sheets bez psucia kluczy (szuka po Match_ID i Typ)
-            cells_to_update = []
-            ws_pred_data = ws_pred.get_all_values()
-            headers = ws_pred_data[0]
-            idx_kupon = headers.index("Kupon_ID")
-            idx_match = headers.index("Match_ID")
-            idx_typ = headers.index("Typ")
-            
-            new_id_map = {}
-            for _, r in do_wysylki[empty_mask].iterrows():
-                new_id_map[(str(r['Match_ID']), str(r['Typ']))] = new_id
-                
-            for r_idx, row in enumerate(ws_pred_data[1:], start=2):
-                key = (str(row[idx_match]), str(row[idx_typ]))
-                if key in new_id_map:
-                    cells_to_update.append(gspread.Cell(row=r_idx, col=idx_kupon+1, value=new_id))
-            
-            if cells_to_update:
-                ws_pred.update_cells(cells_to_update)
+            # Zapisz nowe ID do arkusza
+            cells = []
+            ws_data = ws_pred.get_all_values()
+            headers = ws_data[0]
+            for _, row in do_wysylki[empty_mask].iterrows():
+                # Szukanie wiersza w arkuszu po Match_ID i Typ
+                for r_idx, sheet_row in enumerate(ws_data[1:], start=2):
+                    if sheet_row[headers.index("Match_ID")] == row['Match_ID'] and sheet_row[headers.index("Typ")] == row['Typ']:
+                        cells.append(gspread.Cell(row=r_idx, col=headers.index("Kupon_ID")+1, value=new_id))
+            if cells: ws_pred.update_cells(cells)
 
         wyslane_id = []
-
+        # Przetwarzanie grup
         for kupon_id in do_wysylki['Kupon_ID'].unique():
-            if str(kupon_id).strip() == "": 
-                continue
-            
-            kupon_data = df_ako[df_ako['Kupon_ID'] == kupon_id]
             mecze_df = do_wysylki[do_wysylki['Kupon_ID'] == kupon_id]
             
             lista_meczow_txt = ""
             dynamic_kurs = 1.0
-
+            
             for _, m in mecze_df.iterrows():
                 lista_meczow_txt += f"⚽ {m['Gospodarz']} vs {m['Gość']}\n📅 {m['Data']} ⏰ {m['Godzina']} | 🎯 Typ: <b>{m['Typ']}</b> | 📈 {m['Kurs_Szac']}\n\n"
-                
-                # Zabezpieczone obliczanie kursu przed wysłaniem
                 try: 
                     k_str = str(m.get('Kurs_Rynek', '')).replace(',', '.')
                     if k_str in ["", "-", "nan", "None"]: k_str = str(m.get('Kurs_Szac', '1.0')).replace(',', '.')
                     k_val = float(k_str)
-                    if k_val < 20.0: dynamic_kurs *= k_val 
+                    dynamic_kurs *= k_val 
                 except: pass
             
             dynamic_kurs = round(dynamic_kurs, 2)
-
-            # Pobieranie danych z Kupony_AKO lub zastosowanie czystego wyliczenia (dla świeżo nadanego ID)
-            if not kupon_data.empty:
-                rekord = kupon_data.iloc[0]
-                try: stawka_pln = float(str(rekord.get('Stawka', '100')).replace(',', '.'))
-                except: stawka_pln = 100.0
-                try: kurs_ako = float(str(rekord.get('Kurs_AKO', str(dynamic_kurs))).replace(',', '.'))
-                except: kurs_ako = dynamic_kurs
-            else:
-                stawka_pln = 100.0
-                kurs_ako = dynamic_kurs
             
+            # Pobranie stawki
+            stawka_pln = 100.0
+            if not df_ako.empty and kupon_id in df_ako['Kupon_ID'].values:
+                row = df_ako[df_ako['Kupon_ID'] == kupon_id].iloc[0]
+                try: stawka_pln = float(str(row.get('Stawka', '100')).replace(',', '.'))
+                except: pass
+
             stawka_j = round(stawka_pln / WARTOSC_JEDNOSTKI_PLN, 2)
-            zysk_pln = round((stawka_pln * PODATEK_BUKMACHERSKI * kurs_ako) - stawka_pln, 2)
+            zysk_pln = round((stawka_pln * PODATEK_BUKMACHERSKI * dynamic_kurs) - stawka_pln, 2)
             zysk_j = round(zysk_pln / WARTOSC_JEDNOSTKI_PLN, 2)
             
             wiadomosc = SZABLON_NOWY.format(
-                id_kuponu=kupon_id,
-                mecze=lista_meczow_txt,
-                kurs=f"{kurs_ako:.2f}",
-                stawka_j=stawka_j,
-                stawka_pln=stawka_pln,
-                wartosc_j=int(WARTOSC_JEDNOSTKI_PLN),
-                zysk_j=zysk_j,
-                zysk_pln=zysk_pln
+                id_kuponu=kupon_id, mecze=lista_meczow_txt, kurs=f"{dynamic_kurs:.2f}",
+                stawka_j=stawka_j, stawka_pln=stawka_pln, wartosc_j=int(WARTOSC_JEDNOSTKI_PLN),
+                zysk_j=zysk_j, zysk_pln=zysk_pln
             )
             
             if send_telegram(wiadomosc):
                 wyslane_id.append(kupon_id)
-            
-        # Oznaczanie wysłanych kuponów w Arkuszu na Wysłane (Wyslij_AKO = FALSE)
+
+        # Odznaczenie wysłanych w arkuszu
         if wyslane_id:
-            komorki_do_odznaczenia = []
-            ws_pred_data = ws_pred.get_all_values()
-            idx_wyslij = ws_pred_data[0].index("Wyslij_AKO")
-            idx_kupon = ws_pred_data[0].index("Kupon_ID")
-            
-            for r_idx, row in enumerate(ws_pred_data[1:], start=2):
-                if row[idx_wyslij].upper() in ['TRUE', 'TAK', '1'] and row[idx_kupon] in wyslane_id:
-                    komorki_do_odznaczenia.append(gspread.Cell(row=r_idx, col=idx_wyslij+1, value="FALSE"))
-                    
-            if komorki_do_odznaczenia:
-                ws_pred.update_cells(komorki_do_odznaczenia)
-                print(f"Pomyślnie odznaczono {len(wyslane_id)} wysłane kupony w arkuszu.")
-
-# ==========================================
-# 2. WYSYŁKA PODSUMOWAŃ ROZLICZONYCH KUPONÓW
-# ==========================================
-if 'Telegram_Status' not in df_ako.columns:
-    df_ako['Telegram_Status'] = ""
-    ws_ako.update([df_ako.columns.values.tolist()] + df_ako.fillna("").values.tolist())
-
-if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
-    do_podsumowania = df_ako[
-        (df_ako['Status_AKO'].isin(['WYGRANA', 'PRZEGRANA'])) & 
-        (df_ako['Telegram_Status'] != 'WYSŁANO') &
-        (df_ako['Wyslij_Podsumowanie'].astype(str).str.upper().isin(['TRUE', 'TAK', '1']))
-    ]
-
-    if not do_podsumowania.empty:
-        print(f"Znaleziono {len(do_podsumowania)} rozliczonych kuponów do podsumowania.")
-        
-        komorki_ako_do_aktualizacji = []
-        ws_ako_data = ws_ako.get_all_values()
-        idx_kupon = ws_ako_data[0].index("Kupon_ID")
-        idx_tel_status = ws_ako_data[0].index("Telegram_Status")
-        idx_wyslij_pod = ws_ako_data[0].index("Wyslij_Podsumowanie")
-        
-        for _, rekord in do_podsumowania.iterrows():
-            kupon_id = rekord['Kupon_ID']
-            if str(kupon_id).strip() == "": continue
-            
-            mecze_df = df_hist[df_hist['Kupon_ID'] == kupon_id]
-            if mecze_df.empty: continue
-            
-            lista_meczow_txt = ""
-            for _, m in mecze_df.iterrows():
-                status_meczu = str(m.get('Status', '')).upper()
-                if status_meczu == "WYGRANA": emoji = "🟢"
-                elif status_meczu == "PRZEGRANA": emoji = "🔴"
-                else: emoji = "⚪" 
-                
-                lista_meczow_txt += f"{emoji} {m['Gospodarz']} - {m['Gość']} | Typ: <b>{m['Typ']}</b>\n"
-            
-            try: stawka_pln = float(str(rekord.get('Stawka', '100')).replace(',', '.'))
-            except: stawka_pln = 100.0
-            
-            try: kurs_ako = float(str(rekord.get('Kurs_AKO', '1.0')).replace(',', '.'))
-            except: kurs_ako = 1.0
-            
-            stawka_j = round(stawka_pln / WARTOSC_JEDNOSTKI_PLN, 2)
-            
-            if rekord['Status_AKO'] == 'WYGRANA':
-                zysk_pln = round((stawka_pln * PODATEK_BUKMACHERSKI * kurs_ako) - stawka_pln, 2)
-                zysk_j = round(zysk_pln / WARTOSC_JEDNOSTKI_PLN, 2)
-                wiadomosc = SZABLON_WYGRANA.format(
-                    id_kuponu=kupon_id, mecze=lista_meczow_txt, 
-                    kurs=f"{kurs_ako:.2f}", zysk_j=zysk_j, zysk_pln=zysk_pln
-                )
-            else:
-                wiadomosc = SZABLON_PRZEGRANA.format(
-                    id_kuponu=kupon_id, mecze=lista_meczow_txt, 
-                    kurs=f"{kurs_ako:.2f}", stawka_j=stawka_j, stawka_pln=stawka_pln
-                )
-                
-            if send_telegram(wiadomosc):
-                for r_idx, row in enumerate(ws_ako_data):
-                    if row[idx_kupon] == kupon_id:
-                        komorki_ako_do_aktualizacji.append(gspread.Cell(row=r_idx+1, col=idx_tel_status+1, value="WYSŁANO"))
-                        komorki_ako_do_aktualizacji.append(gspread.Cell(row=r_idx+1, col=idx_wyslij_pod+1, value="FALSE"))
-                        break
-
-        if komorki_ako_do_aktualizacji:
-            ws_ako.update_cells(komorki_ako_do_aktualizacji)
-            print("Pomyślnie wysłano podsumowania i oznaczono je w arkuszu.")
+            ws_data = ws_pred.get_all_values()
+            headers = ws_data[0]
+            cells = []
+            for r_idx, row in enumerate(ws_data[1:], start=2):
+                if row[headers.index("Kupon_ID")] in wyslane_id:
+                    cells.append(gspread.Cell(row=r_idx, col=headers.index("Wyslij_AKO")+1, value="FALSE"))
+            if cells: ws_pred.update_cells(cells)
