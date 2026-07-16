@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from google.oauth2.service_account import Credentials
 import math
 from collections import Counter
+import concurrent.futures
 
 today = datetime.now()
 
@@ -93,21 +94,29 @@ def get_base_league(l):
     clean_l = re.sub(r'-\d{4}(-\d{4})?$', '', clean_l)
     return clean_l
 
+def fetch_footballdata_worker(url):
+    u = str(url).strip()
+    try:
+        df = pd.read_csv(u, on_bad_lines='skip')
+        df = df.dropna(subset=['HomeTeam'])
+        return df, ["Football-Data", u, f"OK (Pobrano: {len(df)} wierszy)"]
+    except Exception as e:
+        return pd.DataFrame(), ["Football-Data", u, f"BŁĄD: {e}"]
+
 def fetch_football_data(raport):
-    print("Pobieram statystyki z ligi_footballdata.xlsx...")
+    print("Pobieram statystyki z ligi_footballdata.xlsx (Wielowątkowo)...")
     try: urls = pd.read_excel("ligi_footballdata.xlsx")["URL"].dropna().tolist()
     except Exception as e:
         raport.append(["Football-Data", "ligi_footballdata.xlsx", f"BŁĄD Excela: {e}"])
         return pd.DataFrame()
+        
     dfs = []
-    for url in urls:
-        url_clean = str(url).strip()
-        try:
-            df_fd = pd.read_csv(url_clean, on_bad_lines='skip')
-            df_fd = df_fd.dropna(subset=['HomeTeam'])
-            dfs.append(df_fd)
-            raport.append(["Football-Data", url_clean, f"OK (Pobrano: {len(df_fd)} wierszy)"])
-        except Exception as e: raport.append(["Football-Data", url_clean, f"BŁĄD: {e}"])
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        results = executor.map(fetch_footballdata_worker, urls)
+        for df_res, rep in results:
+            raport.append(rep)
+            if not df_res.empty: dfs.append(df_res)
+            
     if not dfs: return pd.DataFrame()
     fd_master = pd.concat(dfs, ignore_index=True)
     cols_to_keep = ['Date', 'HomeTeam', 'AwayTeam', 'HTHG', 'HTAG', 'HS', 'AS', 'HST', 'AST', 'HC', 'AC', 'Odd1', 'OddX', 'Odd2']
@@ -231,39 +240,37 @@ try:
 except Exception: mapowanie_fd, mapowanie_ss = {}, {}
 
 # ==========================================
-# 1. POBIERANIE Z BETEXPLORER 
+# 1. WIELOWĄTKOWE POBIERANIE Z BETEXPLORER 
 # ==========================================
 try: urls = pd.read_excel("ligi.xlsx")["URL"].dropna().tolist()
 except: urls = []
 
-headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"}
-scraper_be = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True})
-
-all_data = []
-for i, url in enumerate(urls, start=1):
-    url_clean = str(url).strip()
-    print(f"[{i}/{len(urls)}] Pobieram BetExplorer: {url_clean}")
-    if "/fixtures/" not in url_clean and "/results/" not in url_clean: continue
-    if i > 1: time.sleep(random.uniform(1.0, 2.5))
+def scrape_be_worker(args):
+    i, url_clean, total = args
+    time.sleep(random.uniform(0.1, 3.0)) # Zabezpieczenie na start dla multithreadingu
+    local_data = []
+    local_report = []
+    print(f"[{i}/{total}] Pobieram BetExplorer (Wątek): {url_clean}")
     
+    scraper_be = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True})
     max_retries = 3
     response = None
     bypass_used, success = False, False
 
     for attempt in range(max_retries):
-        if attempt > 0: time.sleep(random.uniform(10, 15) * attempt)
+        if attempt > 0: time.sleep(random.uniform(5, 10) * attempt)
         try:
             response = scraper_be.get(url_clean, timeout=30)
             if response.status_code == 200: success = True; break
             elif response.status_code in [429, 403]: bypass_used = True
             else: break
         except Exception:
-            if attempt < max_retries - 1: time.sleep(5)
+            if attempt < max_retries - 1: time.sleep(3)
 
     if not success or response is None or response.status_code != 200:
         final_code = response.status_code if response else "Brak odpowiedzi"
-        scrape_report.append(["BetExplorer", url_clean, f"BŁĄD: Kod {final_code}"])
-        continue
+        local_report.append(["BetExplorer", url_clean, f"BŁĄD: Kod {final_code}"])
+        return local_data, local_report
 
     try:
         html = response.text
@@ -284,7 +291,7 @@ for i, url in enumerate(urls, start=1):
                     odd = cell.get("data-odd") or (cell.find(attrs={"data-odd": True}).get("data-odd") if cell.find(attrs={"data-odd": True}) else None) or cell.get_text(" ", strip=True)
                     odds.append(odd if odd else "")
                 odd1, oddx, odd2 = (odds[0] if len(odds)>0 else ""), (odds[1] if len(odds)>1 else ""), (odds[2] if len(odds)>2 else "")
-                all_data.append(["Fixture", league, date_cell.get_text(strip=True), home, away, "", odd1, oddx, odd2])
+                local_data.append(["Fixture", league, date_cell.get_text(strip=True), home, away, "", odd1, oddx, odd2])
                 mecz_count += 1
 
         elif "/results/" in url_clean:
@@ -302,15 +309,27 @@ for i, url in enumerate(urls, start=1):
                 odd1, oddx, odd2 = (odds[0] if len(odds)>0 else ""), (odds[1] if len(odds)>1 else ""), (odds[2] if len(odds)>2 else "")
                 date_cell = row.find("td", class_=lambda x: x and "h-text-right" in x)
                 date = date_cell.get_text(strip=True) if date_cell else ""
-                all_data.append(["Result", league, date, home, away, score, odd1, oddx, odd2])
+                local_data.append(["Result", league, date, home, away, score, odd1, oddx, odd2])
                 mecz_count += 1
                 
         if mecz_count > 0:
             status_msg = f"OK (Pobrano: {mecz_count} meczów)" + (" [Zadziałał Bypass 429]" if bypass_used else "")
-            scrape_report.append(["BetExplorer", url_clean, status_msg])
+            local_report.append(["BetExplorer", url_clean, status_msg])
         else:
-            scrape_report.append(["BetExplorer", url_clean, "OSTRZEŻENIE: Brak meczów na stronie (0)"])
-    except Exception as e: scrape_report.append(["BetExplorer", url_clean, f"BŁĄD PARSOWANIA: {e}"])
+            local_report.append(["BetExplorer", url_clean, "OSTRZEŻENIE: Brak meczów na stronie (0)"])
+    except Exception as e: local_report.append(["BetExplorer", url_clean, f"BŁĄD PARSOWANIA: {e}"])
+    
+    return local_data, local_report
+
+all_data = []
+print("Rozpoczynam pobieranie z BetExplorer (Wielowątkowo)...")
+valid_urls = [u for u in urls if "/fixtures/" in str(u) or "/results/" in str(u)]
+be_args = [(i, str(url).strip(), len(valid_urls)) for i, url in enumerate(valid_urls, start=1)]
+
+with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+    for data_chunk, report_chunk in executor.map(scrape_be_worker, be_args):
+        all_data.extend(data_chunk)
+        scrape_report.extend(report_chunk)
 
 df = pd.DataFrame(all_data, columns=["Type", "League", "Date", "Home", "Away", "Score", "Odd1", "OddX", "Odd2"]).drop_duplicates()
 
@@ -323,47 +342,59 @@ fixtures_df = df[df["Type"] == "Fixture"].copy()
 results_df = df[df["Type"] == "Result"].copy()
 
 # ==========================================
-# 2. POBIERANIE Z SOCCERSTATS 
+# 2. WIELOWĄTKOWE POBIERANIE Z SOCCERSTATS 
 # ==========================================
+def scrape_ss_worker(args):
+    url_ss_clean, headers = args
+    time.sleep(random.uniform(0.1, 2.0))
+    local_data = []
+    local_report = []
+    skaner_ss = cloudscraper.create_scraper(browser={'browser': 'chrome','platform': 'windows','desktop': True})
+    try:
+        response_ss = skaner_ss.get(url_ss_clean, headers=headers, timeout=30)
+        soup_ss = BeautifulSoup(response_ss.text, "html.parser")
+        tabela_meczow = next((t for t in soup_ss.find_all("table") if "HT" in t.get_text() and "BTS" in t.get_text() and len(t.find_all("tr")) > 15), None)
+        ss_count = 0
+        if tabela_meczow:
+            for wiersz in tabela_meczow.find_all("tr"):
+                komorki = wiersz.find_all(["td", "th"])
+                if len(komorki) >= 6:
+                    teksty = [k.get_text(" ", strip=True) for k in komorki]
+                    wynik_index = next((idx for idx, val in enumerate(teksty) if ("-" in val or ":" in val) and any(c.isdigit() for c in val) and 1 <= idx <= 5), -1)
+                    if wynik_index != -1:
+                        wynik = teksty[wynik_index]
+                        gospodarz = teksty[wynik_index - 1]
+                        gosc = teksty[wynik_index + 1] if wynik_index + 1 < len(teksty) else ""
+                        if "HOME" in gospodarz.upper(): continue
+                        if gospodarz and gosc and gosc != gospodarz:
+                            statystyki = [s for s in teksty[wynik_index + 2:] if s.strip()] 
+                            ht = statystyki[0] if len(statystyki) > 0 else ""
+                            wynik_czysty = wynik.replace("*", "").strip().replace(" ", "").replace("-", ":")
+                            ht_czysty = ht.replace("*", "").strip().replace(" ", "").replace("-", ":").replace("(", "").replace(")", "")
+                            g_gosp_1h, g_gosc_1h = "", ""
+                            if ":" in ht_czysty:
+                                try: p_1h = ht_czysty.split(":"); g_gosp_1h, g_gosc_1h = int(p_1h[0]), int(p_1h[1])
+                                except: pass
+                            local_data.append([gospodarz, gosc, wynik_czysty, g_gosp_1h, g_gosc_1h])
+                            ss_count += 1
+        if ss_count > 0: local_report.append(["SoccerStats", url_ss_clean, f"OK (Pobrano: {ss_count} wierszy)"])
+        else: local_report.append(["SoccerStats", url_ss_clean, "OSTRZEŻENIE: Brak meczów na stronie (0)"])
+    except Exception as e: local_report.append(["SoccerStats", url_ss_clean, f"BŁĄD HTTP: {str(e)}"])
+    return local_data, local_report
+
 dane_soccerstats_baza = []
-print("Rozpoczynam pobieranie z SoccerStats...")
+print("Rozpoczynam pobieranie z SoccerStats (Wielowątkowo)...")
 try:
     if os.path.exists("ligi_soccerstats.xlsx"):
         urls_ss = pd.read_excel("ligi_soccerstats.xlsx")["URL"].dropna().tolist()
-        skaner_ss = cloudscraper.create_scraper(browser={'browser': 'chrome','platform': 'windows','desktop': True})
-        for url_ss in urls_ss:
-            url_ss_clean = str(url_ss).strip()
-            time.sleep(random.uniform(1.0, 2.0))
-            try:
-                response_ss = skaner_ss.get(url_ss_clean, headers=headers, timeout=30)
-                soup_ss = BeautifulSoup(response_ss.text, "html.parser")
-                tabela_meczow = next((t for t in soup_ss.find_all("table") if "HT" in t.get_text() and "BTS" in t.get_text() and len(t.find_all("tr")) > 15), None)
-                ss_count = 0
-                if tabela_meczow:
-                    for wiersz in tabela_meczow.find_all("tr"):
-                        komorki = wiersz.find_all(["td", "th"])
-                        if len(komorki) >= 6:
-                            teksty = [k.get_text(" ", strip=True) for k in komorki]
-                            wynik_index = next((idx for idx, val in enumerate(teksty) if ("-" in val or ":" in val) and any(c.isdigit() for c in val) and 1 <= idx <= 5), -1)
-                            if wynik_index != -1:
-                                wynik = teksty[wynik_index]
-                                gospodarz = teksty[wynik_index - 1]
-                                gosc = teksty[wynik_index + 1] if wynik_index + 1 < len(teksty) else ""
-                                if "HOME" in gospodarz.upper(): continue
-                                if gospodarz and gosc and gosc != gospodarz:
-                                    statystyki = [s for s in teksty[wynik_index + 2:] if s.strip()] 
-                                    ht = statystyki[0] if len(statystyki) > 0 else ""
-                                    wynik_czysty = wynik.replace("*", "").strip().replace(" ", "").replace("-", ":")
-                                    ht_czysty = ht.replace("*", "").strip().replace(" ", "").replace("-", ":").replace("(", "").replace(")", "")
-                                    g_gosp_1h, g_gosc_1h = "", ""
-                                    if ":" in ht_czysty:
-                                        try: p_1h = ht_czysty.split(":"); g_gosp_1h, g_gosc_1h = int(p_1h[0]), int(p_1h[1])
-                                        except: pass
-                                    dane_soccerstats_baza.append([gospodarz, gosc, wynik_czysty, g_gosp_1h, g_gosc_1h])
-                                    ss_count += 1
-                if ss_count > 0: scrape_report.append(["SoccerStats", url_ss_clean, f"OK (Pobrano: {ss_count} wierszy)"])
-                else: scrape_report.append(["SoccerStats", url_ss_clean, "OSTRZEŻENIE: Brak meczów na stronie (0)"])
-            except Exception as e: scrape_report.append(["SoccerStats", url_ss_clean, f"BŁĄD HTTP: {str(e)}"])
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"}
+        ss_args = [(str(u).strip(), headers) for u in urls_ss]
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            for data_chunk, report_chunk in executor.map(scrape_ss_worker, ss_args):
+                dane_soccerstats_baza.extend(data_chunk)
+                scrape_report.extend(report_chunk)
+
         if dane_soccerstats_baza: ss_df = pd.DataFrame(dane_soccerstats_baza, columns=["Home", "Away", "Score", "Gole_Gosp_1H", "Gole_Gosc_1H"]).drop_duplicates(subset=["Home", "Away", "Score"])
         else: ss_df = pd.DataFrame()
 except Exception: ss_df = pd.DataFrame()
@@ -1483,5 +1514,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Wdrożono perfekcyjną kompatybilność klucza i usunięto zależność od kolumny Kurs_Rynek.")
+print("Wdrożono wielowątkowość dla optymalizacji[cite: 1] i całkowicie zabezpieczono operacje finansowe systemem Kurs_Szac[cite: 3].")
 print("=" * 60)
