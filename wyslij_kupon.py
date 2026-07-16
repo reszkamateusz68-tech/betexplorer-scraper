@@ -79,6 +79,10 @@ df_pred = pd.DataFrame(ws_pred.get_all_records())
 df_ako = pd.DataFrame(ws_ako.get_all_records())
 df_hist = pd.DataFrame(ws_hist.get_all_records())
 
+# Nowy Klucz Zabezpieczający (Match_ID + Engine + Typ)
+if not df_pred.empty:
+    df_pred['Unikalny_Klucz'] = df_pred['Match_ID'].astype(str) + "_" + df_pred['Engine'].astype(str) + "_" + df_pred['Typ'].astype(str)
+
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
@@ -101,7 +105,7 @@ if 'Wyslij_AKO' in df_pred.columns:
     do_wysylki = df_pred[df_pred['Wyslij_AKO'].astype(str).str.upper().isin(['TRUE', 'TAK', '1'])].copy()
     
     if not do_wysylki.empty:
-        print(f"Znaleziono {len(do_wysylki)} wytypowanych wierszy do wysyłki.")
+        print(f"Znaleziono {len(do_wysylki)} wytypowanych wierszy do wysyłki jako Nowe.")
         
         # 1a. AUTOMATYCZNE GENEROWANIE KUPON_ID JEŚLI JEST PUSTE PRZED WYSŁANIEM
         empty_mask = do_wysylki['Kupon_ID'].astype(str).str.strip() == ""
@@ -110,7 +114,6 @@ if 'Wyslij_AKO' in df_pred.columns:
             print(f"Automatyczne nadanie nowego Kupon_ID: {new_id} dla {empty_mask.sum()} meczów bez ID.")
             do_wysylki.loc[empty_mask, 'Kupon_ID'] = new_id
             
-            # Zapisz wygenerowany numer z powrotem do arkusza Google
             cells_to_update = []
             ws_pred_data = ws_pred.get_all_values()
             headers = ws_pred_data[0]
@@ -154,7 +157,6 @@ if 'Wyslij_AKO' in df_pred.columns:
                 lista_meczow_txt += f"⚽ {m['Gospodarz']} vs {m['Gość']}\n📅 {m['Data']} ⏰ {m['Godzina']} | 🎯 Typ: <b>{m['Typ']}</b> | 📈 {k_val:.2f}\n\n"
             
             dynamic_kurs = round(dynamic_kurs, 2)
-            kurs_ako = dynamic_kurs # Czyste wyliczenie bez ułomnej zależności od kolumny Rynek
 
             if not kupon_data.empty:
                 rekord = kupon_data.iloc[0]
@@ -164,13 +166,13 @@ if 'Wyslij_AKO' in df_pred.columns:
                 stawka_pln = 100.0
             
             stawka_j = round(stawka_pln / WARTOSC_JEDNOSTKI_PLN, 2)
-            zysk_pln = round((stawka_pln * PODATEK_BUKMACHERSKI * kurs_ako) - stawka_pln, 2)
+            zysk_pln = round((stawka_pln * PODATEK_BUKMACHERSKI * dynamic_kurs) - stawka_pln, 2)
             zysk_j = round(zysk_pln / WARTOSC_JEDNOSTKI_PLN, 2)
             
             wiadomosc = SZABLON_NOWY.format(
                 id_kuponu=kupon_id,
                 mecze=lista_meczow_txt,
-                kurs=f"{kurs_ako:.2f}",
+                kurs=f"{dynamic_kurs:.2f}",
                 stawka_j=stawka_j,
                 stawka_pln=stawka_pln,
                 wartosc_j=int(WARTOSC_JEDNOSTKI_PLN),
@@ -181,7 +183,6 @@ if 'Wyslij_AKO' in df_pred.columns:
             if send_telegram(wiadomosc):
                 wyslane_id.append(kupon_id)
             
-        # Oznaczanie wysłanych kuponów w Arkuszu na Wysłane (Wyslij_AKO = FALSE)
         if wyslane_id:
             komorki_do_odznaczenia = []
             ws_pred_data = ws_pred.get_all_values()
@@ -205,9 +206,7 @@ if 'Telegram_Status' not in df_ako.columns:
     ws_ako.update([df_ako.columns.values.tolist()] + df_ako.fillna("").values.tolist())
 
 if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
-    # Maska auto -> Wygrane lub przegrane jeszcze nie wysłane
     mask_auto = (df_ako['Status_AKO'].isin(['WYGRANA', 'PRZEGRANA'])) & (df_ako['Telegram_Status'] != 'WYSŁANO')
-    # Maska manual -> Ręcznie odkliknięte z "TRUE" w arkuszu, np. podsumowanie "W Oczekiwaniu"
     mask_manual = (df_ako['Wyslij_Podsumowanie'].astype(str).str.upper().isin(['TRUE', 'TAK', '1']))
     
     do_podsumowania = df_ako[mask_auto | mask_manual]
@@ -226,14 +225,11 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
             kupon_id = str(rekord['Kupon_ID']).strip()
             if not kupon_id: continue
             
-            # ========================================================
-            # INTELIGENTNY FALLBACK DANYCH DLA KUPONÓW W OCZEKIWANIU
-            # ========================================================
+            # INTELIGENTNY FALLBACK DANYCH
             mecze_df = pd.DataFrame()
             if not df_hist.empty and 'Kupon_ID' in df_hist.columns:
                 mecze_df = df_hist[df_hist['Kupon_ID'].astype(str).str.strip() == kupon_id]
             
-            # Jeśli Historia_Typów jeszcze ich nie przejęła, bierzemy świeżo pobrane z All_Predictions
             if mecze_df.empty and not df_pred.empty and 'Kupon_ID' in df_pred.columns:
                 mecze_df = df_pred[df_pred['Kupon_ID'].astype(str).str.strip() == kupon_id]
             
@@ -244,14 +240,13 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
                 elif status_meczu == "PRZEGRANA": emoji = "🔴"
                 else: emoji = "⏳" 
                 
-                # Tylko szacunkowy kurs
+                # Tylko Szacunkowy Kurs z bazy wyliczeń
                 k_str = str(m.get('Kurs_Szac', '1.0')).replace(',', '.')
                 try: k_val = float(k_str)
                 except: k_val = 1.0
                 
                 lista_meczow_txt += f"{emoji} {m['Gospodarz']} - {m['Gość']} | Typ: <b>{m['Typ']}</b> | 📈 {k_val:.2f}\n"
             
-            # Ostateczny awaryjny ratunek, jeśli zdarzenia jakimś cudem zniknęły
             if not lista_meczow_txt:
                 lista_meczow_txt = f"⚽ Zdarzenia dla tego kuponu: <b>{rekord.get('Mecze_Skrot', 'Brak szczegółów w arkuszu')}</b>\n\n"
             
@@ -287,10 +282,8 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
             if send_telegram(wiadomosc):
                 for r_idx, row in enumerate(ws_ako_data):
                     if row[idx_kupon] == kupon_id:
-                        # Odznaczamy zawsze po ręcznym kliknięciu żeby nie loopowało w przyszłości
                         if is_manual: 
                             komorki_ako_do_aktualizacji.append(gspread.Cell(row=r_idx+1, col=idx_wyslij_pod+1, value="FALSE"))
-                        # Automatycznie oznaczamy WYSŁANO tylko w momentach ostatecznego rozliczenia (żeby nie zablokowało końcowego podsumowania!)
                         if rekord['Status_AKO'] in ['WYGRANA', 'PRZEGRANA']:
                             komorki_ako_do_aktualizacji.append(gspread.Cell(row=r_idx+1, col=idx_tel_status+1, value="WYSŁANO"))
                         break
