@@ -231,6 +231,7 @@ try:
         mapowanie_ss = slownik.get("SoccerStats_To_BetExplorer", {})
 except Exception: mapowanie_fd, mapowanie_ss = {}, {}
 
+
 # ==========================================
 # 1. POBIERANIE Z BETEXPLORER (WIELOWĄTKOWO)
 # ==========================================
@@ -245,8 +246,7 @@ def scrape_single_be_url(url_clean):
     if "/fixtures/" not in url_clean and "/results/" not in url_clean: 
         return local_data, local_report
         
-    # Zabezpieczenie przed 429 Too Many Requests
-    time.sleep(random.uniform(0.5, 2.5))
+    time.sleep(random.uniform(0.5, 2.0))
     scraper_be = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True})
     
     max_retries = 3
@@ -254,7 +254,7 @@ def scrape_single_be_url(url_clean):
     bypass_used, success = False, False
 
     for attempt in range(max_retries):
-        if attempt > 0: time.sleep(random.uniform(5, 12) * attempt)
+        if attempt > 0: time.sleep(random.uniform(5, 10))
         try:
             response = scraper_be.get(url_clean, timeout=30)
             if response.status_code == 200: success = True; break
@@ -264,7 +264,7 @@ def scrape_single_be_url(url_clean):
             if attempt < max_retries - 1: time.sleep(3)
 
     if not success or response is None or response.status_code != 200:
-        final_code = response.status_code if response else "Brak odpowiedzi"
+        final_code = response.status_code if response else "Brak"
         local_report.append(["BetExplorer", url_clean, f"BŁĄD: Kod {final_code}"])
         return local_data, local_report
 
@@ -311,6 +311,7 @@ def scrape_single_be_url(url_clean):
         if mecz_count > 0:
             status_msg = f"OK (Pobrano: {mecz_count} meczów)" + (" [Bypass 429]" if bypass_used else "")
             local_report.append(["BetExplorer", url_clean, status_msg])
+            print(f"[OK] {url_clean}")
         else:
             local_report.append(["BetExplorer", url_clean, "OSTRZEŻENIE: Brak meczów na stronie (0)"])
     except Exception as e: 
@@ -346,9 +347,9 @@ def scrape_single_ss_url(url_ss_clean):
     local_ss_data = []
     local_ss_report = []
     skaner_ss = cloudscraper.create_scraper(browser={'browser': 'chrome','platform': 'windows','desktop': True})
-    time.sleep(random.uniform(0.5, 2.0))
+    time.sleep(random.uniform(0.5, 1.5))
     try:
-        response_ss = skaner_ss.get(url_ss_clean, headers=headers, timeout=30)
+        response_ss = skaner_ss.get(url_ss_clean, headers=headers, timeout=25)
         soup_ss = BeautifulSoup(response_ss.text, "html.parser")
         tabela_meczow = next((t for t in soup_ss.find_all("table") if "HT" in t.get_text() and "BTS" in t.get_text() and len(t.find_all("tr")) > 15), None)
         ss_count = 0
@@ -374,7 +375,9 @@ def scrape_single_ss_url(url_ss_clean):
                                 except: pass
                             local_ss_data.append([gospodarz, gosc, wynik_czysty, g_gosp_1h, g_gosc_1h])
                             ss_count += 1
-        if ss_count > 0: local_ss_report.append(["SoccerStats", url_ss_clean, f"OK (Pobrano: {ss_count} wierszy)"])
+        if ss_count > 0: 
+            local_ss_report.append(["SoccerStats", url_ss_clean, f"OK (Pobrano: {ss_count} wierszy)"])
+            print(f"[OK] {url_ss_clean}")
         else: local_ss_report.append(["SoccerStats", url_ss_clean, "OSTRZEŻENIE: Brak meczów na stronie (0)"])
     except Exception as e: local_ss_report.append(["SoccerStats", url_ss_clean, f"BŁĄD HTTP: {str(e)}"])
     return local_ss_data, local_ss_report
@@ -602,11 +605,9 @@ def add_pred(match_id, termin, date, time, league, home, away, engine, typ, szan
         if kurs_docelowy >= 1.50: kurs_docelowy = round(kurs_docelowy * 0.95, 2)
         elif 1.20 <= kurs_docelowy < 1.50: kurs_docelowy = round(kurs_docelowy * 0.975, 2)
         
-    # Absolutny próg bezpieczeństwa kalibracji
     if kurs_docelowy < 1.015: 
         kurs_docelowy = 1.01
 
-    # --- Centralny Silnik Wyceny Ryzyka ---
     prob_decimal = float(szansa) / 100.0
     if prob_decimal >= 0.95 and kurs_docelowy >= 1.20:
         risk_tag = "👑 GOLDEN PICK"
@@ -637,8 +638,7 @@ for idx, row in fixtures_clean.iterrows():
     league, home, away = row['League'], row['Home'], row['Away']
     fixture_base = get_base_league(league)
     match_id, d_termin, d_date, d_time = row['Match_ID'], row['Termin'], row['Date'], row['Time']
-
-    # --- WSPÓLNE BAZY DO ANALIZ ---
+    
     h_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == home) | (valid_matches['Away'] == home))].copy()
     a_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == away) | (valid_matches['Away'] == away))].copy()
     h_dom = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Home'] == home)].copy()
@@ -731,7 +731,7 @@ for idx, row in fixtures_clean.iterrows():
             if avg_prob_u >= 0.70:
                 arg = f"U{line} | Ważone szanse: Gosp {round(prob_h_u*100)}%, Gość {round(prob_a_u*100)}%. Trafienia (dom/wyj): Gosp {h_th}/{h_tl}, Gość {a_th}/{a_tl}. Ogółem: {ht_th}/{ht_tl}, {at_th}/{at_tl}."
                 if h_sm or a_sm: arg += " | ⚠️ Wygładzenie Bayesowskie (Mała próba)"
-                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Line Pro", f"U{line}", round(avg_prob_u*100, 1), "", arg)
+                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Line Pro", f"U{line}", round(avg_prob_u*100, 1), KOTWICE_KURSOWE.get(f"U{line}", 1.10), arg)
 
         # Analiza dla linii Over
         for line in [0.5, 1.5, 2.5]:
@@ -744,7 +744,7 @@ for idx, row in fixtures_clean.iterrows():
             if avg_prob_o >= 0.70: 
                 arg = f"O{line} | Ważone szanse: Gosp {round(prob_h_o*100)}%, Gość {round(prob_a_o*100)}%. Trafienia (dom/wyj): Gosp {h_th}/{h_tl}, Gość {a_th}/{a_tl}. Ogółem: {ht_th}/{ht_tl}, {at_th}/{at_tl}."
                 if h_sm or a_sm: arg += " | ⚠️ Wygładzenie Bayesowskie (Mała próba)"
-                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Line Pro", f"O{line}", round(avg_prob_o*100, 1), "", arg)
+                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Line Pro", f"O{line}", round(avg_prob_o*100, 1), KOTWICE_KURSOWE.get(f"O{line}", 1.10), arg)
 
     # ----------------------------------------------------
     # 6c. BETBUILDER PRO
@@ -851,9 +851,10 @@ for idx, row in fixtures_clean.iterrows():
 
         if len(builder_blocks_code) >= MIN_BLOKOW:
             final_builder_safety = round(np.mean(block_probabilities) * 100, 1)
+            estimated_bb_odd = calc_betbuilder_copula([KOTWICE_KURSOWE.get(c, 1.05) for c in builder_blocks_code], rho=0.65)
             uzasadnienie = " | ".join(arg_blocks)
             if any_smoothed: uzasadnienie += " | ⚠️ Wygładzenie Bayesowskie (Mała próba)"
-            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "BetBuilder Pro", "+".join(builder_blocks_code), final_builder_safety, "", uzasadnienie)
+            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "BetBuilder Pro", "+".join(builder_blocks_code), final_builder_safety, round(estimated_bb_odd, 2), uzasadnienie)
 
     # ----------------------------------------------------
     # 6d. MULTIGOL
@@ -961,7 +962,7 @@ for idx, row in fixtures_clean.iterrows():
         valid_shots = valid_shots.dropna(subset=['Shots_H', 'Shots_A', 'ShotsTarget_H', 'ShotsTarget_A'])
         
         h_tot_all_s = valid_shots[(valid_shots['Base_League'] == fixture_base) & ((valid_shots['Home'] == home) | (valid_shots['Away'] == home))].copy()
-        a_tot_all_s = valid_shots[(valid_shots['Base_League'] == fixture_base) & ((valid_shots['Home'] == away) | (valid_matches['Away'] == away))].copy()
+        a_tot_all_s = valid_shots[(valid_shots['Base_League'] == fixture_base) & ((valid_shots['Home'] == away) | (valid_shots['Away'] == away))].copy()
         h_dom_s = valid_shots[(valid_shots['Base_League'] == fixture_base) & (valid_shots['Home'] == home)]
         a_wyj_s = valid_shots[(valid_shots['Base_League'] == fixture_base) & (valid_shots['Away'] == away)]
 
@@ -1094,7 +1095,7 @@ creds = Credentials.from_service_account_file("credentials.json", scopes=scope) 
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
-# OSTATECZNE DEFINICJE KOLUMN DLA OBU TABEL
+# UWAGA: Usunięto kolumnę "Kurs_Rynek" całkowicie!
 cols_all_pred = ["Match_ID", "Zagrane", "Wyslij_AKO", "Kupon_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 cols_historia = ["Match_ID", "Zagrane", "Kupon_ID", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 
@@ -1157,10 +1158,10 @@ if not df_all_predictions.empty:
     nowe_typy_df = nowe_typy_df[cols_historia]
     
     if not df_historia.empty:
-        df_historia['Unikalny_Klucz'] = df_historia['Match_ID'].astype(str) + "_" + df_historia['Engine'].astype(str) + "_" + df_historia['Typ'].astype(str)
+        df_historia['Unikalny_Klucz'] = df_historia['Match_ID'] + "_" + df_historia['Engine'] + "_" + df_historia['Typ']
         df_historia = df_historia.drop_duplicates(subset=['Unikalny_Klucz'], keep='last')
         
-        nowe_typy_df['Unikalny_Klucz'] = nowe_typy_df['Match_ID'].astype(str) + "_" + nowe_typy_df['Engine'].astype(str) + "_" + nowe_typy_df['Typ'].astype(str)
+        nowe_typy_df['Unikalny_Klucz'] = nowe_typy_df['Match_ID'] + "_" + nowe_typy_df['Engine'] + "_" + nowe_typy_df['Typ']
         
         w_oczek_mask = df_historia['Status'] == "W OCZEKIWANIU"
         if w_oczek_mask.any():
@@ -1322,7 +1323,7 @@ if not df_historia.empty:
         nowy_id = f"AKO_{datetime.now().strftime('%y%m%d_%H%M')}"
         df_historia.loc[mask_do_zaktualizowania, 'Kupon_ID'] = nowy_id
 
-    # Wypełnienie ew. ID też w głównym DF i przypisanie do df_historia (pełny klucz!)
+    # Wypełnienie ew. ID też w głównym DF i przypisanie do df_historia
     df_historia['Unikalny_Klucz'] = df_historia['Match_ID'].astype(str) + "_" + df_historia['Engine'].astype(str) + "_" + df_historia['Typ'].astype(str)
     hist_kupon_map = df_historia[df_historia['Kupon_ID'].astype(str).str.strip() != ""].set_index('Unikalny_Klucz')['Kupon_ID'].to_dict()
     
@@ -1340,7 +1341,6 @@ if not df_historia.empty:
         
         kurs_ako = 1.0
         for _, r in group.iterrows():
-            # OPARTY TYLKO I WYŁĄCZNIE NA KURS_SZAC
             kr_str = str(r['Kurs_Szac']).replace(',', '.').strip()
             try: 
                 kr = float(kr_str)
@@ -1488,5 +1488,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Wielowątkowość aktywowana. Kolumna Kurs_Rynek usunięta.")
+print("Wielowątkowość aktywowana. Kolumna Kurs_Rynek usunięta, klucze zsynchronizowane.")
 print("=" * 60)
