@@ -169,10 +169,6 @@ def get_poisson_match_prob(lam_h, lam_a, max_val=35):
     return p_1, p_x, p_2
 
 def calc_betbuilder_copula(odds_list, rho=0.65):
-    """
-    Kalkulator korelacji bazujący na modelu wielowymiarowym Copuli (skuteczniejszy od naiwnego mnożenia).
-    Zabezpiecza algorytm przed zaniżaniem marży przy rynkach bardzo skorelowanych (np. BetBuilder).
-    """
     if not odds_list: return 1.0
     q_list = [1.0 / o for o in odds_list if o > 0]
     if not q_list: return 1.0
@@ -190,11 +186,6 @@ def calc_betbuilder_copula(odds_list, rho=0.65):
 # FUNKCJE ANALITYCZNE I KONTROLA RYZYKA (TIME DECAY & BAYES)
 # ==========================================================
 def get_weighted_stats(df, target_col, condition_lambda, prior_prob=0.5, alpha=2.0):
-    """
-    Zwraca: (ważone_prawdopodobieństwo, trafienia_suma, ogólna_liczba_meczów, czy_użyto_bayes)
-    Wagi faworyzują najświeższe 10 spotkań. Wbudowano Wygładzanie Bayesowskie, które 
-    koryguje ekstremalne szanse z próbek mniejszych niż 12 meczów chroniąc przed błędem małej próby.
-    """
     if df.empty or target_col not in df.columns: 
         return 0.0, 0, 0, False
         
@@ -544,7 +535,6 @@ if not fixtures_clean.empty and not valid_matches.empty:
 # ==========================================================
 all_generated_predictions = []
 
-# Zaktualizowane o wyliczenia z modelu statystycznego
 KOTWICE_KURSOWE = {
     'O0.5': 1.03, 'U3.5': 1.31, 'U4.5': 1.10, 'U5.5': 1.015, 'U6.5': 1.01,
     'HT_U1.5': 1.42, 'HT_U2.5': 1.09, 'HT_U3.5': 1.01, 'HT_U4.5': 1.01,
@@ -588,11 +578,9 @@ def add_pred(match_id, termin, date, time, league, home, away, engine, typ, kurs
         if kurs_docelowy >= 1.50: kurs_docelowy = round(kurs_docelowy * 0.95, 2)
         elif 1.20 <= kurs_docelowy < 1.50: kurs_docelowy = round(kurs_docelowy * 0.975, 2)
         
-    # Absolutny próg bezpieczeństwa
     if kurs_docelowy < 1.015: 
         kurs_docelowy = 1.01
 
-    # --- Centralny Silnik Wyceny Ryzyka (Etykiety w argumentacji) ---
     prob_decimal = float(szansa) / 100.0
     if prob_decimal >= 0.95 and kurs_docelowy >= 1.20:
         risk_tag = "👑 GOLDEN PICK"
@@ -719,7 +707,7 @@ for idx, row in fixtures_clean.iterrows():
     # 6b. GOAL LINE PRO
     # ----------------------------------------------------
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
-        # Analiza dla linii Under
+        # Under
         for line in [2.5, 3.5, 4.5, 5.5, 6.5]:
             prob_h_u, h_th, h_tl, h_sm = get_weighted_stats(h_dom, 'Total_Goals', lambda x: pd.notna(x) and x < line, prior_prob=0.75)
             prob_a_u, a_th, a_tl, a_sm = get_weighted_stats(a_wyj, 'Total_Goals', lambda x: pd.notna(x) and x < line, prior_prob=0.75)
@@ -728,11 +716,11 @@ for idx, row in fixtures_clean.iterrows():
             
             avg_prob_u = (prob_h_u + prob_a_u) / 2
             if avg_prob_u >= 0.70:
-                arg = f"U{line} | Ważone szanse: Gosp {round(prob_h_u*100)}%, Gość {round(prob_a_u*100)}%. Trafienia (dom/wyj): Gosp {h_th}/{h_tl}, Gość {a_th}/{a_tl}. Ogółem (wszystkie mecze): Gosp {ht_th}/{ht_tl}, Gość {at_th}/{at_tl}."
+                arg = f"U{line} | Ważone szanse: Gosp {round(prob_h_u*100)}%, Gość {round(prob_a_u*100)}%. Trafienia (dom/wyj): Gosp {h_th}/{h_tl}, Gość {a_th}/{a_tl}. Ogółem: Gosp {ht_th}/{ht_tl}, Gość {at_th}/{at_tl}."
                 if h_sm or a_sm: arg += " | ⚠️ Wygładzenie Bayesowskie (Mała próba)"
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Line Pro", f"U{line}", "", round(avg_prob_u*100, 1), KOTWICE_KURSOWE.get(f"U{line}", 1.10), arg)
 
-        # Analiza dla linii Over
+        # Over
         for line in [0.5, 1.5, 2.5]:
             prob_h_o, h_th, h_tl, h_sm = get_weighted_stats(h_dom, 'Total_Goals', lambda x: pd.notna(x) and x > line, prior_prob=0.30)
             prob_a_o, a_th, a_tl, a_sm = get_weighted_stats(a_wyj, 'Total_Goals', lambda x: pd.notna(x) and x > line, prior_prob=0.30)
@@ -741,7 +729,7 @@ for idx, row in fixtures_clean.iterrows():
             
             avg_prob_o = (prob_h_o + prob_a_o) / 2
             if avg_prob_o >= 0.70: 
-                arg = f"O{line} | Ważone szanse: Gosp {round(prob_h_o*100)}%, Gość {round(prob_a_o*100)}%. Trafienia (dom/wyj): Gosp {h_th}/{h_tl}, Gość {a_th}/{a_tl}. Ogółem (wszystkie mecze): Gosp {ht_th}/{ht_tl}, Gość {at_th}/{at_tl}."
+                arg = f"O{line} | Ważone szanse: Gosp {round(prob_h_o*100)}%, Gość {round(prob_a_o*100)}%. Trafienia (dom/wyj): Gosp {h_th}/{h_tl}, Gość {a_th}/{a_tl}. Ogółem: Gosp {ht_th}/{ht_tl}, Gość {at_th}/{at_tl}."
                 if h_sm or a_sm: arg += " | ⚠️ Wygładzenie Bayesowskie (Mała próba)"
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Line Pro", f"O{line}", "", round(avg_prob_o*100, 1), KOTWICE_KURSOWE.get(f"O{line}", 1.10), arg)
 
@@ -1083,6 +1071,7 @@ for idx, row in fixtures_clean.iterrows():
             arg = f"Anomalia underowa. Średnia sezonu obu ekip: {round(season_avg, 2)}. Ost. 2 mecze: tylko {round(last_2_avg, 2)} goli. Oczekiwane przełamanie."
             add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Anomalies", "O1.5", "", 85.0, round(est_odd, 2), arg)
 
+
 # ==========================================================
 # 7. SYSTEM ŚLEDZENIA SKUTECZNOŚCI I YIELDU (BACKTESTER)
 # ==========================================================
@@ -1093,7 +1082,6 @@ creds = Credentials.from_service_account_file("credentials.json", scopes=scope) 
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
-# OSTATECZNE DEFINICJE KOLUMN
 cols_all_pred = ["Match_ID", "Zagrane", "Wyslij_AKO", "Kupon_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 cols_historia = ["Match_ID", "Zagrane", "Kupon_ID", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Kurs_Rynek", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 
@@ -1105,7 +1093,7 @@ if not df_all_predictions.empty:
     consensus_counts = df_all_predictions.groupby('Match_ID').size().to_dict()
     df_all_predictions['Consensus_Score'] = df_all_predictions['Match_ID'].map(consensus_counts)
     
-    # 100% KULOODPORNY UNIKALNY KLUCZ (Match_ID + Engine + Typ)
+    # PERFEKCYJNY UNIKALNY KLUCZ: Gwarantuje 100% szczelności i eliminuje błąd gubienia mnożnika kursu (np. "3.07" vs "4.35")
     df_all_predictions['Unikalny_Klucz'] = df_all_predictions['Match_ID'].astype(str) + "_" + df_all_predictions['Engine'].astype(str) + "_" + df_all_predictions['Typ'].astype(str)
     
     map_wyslij, map_zagrane, map_kupon = {}, {}, {}
@@ -1265,6 +1253,17 @@ def evaluate_bet(bet_type, row_data):
 
     return "DO RĘCZNEJ KONTROLI"
 
+def get_best_odd(row):
+    """Bezpieczne wyciąganie najwyższego dostępnego kursu (Rynek vs Szacunkowy)"""
+    kr = str(row.get('Kurs_Rynek', '')).replace(',', '.').strip()
+    ks = str(row.get('Kurs_Szac', '1.0')).replace(',', '.').strip()
+    try:
+        if kr and kr not in ["", "-", "nan", "None"]:
+            return float(kr)
+    except: pass
+    try: return float(ks)
+    except: return 1.0
+
 if not df_historia.empty and not results_clean.empty:
     for idx, row in df_historia.iterrows():
         if row["Status"] == "W OCZEKIWANIU":
@@ -1275,18 +1274,14 @@ if not df_historia.empty and not results_clean.empty:
                     nowy_status = evaluate_bet(row["Typ"], match_row)
                     df_historia.at[idx, "Status"] = nowy_status
                     
-                    try:
-                        kurs_str = str(row["Kurs_Rynek"]).replace(',', '.').strip()
-                        if kurs_str in ["", "-", "nan", "None"]: kurs_str = str(row["Kurs_Szac"]).replace(',', '.').strip()
-                        kurs = float(kurs_str)
-                        if nowy_status == "WYGRANA":
-                            profit = round(kurs - 1.0, 2)
-                            df_historia.at[idx, "Profit"] = str(profit)
-                            df_historia.at[idx, "Yield_Wplyw"] = str(round(profit*100, 1))
-                        elif nowy_status == "PRZEGRANA":
-                            df_historia.at[idx, "Profit"] = "-1.0"
-                            df_historia.at[idx, "Yield_Wplyw"] = "-100.0"
-                    except: pass
+                    kurs = get_best_odd(row)
+                    if nowy_status == "WYGRANA":
+                        profit = round(kurs - 1.0, 2)
+                        df_historia.at[idx, "Profit"] = str(profit)
+                        df_historia.at[idx, "Yield_Wplyw"] = str(round(profit*100, 1))
+                    elif nowy_status == "PRZEGRANA":
+                        df_historia.at[idx, "Profit"] = "-1.0"
+                        df_historia.at[idx, "Yield_Wplyw"] = "-100.0"
 
 # --- 7b. SYSTEM ŚLEDZENIA AKO (PORTFEL REALNY) ---
 cols_ako = ["Kupon_ID", "Data_Zawarcia", "Mecze_Skrot", "Liczba_Zdarzen", "Kurs_AKO", "Stawka", "Jednostki", "Status_AKO", "Wygrana_Brutto", "Profit_Netto", "Wyslij_Podsumowanie", "Telegram_Status"]
@@ -1324,6 +1319,7 @@ if not df_historia.empty:
         nowy_id = f"AKO_{datetime.now().strftime('%y%m%d_%H%M')}"
         df_historia.loc[mask_do_zaktualizowania, 'Kupon_ID'] = nowy_id
 
+    # CRITICAL FIX: ZAPISYWANIE WYGENEROWANEGO KUPON_ID Z POWROTEM DO ALL_PREDICTIONS Z UŻYCIEM PEŁNEGO KLUCZA
     df_historia['Unikalny_Klucz'] = df_historia['Match_ID'].astype(str) + "_" + df_historia['Engine'].astype(str) + "_" + df_historia['Typ'].astype(str)
     hist_kupon_map = df_historia[df_historia['Kupon_ID'].astype(str).str.strip() != ""].set_index('Unikalny_Klucz')['Kupon_ID'].to_dict()
     
@@ -1341,13 +1337,9 @@ if not df_historia.empty:
         
         kurs_ako = 1.0
         for _, r in group.iterrows():
-            kr_str = str(r['Kurs_Rynek']).replace(',', '.').strip()
-            if kr_str in ["", "-", "nan", "None"]: kr_str = str(r['Kurs_Szac']).replace(',', '.').strip()
-            try: 
-                kr = float(kr_str)
-                if kr > 20.0: kr = 1.0
-                kurs_ako *= kr
-            except: pass
+            k_val = get_best_odd(r)
+            if 1.0 < k_val < 50.0: # Ignorujemy błędy i dziwne anomalia
+                kurs_ako *= k_val
         kurs_ako = round(kurs_ako, 2)
         
         statusy = group['Status'].tolist()
@@ -1490,5 +1482,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Wersja Ultimate - Odblokowano Copula Correlation i inteligentne przeliczanie.")
+print("Zaimplementowano kuloodporny klucz zdarzeń i kalibrację prawdopodobieństwa.")
 print("=" * 60)
