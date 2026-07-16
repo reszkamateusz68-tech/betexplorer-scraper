@@ -22,7 +22,7 @@ SZABLON_NOWY = """
 ───────────────
 {mecze}───────────────
 📊 <b>Podsumowanie Kuponu:</b>
-📈 Łączny kurs: {kurs}
+📈 Łączny kurs (Model Zoptymalizowany): {kurs}
 💰 Stawka: {stawka_j}j ({stawka_pln} PLN przy 1j={wartosc_j}zł)
 💸 Do wygrania: +{zysk_j}j (+{zysk_pln} PLN po odliczeniu podatku)
 """
