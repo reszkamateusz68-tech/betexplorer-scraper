@@ -168,23 +168,24 @@ def get_poisson_match_prob(lam_h, lam_a, max_val=35):
             else: p_2 += prob_ij
     return p_1, p_x, p_2
 
-def calc_betbuilder_odd(probs, correlation_factor=0.65, margin=0.92):
-    if not probs: return 1.0
-    probs.sort(reverse=True) 
-    combined_p = probs[0]
-    for p in probs[1:]: combined_p *= (p ** (1 - correlation_factor))
-    fair_odd = 1 / combined_p if combined_p > 0 else 99.0
-    return max(1.05, round(fair_odd * margin, 2))
+def calc_betbuilder_copula(odds_list, rho=0.65):
+    if not odds_list: return 1.0
+    q_list = [1.0 / o for o in odds_list if o > 0]
+    if not q_list: return 1.0
+    q_list.sort() 
+    
+    q_joint = q_list[0]
+    for q_next in q_list[1:]:
+        gamma = 1.0 - rho * (1.0 - min(q_joint, q_next))
+        q_joint = q_joint * (q_next ** gamma)
+        
+    final_odd = 1.0 / q_joint if q_joint > 0 else 99.0
+    return max(1.01, round(final_odd, 2))
 
 # ==========================================================
 # FUNKCJE ANALITYCZNE I KONTROLA RYZYKA (TIME DECAY & BAYES)
 # ==========================================================
 def get_weighted_stats(df, target_col, condition_lambda, prior_prob=0.5, alpha=2.0):
-    """
-    Zwraca: (ważone_prawdopodobieństwo, trafienia_suma, ogólna_liczba_meczów, czy_użyto_bayes)
-    Wagi faworyzują najświeższe 10 spotkań. Wbudowano Wygładzanie Bayesowskie, które 
-    koryguje ekstremalne szanse z próbek mniejszych niż 12 meczów.
-    """
     if df.empty or target_col not in df.columns: 
         return 0.0, 0, 0, False
         
@@ -530,17 +531,17 @@ if not fixtures_clean.empty and not valid_matches.empty:
         df_h2h = pd.DataFrame(h2h_list, columns=h2h_cols)
 
 # ==========================================================
-# 6. SILNIKI PREDYKCYJNE (Z Centralnym Generatorem Ryzyka)
+# 6. SILNIKI PREDYKCYJNE (Z centralizowanym Generatorem Ryzyka)
 # ==========================================================
 all_generated_predictions = []
 
 KOTWICE_KURSOWE = {
-    'O0.5': 1.03, 'U3.5': 1.31, 'U4.5': 1.1, 'U5.5': 1.02, 'U6.5': 1.01,
+    'O0.5': 1.03, 'U3.5': 1.31, 'U4.5': 1.10, 'U5.5': 1.015, 'U6.5': 1.01,
     'HT_U1.5': 1.42, 'HT_U2.5': 1.09, 'HT_U3.5': 1.01, 'HT_U4.5': 1.01,
     '2H_U3.5': 1.02, '2H_U4.5': 1.01,
     'O0.5+U5.5': 1.09, 'O0.5+U6.5': 1.05,
     'C_U8.5': 2.78, 'C_U9.5': 2.02, 'C_U10.5': 1.59, 'C_U11.5': 1.33,
-    'C_U12.5': 1.17, 'C_U13.5': 1.07, 'C_U14.5': 1.01, 
+    'C_U12.5': 1.17, 'C_U13.5': 1.09, 'C_U14.5': 1.04, 
     'HC_U4.5': 2.59, 'HC_U5.5': 1.75, 'HC_U6.5': 1.35, 'HC_U7.5': 1.14, 'HC_U8.5': 1.03,
     'AC_U4.5': 1.74, 'AC_U5.5': 1.32, 'AC_U6.5': 1.11, 'AC_U7.5': 1.01, 'AC_U8.5': 1.01, 
     'HC_O4.5': 1.44, 'AC_O4.5': 1.98, 
@@ -558,34 +559,29 @@ def add_pred(match_id, termin, date, time, league, home, away, engine, typ, kurs
     if engine == "BetBuilder Pro":
         skladniki = typ_k.split("+")
         kursy_skladowe = [KOTWICE_KURSOWE.get(sk.strip(), 1.05) for sk in skladniki]
-        kursy_skladowe.sort(reverse=True)
-        min_multiplier = 1.04
-        if len(kursy_skladowe) == 3: min_multiplier = 1.05
-        elif len(kursy_skladowe) == 4: min_multiplier = 1.06
-        elif len(kursy_skladowe) >= 5: min_multiplier = 1.07
-        
-        laczny_kurs = kursy_skladowe[0] if kursy_skladowe else 1.0
-        for k in kursy_skladowe[1:]:
-            laczny_kurs *= max(k, min_multiplier)
-        kurs_docelowy = round(laczny_kurs, 2)
+        rho_val = 0.22 if any(c in typ_k for c in ["C_U", "HC_", "AC_"]) else 0.65
+        kurs_docelowy = calc_betbuilder_copula(kursy_skladowe, rho=rho_val)
         
     elif "+" in typ_k and "O0.5+U" not in typ_k: 
         skladniki = typ_k.split("+")
-        laczny_kurs = 1.0
-        for sk in skladniki: laczny_kurs *= KOTWICE_KURSOWE.get(sk.strip(), 1.05)
-        kurs_docelowy = round(max(1.05, laczny_kurs * 0.90), 2)
+        kursy_skladowe = [KOTWICE_KURSOWE.get(sk.strip(), 1.05) for sk in skladniki]
+        rho_val = 0.22 if any(c in typ_k for c in ["C_U", "HC_", "AC_"]) else 0.65
+        kurs_docelowy = calc_betbuilder_copula(kursy_skladowe, rho=rho_val)
     else:
         if typ_k in KOTWICE_KURSOWE:
             kurs_docelowy = KOTWICE_KURSOWE[typ_k]
             is_anchor = True
-        else: kurs_docelowy = kurs_bazowy
+        else: 
+            kurs_docelowy = kurs_bazowy
 
     if not is_anchor:
         if kurs_docelowy >= 1.50: kurs_docelowy = round(kurs_docelowy * 0.95, 2)
         elif 1.20 <= kurs_docelowy < 1.50: kurs_docelowy = round(kurs_docelowy * 0.975, 2)
-    if kurs_docelowy < 1.015: kurs_docelowy = 1.01
+        
+    if kurs_docelowy < 1.015: 
+        kurs_docelowy = 1.01
 
-    # --- Centralny Silnik Wyceny Ryzyka i Etykiet ---
+    # --- Centralny Silnik Wyceny Ryzyka ---
     prob_decimal = float(szansa) / 100.0
     if prob_decimal >= 0.95 and kurs_docelowy >= 1.20:
         risk_tag = "👑 GOLDEN PICK"
@@ -843,10 +839,9 @@ for idx, row in fixtures_clean.iterrows():
 
         if len(builder_blocks_code) >= MIN_BLOKOW:
             final_builder_safety = round(np.mean(block_probabilities) * 100, 1)
-            estimated_bb_odd = calc_betbuilder_odd(block_probabilities, correlation_factor=0.65, margin=0.92)
-            uzasadnienie = "Składniki: " + " || ".join(arg_blocks)
+            uzasadnienie = " | ".join(arg_blocks)
             if any_smoothed: uzasadnienie += " | ⚠️ Wygładzenie Bayesowskie (Mała próba)"
-            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "BetBuilder Pro", "+".join(builder_blocks_code), "", final_builder_safety, round(estimated_bb_odd, 2), uzasadnienie)
+            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "BetBuilder Pro", "+".join(builder_blocks_code), "", final_builder_safety, 1.0, uzasadnienie)
 
     # ----------------------------------------------------
     # 6d. MULTIGOL
@@ -910,7 +905,7 @@ for idx, row in fixtures_clean.iterrows():
                 if avg_p >= 0.90:
                     if h_sm or a_sm: any_smoothed = True
                     c_blocks_code.append(f"C_U{line}"); c_probs.append(avg_p); c_odds.append(round(1/(avg_p*0.90), 2))
-                    arg_c.append(f"C_U{line} (D: {h_th}/{h_tl}, W: {a_th}/{a_tl} | Ogół Gosp: {ht_th}/{ht_tl}, Gość: {at_th}/{at_tl})")
+                    arg_c.append(f"C_U{line} (D: {h_th}/{h_tl}, W: {a_th}/{a_tl} | Ogół: {ht_th}/{ht_tl}, {at_th}/{at_tl})")
                     break
 
         for line in [4.5, 5.5, 6.5, 7.5, 8.5]:
@@ -1100,7 +1095,7 @@ if not df_all_predictions.empty:
     consensus_counts = df_all_predictions.groupby('Match_ID').size().to_dict()
     df_all_predictions['Consensus_Score'] = df_all_predictions['Match_ID'].map(consensus_counts)
     
-    # UNIKALNY KLUCZ (Zabezpieczony w 100% przed duplikatami)
+    # KULOODPORNY UNIKALNY KLUCZ 
     df_all_predictions['Unikalny_Klucz'] = df_all_predictions['Match_ID'].astype(str) + "_" + df_all_predictions['Engine'].astype(str) + "_" + df_all_predictions['Typ'].astype(str)
     
     map_wyslij, map_zagrane, map_kupon = {}, {}, {}
@@ -1152,10 +1147,10 @@ if not df_all_predictions.empty:
     nowe_typy_df = nowe_typy_df[cols_historia]
     
     if not df_historia.empty:
-        df_historia['Unikalny_Klucz'] = df_historia['Match_ID'].astype(str) + "_" + df_historia['Engine'].astype(str) + "_" + df_historia['Typ'].astype(str)
+        df_historia['Unikalny_Klucz'] = df_historia['Match_ID'] + "_" + df_historia['Engine'] + "_" + df_historia['Typ']
         df_historia = df_historia.drop_duplicates(subset=['Unikalny_Klucz'], keep='last')
         
-        nowe_typy_df['Unikalny_Klucz'] = nowe_typy_df['Match_ID'].astype(str) + "_" + nowe_typy_df['Engine'].astype(str) + "_" + nowe_typy_df['Typ'].astype(str)
+        nowe_typy_df['Unikalny_Klucz'] = nowe_typy_df['Match_ID'] + "_" + nowe_typy_df['Engine'] + "_" + nowe_typy_df['Typ']
         
         w_oczek_mask = df_historia['Status'] == "W OCZEKIWANIU"
         if w_oczek_mask.any():
@@ -1180,7 +1175,6 @@ if not df_all_predictions.empty:
                     if pd.notna(kr_val) and str(kr_val).strip() not in ["", "-"]:
                         df_historia.at[idx, 'Kurs_Rynek'] = str(kr_val)
                         
-                    # Bezpieczna aktualizacja Kupon_ID z All_Predictions
                     k_id_val = map_kupon_upd.get(klucz, "")
                     if k_id_val and str(df_historia.at[idx, 'Kupon_ID']).strip() == "":
                         df_historia.at[idx, 'Kupon_ID'] = str(k_id_val)
@@ -1285,7 +1279,7 @@ if not df_historia.empty and not results_clean.empty:
                     except: pass
 
 # --- 7b. SYSTEM ŚLEDZENIA AKO (PORTFEL REALNY) ---
-cols_ako = ["Kupon_ID", "Data_Zawarcia", "Mecze_Skrot", "Liczba_Zdarzen", "Kurs_AKO", "Stawka", "Jednostki", "Status_AKO", "Wygrana_Brutto", "Profit_Netto", "Wyslij_Podsumowanie", "Telegram_Status"]
+cols_ako = ["Kupon_ID", "Data_Zawarcia", "Mecze_Skrot", "Liczba_Zdarzen", "Kurs_AKO", "Stawka", "Status_AKO", "Wygrana_Brutto", "Profit_Netto", "Wyslij_Podsumowanie", "Telegram_Status"]
 try:
     ws_ako = spreadsheet.worksheet("Kupony_AKO")
     ako_dane = ws_ako.get_all_values()
@@ -1300,24 +1294,26 @@ for col in cols_ako:
     if col not in df_ako.columns: df_ako[col] = ""
 df_ako = df_ako[cols_ako]
 
-user_stakes, user_units, user_pods, user_tel_stat = {}, {}, {}, {}
+user_stakes, user_pods, user_tel_stat = {}, {}, {}
 if not df_ako.empty:
     user_stakes = dict(zip(df_ako['Kupon_ID'], df_ako['Stawka']))
-    user_units = dict(zip(df_ako['Kupon_ID'], df_ako.get('Jednostki', ['1j']*len(df_ako))))
     user_pods = dict(zip(df_ako['Kupon_ID'], df_ako.get('Wyslij_Podsumowanie', ['']*len(df_ako))))
     user_tel_stat = dict(zip(df_ako['Kupon_ID'], df_ako.get('Telegram_Status', ['']*len(df_ako))))
 
 if not df_historia.empty:
-    # Automatyczne nadawanie ID jeśli puste (jako fallback dla samego Zagrane=TRUE)
     mask_zagrane = df_historia['Zagrane'].astype(str).str.upper().isin(['TRUE', 'PRAWDA', '1', 'TAK'])
     mask_bez_id = df_historia['Kupon_ID'].astype(str).str.strip() == ""
-    mask_do_zaktualizowania = mask_zagrane & mask_bez_id
+    
+    try: mask_dzis = pd.to_datetime(df_historia['Data'], errors='coerce').dt.date >= datetime.now().date()
+    except: mask_dzis = pd.Series([True]*len(df_historia))
+        
+    mask_do_zaktualizowania = mask_zagrane & mask_bez_id & mask_dzis
     
     if mask_do_zaktualizowania.any():
         nowy_id = f"AKO_{datetime.now().strftime('%y%m%d_%H%M')}"
         df_historia.loc[mask_do_zaktualizowania, 'Kupon_ID'] = nowy_id
 
-    # CRITICAL FIX: ZAPISYWANIE WYGENEROWANEGO KUPON_ID Z POWROTEM DO ALL_PREDICTIONS
+    # CRITICAL FIX: ZAPISYWANIE WYGENEROWANEGO KUPON_ID Z POWROTEM DO ALL_PREDICTIONS Z NOWYM KLUCZEM
     df_historia['Unikalny_Klucz'] = df_historia['Match_ID'].astype(str) + "_" + df_historia['Engine'].astype(str) + "_" + df_historia['Typ'].astype(str)
     hist_kupon_map = df_historia[df_historia['Kupon_ID'].astype(str).str.strip() != ""].set_index('Unikalny_Klucz')['Kupon_ID'].to_dict()
     
@@ -1355,7 +1351,6 @@ if not df_historia.empty:
         try: stawka = float(stawka_str)
         except: stawka = 100.0
         
-        jednostki_str = str(user_units.get(k_id, "1j"))
         wyslij_pod = str(user_pods.get(k_id, ""))
         tel_status = str(user_tel_stat.get(k_id, ""))
         
@@ -1365,7 +1360,7 @@ if not df_historia.empty:
         elif status_ako == "PRZEGRANA": profit = -stawka
         else: profit = 0.0
         
-        nowe_ako_list.append([k_id, data_zawarcia, mecze_skrot, liczba_zdarzen, kurs_ako, stawka, jednostki_str, status_ako, wygrana_brutto, profit, wyslij_pod, tel_status])
+        nowe_ako_list.append([k_id, data_zawarcia, mecze_skrot, liczba_zdarzen, kurs_ako, stawka, status_ako, wygrana_brutto, profit, wyslij_pod, tel_status])
 
     df_ako = pd.DataFrame(nowe_ako_list, columns=cols_ako)
     df_ako = df_ako.sort_values(by="Data_Zawarcia", ascending=False)
@@ -1484,5 +1479,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Wersja Ultimate - Skutecznie wdrożono Bayesowskie Wygładzanie (Time Decay) oraz 👑 GOLDEN PICK.")
+print("Wersja Ultimate - Skutecznie wdrożono Bayesowskie Wygładzanie, Copula Correlation oraz system 👑 GOLDEN PICK.")
 print("=" * 60)
