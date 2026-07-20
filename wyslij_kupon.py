@@ -216,8 +216,11 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
         idx_wyslij_pod = headers_ako.index("Wyslij_Podsumowanie")
         
         for _, rekord in do_podsumowania.iterrows():
+            is_manual = False
             kupon_id = str(rekord['Kupon_ID']).strip()
             if not kupon_id: continue
+            
+            is_manual = str(rekord.get('Wyslij_Podsumowanie', '')).upper() in ['TRUE', 'TAK', '1']
             
             mecze_hist = df_hist[df_hist['Kupon_ID'].astype(str).str.strip() == kupon_id] if not df_hist.empty and 'Kupon_ID' in df_hist.columns else pd.DataFrame()
             mecze_pred = df_pred[df_pred['Kupon_ID'].astype(str).str.strip() == kupon_id] if not df_pred.empty and 'Kupon_ID' in df_pred.columns else pd.DataFrame()
@@ -251,7 +254,7 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
                 try: kurs_ako = float(str(rekord.get('Kurs_AKO', '1.0')).replace(',', '.'))
                 except: kurs_ako = 1.0
             
-            # WŁASNY, KULOODPORNY MECHANIZM OCENY STATUSU (Ignoruje zepsute dane z Excela)
+            # WŁASNY, KULOODPORNY MECHANIZM OCENY STATUSU KUPONU
             if "PRZEGRANA" in statusy_zdarzen:
                 real_status_ako = "PRZEGRANA"
             elif "W OCZEKIWANIU" in statusy_zdarzen or "DO RĘCZNEJ KONTROLI" in statusy_zdarzen:
@@ -298,7 +301,6 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
                         if is_manual: 
                             komorki_ako_do_aktualizacji.append(gspread.Cell(row=r_idx+1, col=idx_wyslij_pod+1, value="FALSE"))
                         
-                        # Korygujemy błędy zapisane zepsutym procesem prosto w Arkuszu AKO
                         if str(row[headers_ako.index("Status_AKO")]) != real_status_ako:
                             komorki_ako_do_aktualizacji.append(gspread.Cell(row=r_idx+1, col=headers_ako.index("Status_AKO")+1, value=real_status_ako))
                         if str(row[headers_ako.index("Kurs_AKO")]) != str(kurs_ako):
