@@ -44,7 +44,7 @@ SZABLON_PRZEGRANA = """
 ───────────────
 {mecze}───────────────
 📈 Łączny kurs: {kurs}
-📉 Strata: -{stawka_j}j (-{stawka_pln} PLN)
+📉 Strata: {stawka_j}j ({stawka_pln} PLN)
 """
 
 SZABLON_OCZEKUJE = """
@@ -101,13 +101,9 @@ if 'Wyslij_AKO' in df_pred.columns:
     do_wysylki = df_pred[df_pred['Wyslij_AKO'].astype(str).str.upper().isin(['TRUE', 'TAK', '1'])].copy()
     
     if not do_wysylki.empty:
-        print(f"Znaleziono {len(do_wysylki)} wytypowanych wierszy do wysyłki.")
-        
-        # 1a. AUTOMATYCZNE GENEROWANIE KUPON_ID
         empty_mask = do_wysylki['Kupon_ID'].astype(str).str.strip() == ""
         if empty_mask.any():
             new_id = f"AKO_{datetime.now().strftime('%y%m%d_%H%M')}"
-            print(f"Automatyczne nadanie nowego Kupon_ID: {new_id} dla {empty_mask.sum()} meczów bez ID.")
             do_wysylki.loc[empty_mask, 'Kupon_ID'] = new_id
             
             new_id_map = {}
@@ -123,15 +119,12 @@ if 'Wyslij_AKO' in df_pred.columns:
                     idx_match = headers.index("Match_ID")
                     idx_engine = headers.index("Engine")
                     idx_typ = headers.index("Typ")
-                    
                     for r_idx, row in enumerate(ws_pred_data[1:], start=2):
                         key = (str(row[idx_match]), str(row[idx_engine]), str(row[idx_typ]))
                         if key in new_id_map:
                             cells_to_update_pred.append(gspread.Cell(row=r_idx, col=idx_kupon+1, value=new_id))
-                    
-                    if cells_to_update_pred:
-                        ws_pred.update_cells(cells_to_update_pred)
-                except Exception as e: print(f"Błąd All_Predictions: {e}")
+                    if cells_to_update_pred: ws_pred.update_cells(cells_to_update_pred)
+                except: pass
 
             cells_to_update_hist = []
             ws_hist_data = ws_hist.get_all_values()
@@ -142,15 +135,12 @@ if 'Wyslij_AKO' in df_pred.columns:
                     idx_match_h = headers_hist.index("Match_ID")
                     idx_engine_h = headers_hist.index("Engine")
                     idx_typ_h = headers_hist.index("Typ")
-                    
                     for r_idx, row in enumerate(ws_hist_data[1:], start=2):
                         key = (str(row[idx_match_h]), str(row[idx_engine_h]), str(row[idx_typ_h]))
                         if key in new_id_map:
                             cells_to_update_hist.append(gspread.Cell(row=r_idx, col=idx_kupon_h+1, value=new_id))
-                    
-                    if cells_to_update_hist:
-                        ws_hist.update_cells(cells_to_update_hist)
-                except Exception as e: print(f"Błąd Historia_Typow: {e}")
+                    if cells_to_update_hist: ws_hist.update_cells(cells_to_update_hist)
+                except: pass
 
         wyslane_id = []
 
@@ -167,9 +157,7 @@ if 'Wyslij_AKO' in df_pred.columns:
                 k_str = str(m.get('Kurs_Szac', '1.0')).replace(',', '.')
                 try: k_val = float(k_str)
                 except: k_val = 1.0
-                
-                if 1.0 < k_val < 50.0:
-                    dynamic_kurs *= k_val 
+                if k_val > 1.0: dynamic_kurs *= k_val 
                     
                 lista_meczow_txt += f"⚽ {m['Gospodarz']} vs {m['Gość']}\n📅 {m['Data']} ⏰ {m['Godzina']} | 🎯 Typ: <b>{m['Typ']}</b> | 📈 {k_val:.2f}\n\n"
             
@@ -180,26 +168,19 @@ if 'Wyslij_AKO' in df_pred.columns:
                 rekord = kupon_data.iloc[0]
                 try: stawka_pln = float(str(rekord.get('Stawka', '100')).replace(',', '.'))
                 except: stawka_pln = 100.0
-            else:
-                stawka_pln = 100.0
+            else: stawka_pln = 100.0
             
             stawka_j = round(stawka_pln / WARTOSC_JEDNOSTKI_PLN, 2)
             zysk_pln = round((stawka_pln * PODATEK_BUKMACHERSKI * kurs_ako) - stawka_pln, 2)
             zysk_j = round(zysk_pln / WARTOSC_JEDNOSTKI_PLN, 2)
             
             wiadomosc = SZABLON_NOWY.format(
-                id_kuponu=kupon_id,
-                mecze=lista_meczow_txt,
-                kurs=f"{kurs_ako:.2f}",
-                stawka_j=stawka_j,
-                stawka_pln=stawka_pln,
-                wartosc_j=int(WARTOSC_JEDNOSTKI_PLN),
-                zysk_j=zysk_j,
-                zysk_pln=zysk_pln
+                id_kuponu=kupon_id, mecze=lista_meczow_txt, kurs=f"{kurs_ako:.2f}",
+                stawka_j=stawka_j, stawka_pln=stawka_pln, wartosc_j=int(WARTOSC_JEDNOSTKI_PLN),
+                zysk_j=zysk_j, zysk_pln=zysk_pln
             )
             
-            if send_telegram(wiadomosc):
-                wyslane_id.append(kupon_id)
+            if send_telegram(wiadomosc): wyslane_id.append(kupon_id)
             
         if wyslane_id:
             komorki_do_odznaczenia = []
@@ -211,13 +192,10 @@ if 'Wyslij_AKO' in df_pred.columns:
             for r_idx, row in enumerate(ws_pred_data[1:], start=2):
                 if row[idx_wyslij].upper() in ['TRUE', 'TAK', '1'] and row[idx_kupon] in wyslane_id:
                     komorki_do_odznaczenia.append(gspread.Cell(row=r_idx, col=idx_wyslij+1, value="FALSE"))
-                    
-            if komorki_do_odznaczenia:
-                ws_pred.update_cells(komorki_do_odznaczenia)
-                print(f"Pomyślnie odznaczono {len(wyslane_id)} wysłane kupony w arkuszu.")
+            if komorki_do_odznaczenia: ws_pred.update_cells(komorki_do_odznaczenia)
 
 # ==========================================
-# 2. WYSYŁKA PODSUMOWAŃ (ROZLICZONE LUB W OCZEKIWANIU)
+# 2. WYSYŁKA PODSUMOWAŃ (KULOODPORNA)
 # ==========================================
 if 'Telegram_Status' not in df_ako.columns:
     df_ako['Telegram_Status'] = ""
@@ -230,8 +208,6 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
     do_podsumowania = df_ako[mask_auto | mask_manual]
 
     if not do_podsumowania.empty:
-        print(f"Znaleziono {len(do_podsumowania)} kuponów do podsumowania/podglądu.")
-        
         komorki_ako_do_aktualizacji = []
         ws_ako_data = ws_ako.get_all_values()
         headers_ako = ws_ako_data[0]
@@ -266,18 +242,19 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
                 k_str = str(m.get('Kurs_Szac', '1.0')).replace(',', '.')
                 try: k_val = float(k_str)
                 except: k_val = 1.0
-                
-                if 1.0 < k_val < 50.0:
-                    dynamic_kurs *= k_val
+                if k_val > 1.0: dynamic_kurs *= k_val
                     
                 lista_meczow_txt += f"{emoji} {m['Gospodarz']} - {m['Gość']} | Typ: <b>{m['Typ']}</b> | 📈 {k_val:.2f}\n"
             
-            dynamic_kurs = round(dynamic_kurs, 2)
+            kurs_ako = round(dynamic_kurs, 2)
+            if kurs_ako == 1.0:
+                try: kurs_ako = float(str(rekord.get('Kurs_AKO', '1.0')).replace(',', '.'))
+                except: kurs_ako = 1.0
             
-            # KULOODPORNA WERYFIKACJA STATUSU KUPONU NA ŻYWO (Odrzucenie zepsutego Status_AKO z arkusza)
+            # WŁASNY, KULOODPORNY MECHANIZM OCENY STATUSU (Ignoruje zepsute dane z Excela)
             if "PRZEGRANA" in statusy_zdarzen:
                 real_status_ako = "PRZEGRANA"
-            elif "W OCZEKIWANIU" in statusy_zdarzen:
+            elif "W OCZEKIWANIU" in statusy_zdarzen or "DO RĘCZNEJ KONTROLI" in statusy_zdarzen:
                 real_status_ako = "W OCZEKIWANIU"
             elif len(statusy_zdarzen) > 0 and all(s == "WYGRANA" for s in statusy_zdarzen):
                 real_status_ako = "WYGRANA"
@@ -290,16 +267,12 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
             try: stawka_pln = float(str(rekord.get('Stawka', '100')).replace(',', '.'))
             except: stawka_pln = 100.0
             
-            kurs_ako = dynamic_kurs # PODMIANA BŁĘDNEGO KURSU Z ARKUSZA NA KURS WYLICZONY NA ŻYWO
-            
             stawka_j = round(stawka_pln / WARTOSC_JEDNOSTKI_PLN, 2)
-            zysk_pln = round((stawka_pln * PODATEK_BUKMACHERSKI * kurs_ako) - stawka_pln, 2)
-            zysk_j = round(zysk_pln / WARTOSC_JEDNOSTKI_PLN, 2)
             
-            is_manual = str(rekord.get('Wyslij_Podsumowanie', '')).upper() in ['TRUE', 'TAK', '1']
-            
-            # UŻYCIE REALNEGO STATUSU DO WYSYŁKI SZABLONU
             if real_status_ako == 'WYGRANA':
+                wygrana_brutto = round(kurs_ako * stawka_pln * PODATEK_BUKMACHERSKI, 2)
+                zysk_pln = round(wygrana_brutto - stawka_pln, 2)
+                zysk_j = round(zysk_pln / WARTOSC_JEDNOSTKI_PLN, 2)
                 wiadomosc = SZABLON_WYGRANA.format(
                     id_kuponu=kupon_id, mecze=lista_meczow_txt, 
                     kurs=f"{kurs_ako:.2f}", zysk_j=zysk_j, zysk_pln=zysk_pln
@@ -307,9 +280,12 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
             elif real_status_ako == 'PRZEGRANA':
                 wiadomosc = SZABLON_PRZEGRANA.format(
                     id_kuponu=kupon_id, mecze=lista_meczow_txt, 
-                    kurs=f"{kurs_ako:.2f}", stawka_j=stawka_j, stawka_pln=stawka_pln
+                    kurs=f"{kurs_ako:.2f}", stawka_j=f"-{stawka_j}", stawka_pln=f"-{stawka_pln}"
                 )
             else:
+                wygrana_brutto = round(kurs_ako * stawka_pln * PODATEK_BUKMACHERSKI, 2)
+                zysk_pln = round(wygrana_brutto - stawka_pln, 2)
+                zysk_j = round(zysk_pln / WARTOSC_JEDNOSTKI_PLN, 2)
                 wiadomosc = SZABLON_OCZEKUJE.format(
                     id_kuponu=kupon_id, mecze=lista_meczow_txt, 
                     kurs=f"{kurs_ako:.2f}", stawka_j=stawka_j, stawka_pln=stawka_pln, 
@@ -321,11 +297,17 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
                     if row[idx_kupon] == kupon_id:
                         if is_manual: 
                             komorki_ako_do_aktualizacji.append(gspread.Cell(row=r_idx+1, col=idx_wyslij_pod+1, value="FALSE"))
-                        # Aktualizujemy flagę telegramu na WYSŁANO tylko wtedy, kiedy kupon jest realnie w pełni rozliczony
+                        
+                        # Korygujemy błędy zapisane zepsutym procesem prosto w Arkuszu AKO
+                        if str(row[headers_ako.index("Status_AKO")]) != real_status_ako:
+                            komorki_ako_do_aktualizacji.append(gspread.Cell(row=r_idx+1, col=headers_ako.index("Status_AKO")+1, value=real_status_ako))
+                        if str(row[headers_ako.index("Kurs_AKO")]) != str(kurs_ako):
+                             komorki_ako_do_aktualizacji.append(gspread.Cell(row=r_idx+1, col=headers_ako.index("Kurs_AKO")+1, value=kurs_ako))
+                        
                         if real_status_ako in ['WYGRANA', 'PRZEGRANA']:
                             komorki_ako_do_aktualizacji.append(gspread.Cell(row=r_idx+1, col=idx_tel_status+1, value="WYSŁANO"))
                         break
 
         if komorki_ako_do_aktualizacji:
             ws_ako.update_cells(komorki_ako_do_aktualizacji)
-            print("Pomyślnie wysłano podsumowania (Oczekujące/Zakończone) i zaktualizowano arkusz.")
+            print("Pomyślnie wysłano podsumowania i zaktualizowano arkusz.")
