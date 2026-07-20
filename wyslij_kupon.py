@@ -103,19 +103,17 @@ if 'Wyslij_AKO' in df_pred.columns:
     if not do_wysylki.empty:
         print(f"Znaleziono {len(do_wysylki)} wytypowanych wierszy do wysyłki.")
         
-        # 1a. AUTOMATYCZNE GENEROWANIE KUPON_ID I NAPRAWA "DZIURY CZASOWEJ" Z WEEKENDU
+        # 1a. AUTOMATYCZNE GENEROWANIE KUPON_ID
         empty_mask = do_wysylki['Kupon_ID'].astype(str).str.strip() == ""
         if empty_mask.any():
             new_id = f"AKO_{datetime.now().strftime('%y%m%d_%H%M')}"
             print(f"Automatyczne nadanie nowego Kupon_ID: {new_id} dla {empty_mask.sum()} meczów bez ID.")
             do_wysylki.loc[empty_mask, 'Kupon_ID'] = new_id
             
-            # Mapowanie unikalnych kluczy do nowego ID
             new_id_map = {}
             for _, r in do_wysylki[empty_mask].iterrows():
                 new_id_map[(str(r['Match_ID']), str(r['Engine']), str(r['Typ']))] = new_id
                 
-            # ZAPIS DO ALL_PREDICTIONS
             cells_to_update_pred = []
             ws_pred_data = ws_pred.get_all_values()
             if ws_pred_data:
@@ -135,7 +133,6 @@ if 'Wyslij_AKO' in df_pred.columns:
                         ws_pred.update_cells(cells_to_update_pred)
                 except Exception as e: print(f"Błąd All_Predictions: {e}")
 
-            # NOWOŚĆ: ZAPIS BEZPOŚREDNIO DO HISTORIA_TYPOW (Fix na weekendowe gubienie kuponów)
             cells_to_update_hist = []
             ws_hist_data = ws_hist.get_all_values()
             if ws_hist_data:
@@ -153,7 +150,6 @@ if 'Wyslij_AKO' in df_pred.columns:
                     
                     if cells_to_update_hist:
                         ws_hist.update_cells(cells_to_update_hist)
-                        print(f"Zabezpieczono {len(cells_to_update_hist)} wpisów w Historii Typów przed wyparowaniem!")
                 except Exception as e: print(f"Błąd Historia_Typow: {e}")
 
         wyslane_id = []
@@ -205,7 +201,6 @@ if 'Wyslij_AKO' in df_pred.columns:
             if send_telegram(wiadomosc):
                 wyslane_id.append(kupon_id)
             
-        # Oznaczanie wysłanych kuponów
         if wyslane_id:
             komorki_do_odznaczenia = []
             ws_pred_data = ws_pred.get_all_values()
@@ -248,19 +243,22 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
             kupon_id = str(rekord['Kupon_ID']).strip()
             if not kupon_id: continue
             
-            # Kuloodporny odczyt - łączymy dane z obu zakładek z priorytetem na w pełni rozliczoną Historię
             mecze_hist = df_hist[df_hist['Kupon_ID'].astype(str).str.strip() == kupon_id] if not df_hist.empty and 'Kupon_ID' in df_hist.columns else pd.DataFrame()
             mecze_pred = df_pred[df_pred['Kupon_ID'].astype(str).str.strip() == kupon_id] if not df_pred.empty and 'Kupon_ID' in df_pred.columns else pd.DataFrame()
             
             mecze_df = pd.concat([mecze_hist, mecze_pred])
             if not mecze_df.empty:
                 mecze_df['Temp_Key'] = mecze_df['Match_ID'].astype(str) + "_" + mecze_df['Engine'].astype(str) + "_" + mecze_df['Typ'].astype(str)
-                # drop_duplicates z keep='first' zachowa świeże statusy pobrane najpierw z Historii
                 mecze_df = mecze_df.drop_duplicates(subset=['Temp_Key'], keep='first')
             
             lista_meczow_txt = ""
+            dynamic_kurs = 1.0
+            statusy_zdarzen = []
+            
             for _, m in mecze_df.iterrows():
                 status_meczu = str(m.get('Status', 'W OCZEKIWANIU')).upper()
+                statusy_zdarzen.append(status_meczu)
+                
                 if status_meczu == "WYGRANA": emoji = "🟢"
                 elif status_meczu == "PRZEGRANA": emoji = "🔴"
                 else: emoji = "⏳" 
@@ -269,16 +267,30 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
                 try: k_val = float(k_str)
                 except: k_val = 1.0
                 
+                if 1.0 < k_val < 50.0:
+                    dynamic_kurs *= k_val
+                    
                 lista_meczow_txt += f"{emoji} {m['Gospodarz']} - {m['Gość']} | Typ: <b>{m['Typ']}</b> | 📈 {k_val:.2f}\n"
             
+            dynamic_kurs = round(dynamic_kurs, 2)
+            
+            # KULOODPORNA WERYFIKACJA STATUSU KUPONU NA ŻYWO (Odrzucenie zepsutego Status_AKO z arkusza)
+            if "PRZEGRANA" in statusy_zdarzen:
+                real_status_ako = "PRZEGRANA"
+            elif "W OCZEKIWANIU" in statusy_zdarzen:
+                real_status_ako = "W OCZEKIWANIU"
+            elif len(statusy_zdarzen) > 0 and all(s == "WYGRANA" for s in statusy_zdarzen):
+                real_status_ako = "WYGRANA"
+            else:
+                real_status_ako = "ZWRÓCONY"
+
             if not lista_meczow_txt:
                 lista_meczow_txt = f"⚽ Zdarzenia dla tego kuponu: <b>{rekord.get('Mecze_Skrot', 'Brak szczegółów w arkuszu')}</b>\n\n"
             
             try: stawka_pln = float(str(rekord.get('Stawka', '100')).replace(',', '.'))
             except: stawka_pln = 100.0
             
-            try: kurs_ako = float(str(rekord.get('Kurs_AKO', '1.0')).replace(',', '.'))
-            except: kurs_ako = 1.0
+            kurs_ako = dynamic_kurs # PODMIANA BŁĘDNEGO KURSU Z ARKUSZA NA KURS WYLICZONY NA ŻYWO
             
             stawka_j = round(stawka_pln / WARTOSC_JEDNOSTKI_PLN, 2)
             zysk_pln = round((stawka_pln * PODATEK_BUKMACHERSKI * kurs_ako) - stawka_pln, 2)
@@ -286,12 +298,13 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
             
             is_manual = str(rekord.get('Wyslij_Podsumowanie', '')).upper() in ['TRUE', 'TAK', '1']
             
-            if rekord['Status_AKO'] == 'WYGRANA':
+            # UŻYCIE REALNEGO STATUSU DO WYSYŁKI SZABLONU
+            if real_status_ako == 'WYGRANA':
                 wiadomosc = SZABLON_WYGRANA.format(
                     id_kuponu=kupon_id, mecze=lista_meczow_txt, 
                     kurs=f"{kurs_ako:.2f}", zysk_j=zysk_j, zysk_pln=zysk_pln
                 )
-            elif rekord['Status_AKO'] == 'PRZEGRANA':
+            elif real_status_ako == 'PRZEGRANA':
                 wiadomosc = SZABLON_PRZEGRANA.format(
                     id_kuponu=kupon_id, mecze=lista_meczow_txt, 
                     kurs=f"{kurs_ako:.2f}", stawka_j=stawka_j, stawka_pln=stawka_pln
@@ -308,7 +321,8 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
                     if row[idx_kupon] == kupon_id:
                         if is_manual: 
                             komorki_ako_do_aktualizacji.append(gspread.Cell(row=r_idx+1, col=idx_wyslij_pod+1, value="FALSE"))
-                        if rekord['Status_AKO'] in ['WYGRANA', 'PRZEGRANA']:
+                        # Aktualizujemy flagę telegramu na WYSŁANO tylko wtedy, kiedy kupon jest realnie w pełni rozliczony
+                        if real_status_ako in ['WYGRANA', 'PRZEGRANA']:
                             komorki_ako_do_aktualizacji.append(gspread.Cell(row=r_idx+1, col=idx_tel_status+1, value="WYSŁANO"))
                         break
 
