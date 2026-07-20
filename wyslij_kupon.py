@@ -22,7 +22,7 @@ SZABLON_NOWY = """
 ───────────────
 {mecze}───────────────
 📊 <b>Podsumowanie Kuponu:</b>
-📈 Łączny kurs (Model Zoptymalizowany): {kurs}
+📈 Łączny kurs: {kurs}
 💰 Stawka: {stawka_j}j ({stawka_pln} PLN przy 1j={wartosc_j}zł)
 💸 Do wygrania: +{zysk_j}j (+{zysk_pln} PLN po odliczeniu podatku)
 """
@@ -103,33 +103,58 @@ if 'Wyslij_AKO' in df_pred.columns:
     if not do_wysylki.empty:
         print(f"Znaleziono {len(do_wysylki)} wytypowanych wierszy do wysyłki.")
         
-        # 1a. AUTOMATYCZNE GENEROWANIE KUPON_ID JEŚLI JEST PUSTE PRZED WYSŁANIEM
+        # 1a. AUTOMATYCZNE GENEROWANIE KUPON_ID I NAPRAWA "DZIURY CZASOWEJ" Z WEEKENDU
         empty_mask = do_wysylki['Kupon_ID'].astype(str).str.strip() == ""
         if empty_mask.any():
             new_id = f"AKO_{datetime.now().strftime('%y%m%d_%H%M')}"
             print(f"Automatyczne nadanie nowego Kupon_ID: {new_id} dla {empty_mask.sum()} meczów bez ID.")
             do_wysylki.loc[empty_mask, 'Kupon_ID'] = new_id
             
-            # Zapisz wygenerowany numer z powrotem do arkusza Google
-            cells_to_update = []
-            ws_pred_data = ws_pred.get_all_values()
-            headers = ws_pred_data[0]
-            idx_kupon = headers.index("Kupon_ID")
-            idx_match = headers.index("Match_ID")
-            idx_engine = headers.index("Engine")
-            idx_typ = headers.index("Typ")
-            
+            # Mapowanie unikalnych kluczy do nowego ID
             new_id_map = {}
             for _, r in do_wysylki[empty_mask].iterrows():
                 new_id_map[(str(r['Match_ID']), str(r['Engine']), str(r['Typ']))] = new_id
                 
-            for r_idx, row in enumerate(ws_pred_data[1:], start=2):
-                key = (str(row[idx_match]), str(row[idx_engine]), str(row[idx_typ]))
-                if key in new_id_map:
-                    cells_to_update.append(gspread.Cell(row=r_idx, col=idx_kupon+1, value=new_id))
-            
-            if cells_to_update:
-                ws_pred.update_cells(cells_to_update)
+            # ZAPIS DO ALL_PREDICTIONS
+            cells_to_update_pred = []
+            ws_pred_data = ws_pred.get_all_values()
+            if ws_pred_data:
+                headers = ws_pred_data[0]
+                try:
+                    idx_kupon = headers.index("Kupon_ID")
+                    idx_match = headers.index("Match_ID")
+                    idx_engine = headers.index("Engine")
+                    idx_typ = headers.index("Typ")
+                    
+                    for r_idx, row in enumerate(ws_pred_data[1:], start=2):
+                        key = (str(row[idx_match]), str(row[idx_engine]), str(row[idx_typ]))
+                        if key in new_id_map:
+                            cells_to_update_pred.append(gspread.Cell(row=r_idx, col=idx_kupon+1, value=new_id))
+                    
+                    if cells_to_update_pred:
+                        ws_pred.update_cells(cells_to_update_pred)
+                except Exception as e: print(f"Błąd All_Predictions: {e}")
+
+            # NOWOŚĆ: ZAPIS BEZPOŚREDNIO DO HISTORIA_TYPOW (Fix na weekendowe gubienie kuponów)
+            cells_to_update_hist = []
+            ws_hist_data = ws_hist.get_all_values()
+            if ws_hist_data:
+                headers_hist = ws_hist_data[0]
+                try:
+                    idx_kupon_h = headers_hist.index("Kupon_ID")
+                    idx_match_h = headers_hist.index("Match_ID")
+                    idx_engine_h = headers_hist.index("Engine")
+                    idx_typ_h = headers_hist.index("Typ")
+                    
+                    for r_idx, row in enumerate(ws_hist_data[1:], start=2):
+                        key = (str(row[idx_match_h]), str(row[idx_engine_h]), str(row[idx_typ_h]))
+                        if key in new_id_map:
+                            cells_to_update_hist.append(gspread.Cell(row=r_idx, col=idx_kupon_h+1, value=new_id))
+                    
+                    if cells_to_update_hist:
+                        ws_hist.update_cells(cells_to_update_hist)
+                        print(f"Zabezpieczono {len(cells_to_update_hist)} wpisów w Historii Typów przed wyparowaniem!")
+                except Exception as e: print(f"Błąd Historia_Typow: {e}")
 
         wyslane_id = []
 
@@ -143,7 +168,6 @@ if 'Wyslij_AKO' in df_pred.columns:
             dynamic_kurs = 1.0
 
             for _, m in mecze_df.iterrows():
-                # UŻYWAMY TYLKO I WYŁĄCZNIE KURS_SZAC
                 k_str = str(m.get('Kurs_Szac', '1.0')).replace(',', '.')
                 try: k_val = float(k_str)
                 except: k_val = 1.0
@@ -154,7 +178,7 @@ if 'Wyslij_AKO' in df_pred.columns:
                 lista_meczow_txt += f"⚽ {m['Gospodarz']} vs {m['Gość']}\n📅 {m['Data']} ⏰ {m['Godzina']} | 🎯 Typ: <b>{m['Typ']}</b> | 📈 {k_val:.2f}\n\n"
             
             dynamic_kurs = round(dynamic_kurs, 2)
-            kurs_ako = dynamic_kurs # Czyste wyliczenie bez ułomnej zależności od kolumny Rynek
+            kurs_ako = dynamic_kurs
 
             if not kupon_data.empty:
                 rekord = kupon_data.iloc[0]
@@ -181,7 +205,7 @@ if 'Wyslij_AKO' in df_pred.columns:
             if send_telegram(wiadomosc):
                 wyslane_id.append(kupon_id)
             
-        # Oznaczanie wysłanych kuponów w Arkuszu na Wysłane (Wyslij_AKO = FALSE)
+        # Oznaczanie wysłanych kuponów
         if wyslane_id:
             komorki_do_odznaczenia = []
             ws_pred_data = ws_pred.get_all_values()
@@ -205,9 +229,7 @@ if 'Telegram_Status' not in df_ako.columns:
     ws_ako.update([df_ako.columns.values.tolist()] + df_ako.fillna("").values.tolist())
 
 if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
-    # Maska auto -> Wygrane lub przegrane jeszcze nie wysłane
     mask_auto = (df_ako['Status_AKO'].isin(['WYGRANA', 'PRZEGRANA'])) & (df_ako['Telegram_Status'] != 'WYSŁANO')
-    # Maska manual -> Ręcznie odkliknięte z "TRUE" w arkuszu, np. podsumowanie "W Oczekiwaniu"
     mask_manual = (df_ako['Wyslij_Podsumowanie'].astype(str).str.upper().isin(['TRUE', 'TAK', '1']))
     
     do_podsumowania = df_ako[mask_auto | mask_manual]
@@ -226,16 +248,15 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
             kupon_id = str(rekord['Kupon_ID']).strip()
             if not kupon_id: continue
             
-            # ========================================================
-            # INTELIGENTNY FALLBACK DANYCH DLA KUPONÓW W OCZEKIWANIU
-            # ========================================================
-            mecze_df = pd.DataFrame()
-            if not df_hist.empty and 'Kupon_ID' in df_hist.columns:
-                mecze_df = df_hist[df_hist['Kupon_ID'].astype(str).str.strip() == kupon_id]
+            # Kuloodporny odczyt - łączymy dane z obu zakładek z priorytetem na w pełni rozliczoną Historię
+            mecze_hist = df_hist[df_hist['Kupon_ID'].astype(str).str.strip() == kupon_id] if not df_hist.empty and 'Kupon_ID' in df_hist.columns else pd.DataFrame()
+            mecze_pred = df_pred[df_pred['Kupon_ID'].astype(str).str.strip() == kupon_id] if not df_pred.empty and 'Kupon_ID' in df_pred.columns else pd.DataFrame()
             
-            # Jeśli Historia_Typów jeszcze ich nie przejęła, bierzemy świeżo pobrane z All_Predictions
-            if mecze_df.empty and not df_pred.empty and 'Kupon_ID' in df_pred.columns:
-                mecze_df = df_pred[df_pred['Kupon_ID'].astype(str).str.strip() == kupon_id]
+            mecze_df = pd.concat([mecze_hist, mecze_pred])
+            if not mecze_df.empty:
+                mecze_df['Temp_Key'] = mecze_df['Match_ID'].astype(str) + "_" + mecze_df['Engine'].astype(str) + "_" + mecze_df['Typ'].astype(str)
+                # drop_duplicates z keep='first' zachowa świeże statusy pobrane najpierw z Historii
+                mecze_df = mecze_df.drop_duplicates(subset=['Temp_Key'], keep='first')
             
             lista_meczow_txt = ""
             for _, m in mecze_df.iterrows():
@@ -244,14 +265,12 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
                 elif status_meczu == "PRZEGRANA": emoji = "🔴"
                 else: emoji = "⏳" 
                 
-                # Tylko szacunkowy kurs
                 k_str = str(m.get('Kurs_Szac', '1.0')).replace(',', '.')
                 try: k_val = float(k_str)
                 except: k_val = 1.0
                 
                 lista_meczow_txt += f"{emoji} {m['Gospodarz']} - {m['Gość']} | Typ: <b>{m['Typ']}</b> | 📈 {k_val:.2f}\n"
             
-            # Ostateczny awaryjny ratunek, jeśli zdarzenia jakimś cudem zniknęły
             if not lista_meczow_txt:
                 lista_meczow_txt = f"⚽ Zdarzenia dla tego kuponu: <b>{rekord.get('Mecze_Skrot', 'Brak szczegółów w arkuszu')}</b>\n\n"
             
@@ -287,10 +306,8 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
             if send_telegram(wiadomosc):
                 for r_idx, row in enumerate(ws_ako_data):
                     if row[idx_kupon] == kupon_id:
-                        # Odznaczamy zawsze po ręcznym kliknięciu żeby nie loopowało w przyszłości
                         if is_manual: 
                             komorki_ako_do_aktualizacji.append(gspread.Cell(row=r_idx+1, col=idx_wyslij_pod+1, value="FALSE"))
-                        # Automatycznie oznaczamy WYSŁANO tylko w momentach ostatecznego rozliczenia (żeby nie zablokowało końcowego podsumowania!)
                         if rekord['Status_AKO'] in ['WYGRANA', 'PRZEGRANA']:
                             komorki_ako_do_aktualizacji.append(gspread.Cell(row=r_idx+1, col=idx_tel_status+1, value="WYSŁANO"))
                         break
