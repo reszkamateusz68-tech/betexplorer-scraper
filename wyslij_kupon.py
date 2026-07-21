@@ -216,10 +216,10 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
         idx_wyslij_pod = headers_ako.index("Wyslij_Podsumowanie")
         
         for _, rekord in do_podsumowania.iterrows():
-            is_manual = False
             kupon_id = str(rekord['Kupon_ID']).strip()
             if not kupon_id: continue
             
+            # NAPRAWA BŁĘDU (inicjalizacja przed weryfikacją)
             is_manual = str(rekord.get('Wyslij_Podsumowanie', '')).upper() in ['TRUE', 'TAK', '1']
             
             mecze_hist = df_hist[df_hist['Kupon_ID'].astype(str).str.strip() == kupon_id] if not df_hist.empty and 'Kupon_ID' in df_hist.columns else pd.DataFrame()
@@ -254,7 +254,7 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
                 try: kurs_ako = float(str(rekord.get('Kurs_AKO', '1.0')).replace(',', '.'))
                 except: kurs_ako = 1.0
             
-            # WŁASNY, KULOODPORNY MECHANIZM OCENY STATUSU KUPONU
+            # WŁASNY MECHANIZM OCENY STATUSU KUPONU
             if "PRZEGRANA" in statusy_zdarzen:
                 real_status_ako = "PRZEGRANA"
             elif "W OCZEKIWANIU" in statusy_zdarzen or "DO RĘCZNEJ KONTROLI" in statusy_zdarzen:
