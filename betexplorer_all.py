@@ -177,8 +177,22 @@ def get_poisson_match_prob(lam_h, lam_a, max_val=35):
             else: p_2 += prob_ij
     return p_1, p_x, p_2
 
+def calc_betbuilder_copula(odds_list, rho=0.35):
+    if not odds_list: return 1.0
+    q_list = [1.0 / o for o in odds_list if o > 0]
+    if not q_list: return 1.0
+    q_list.sort() 
+    
+    q_joint = q_list[0]
+    for q_next in q_list[1:]:
+        gamma = 1.0 - rho * (1.0 - min(q_joint, q_next))
+        q_joint = q_joint * (q_next ** gamma)
+        
+    final_odd = 1.0 / q_joint if q_joint > 0 else 99.0
+    return max(1.015, round(final_odd, 2))
+
 # ==========================================================
-# FUNKCJE ANALITYCZNE I KONTROLA RYZYKA
+# FUNKCJE ANALITYCZNE I KONTROLA RYZYKA (TIME DECAY & BAYES)
 # ==========================================================
 def get_weighted_stats(df, target_col, condition_lambda, prior_prob=0.5, alpha=2.0):
     if df.empty: return 0.0, 0, 0, False
@@ -221,7 +235,7 @@ def get_weighted_stats(df, target_col, condition_lambda, prior_prob=0.5, alpha=2
         
     return prob, total_hits, total_len, is_smoothed
 
-# Centralna funkcja ewaluacyjna używana przez BetBuilder i Backtester
+# Funkcja ewaluacyjna używana przez BetBuilder i Backtester (Zawsze szuka PRZEGRANEJ)
 def evaluate_bet(bet_type, row_data):
     bet = str(bet_type).upper().strip()
     
@@ -237,7 +251,6 @@ def evaluate_bet(bet_type, row_data):
     hst = pd.to_numeric(row_data.get('ShotsTarget_H', np.nan))
     ast = pd.to_numeric(row_data.get('ShotsTarget_A', np.nan))
 
-    # BEZWZGLĘDNY PRIORYTET PORAŻKI W AKO
     if "+" in bet:
         parts = bet.split("+")
         results = [evaluate_bet(p.strip(), row_data) for p in parts]
@@ -482,7 +495,7 @@ golden_cols = {
     'FTHG': 'FTHG', 'FTAG': 'FTAG', 'Total_Goals': 'Total_Goals', 'HTHG': 'HTHG', 'HTAG': 'HTAG',
     'HS': 'Shots_H', 'AS': 'Shots_A', 'HST': 'ShotsTarget_H', 'AST': 'ShotsTarget_A',
     'HC': 'Corners_H', 'AC': 'Corners_A'
-    # Usunięto kolumny Odd_1, Odd_X, Odd_2 dla uproszczenia zgodnie z Twoją prośbą o usunięcie rynkowych
+    # Usunięto kolumny Odd_1, Odd_X, Odd_2 dla uproszczenia
 }
 
 if not results_df.empty:
@@ -607,26 +620,26 @@ if not fixtures_clean.empty and not valid_matches.empty:
 # ==========================================================
 all_generated_predictions = []
 
-# PODNIESIONE KOTWICE ABY ODZWIERCIEDLAĆ REALIA BUKMACHERSKIE
+# PODNIESIONE KOTWICE KURSOWE (Skorygowano, usunięto O0.5)
 KOTWICE_KURSOWE = {
-    'O0.5': 1.05, 'U3.5': 1.35, 'U4.5': 1.15, 'U5.5': 1.05, 'U6.5': 1.02,
-    'HT_U1.5': 1.45, 'HT_U2.5': 1.12, 'HT_U3.5': 1.03, 'HT_U4.5': 1.01,
-    '2H_U3.5': 1.04, '2H_U4.5': 1.02, '2H_U2.5': 1.15,
+    'U3.5': 1.40, 'U4.5': 1.18, 'U5.5': 1.05, 'U6.5': 1.02,
+    'HT_U1.5': 1.50, 'HT_U2.5': 1.15, 'HT_U3.5': 1.04, 'HT_U4.5': 1.02,
+    '2H_U3.5': 1.08, '2H_U4.5': 1.03, '2H_U2.5': 1.20,
     'C_U8.5': 2.78, 'C_U9.5': 2.02, 'C_U10.5': 1.59, 'C_U11.5': 1.33,
     'C_U12.5': 1.17, 'C_U13.5': 1.09, 'C_U14.5': 1.04, 
     'HC_U4.5': 2.59, 'HC_U5.5': 1.75, 'HC_U6.5': 1.35, 'HC_U7.5': 1.14, 'HC_U8.5': 1.03,
     'AC_U4.5': 1.74, 'AC_U5.5': 1.32, 'AC_U6.5': 1.11, 'AC_U7.5': 1.01, 'AC_U8.5': 1.01, 
     'HC_O4.5': 1.44, 'AC_O4.5': 1.98, 
-    'HU2.5': 1.15, 'HU3.5': 1.04, 'HU4.5': 1.01,
-    'AU2.5': 1.15, 'AU3.5': 1.04, 'AU4.5': 1.01,
+    'HU2.5': 1.20, 'HU3.5': 1.06, 'HU4.5': 1.02,
+    'AU2.5': 1.20, 'AU3.5': 1.06, 'AU4.5': 1.02,
     'S_1': 1.34, 'ST_1': 1.64
 }
 
-# Szablony BetBuilder sprawdzone rynkowo
+# Szablony BetBuilder sprawdzone rynkowo i ustalone przez użytkownika jako optymalne (bez zakazanych)
 BB_TEMPLATES = [
-    {"name": "Safe", "code": "O0.5+U5.5+HT_U3.5+2H_U3.5+HU3.5+AU3.5", "base_odd": 1.25, "min_prob": 0.85},
-    {"name": "Standard", "code": "O0.5+U4.5+HT_U2.5+2H_U3.5+HU3.5+AU3.5", "base_odd": 1.45, "min_prob": 0.75},
-    {"name": "Value", "code": "O0.5+U4.5+HT_U1.5+2H_U4.5+HU2.5+AU2.5", "base_odd": 1.75, "min_prob": 0.60}
+    {"name": "Optymalny", "code": "U6.5+HT_U4.5+2H_U4.5+HU4.5+AU4.5", "base_odd": 1.25, "min_prob": 0.85},
+    {"name": "Safe+", "code": "U5.5+HT_U3.5+2H_U4.5+HU4.5+AU4.5", "base_odd": 1.30, "min_prob": 0.80},
+    {"name": "Standard", "code": "U4.5+HT_U3.5+2H_U4.5+HU2.5+AU2.5", "base_odd": 1.60, "min_prob": 0.65}
 ]
 
 print("Uruchamiam Modele Predykcyjne...")
@@ -651,7 +664,6 @@ for idx, row in fixtures_clean.iterrows():
         a_tot_all['Team_GF'] = np.where(a_tot_all['Home'] == away, a_tot_all['FTHG'], a_tot_all['FTAG'])
         a_tot_all['Team_GA'] = np.where(a_tot_all['Home'] == away, a_tot_all['FTAG'], a_tot_all['FTHG'])
 
-    # Bufor dla aktualnego meczu, by odsiewać śmieciowe zakłady
     match_preds = []
     
     def add_pred_local(engine, typ, szansa, kurs_szac, arg):
@@ -663,7 +675,10 @@ for idx, row in fixtures_clean.iterrows():
             kurs_docelowy = 1.02
 
         prob_decimal = float(szansa) / 100.0
+        
+        # SYSTEM KLASYFIKACJI RYZYKA 
         if prob_decimal >= 0.95 and kurs_docelowy >= 1.20: risk_tag = "👑 GOLDEN PICK"
+        elif prob_decimal >= 0.95 and kurs_docelowy >= 1.10: risk_tag = "🥈 SILVER PICK"
         elif prob_decimal >= 0.95: risk_tag = "SAFE (95%+)"
         elif prob_decimal >= 0.85: risk_tag = "STANDARD (85-94%)"
         elif prob_decimal >= 0.75: risk_tag = "VALUE (75-84%)"
@@ -705,24 +720,34 @@ for idx, row in fixtures_clean.iterrows():
 
         if final_prob >= 0.70:
             fair_odd = round(1 / final_prob, 2)
+            
+            # Wyczerpująca analityka w Argumentacji (zgodnie z życzeniem - ilości, koszyki, wygrane/porażki)
+            h_wins = h_dom[h_dom['FTHG'] > h_dom['FTAG']]
+            h_ws_tiers = [team_tiers.get((league, x), 'Koszyk 3') for x in h_wins['Away']]
+            h_ws_txt = ", ".join([f"{k.replace('Koszyk ', 'K')}:{v}x" for k, v in dict(Counter(h_ws_tiers)).items()]) if h_ws_tiers else "Brak"
+            
+            h_losses = h_dom[h_dom['FTHG'] < h_dom['FTAG']]
+            h_ls_tiers = [team_tiers.get((league, x), 'Koszyk 3') for x in h_losses['Away']]
+            h_ls_txt = ", ".join([f"{k.replace('Koszyk ', 'K')}:{v}x" for k, v in dict(Counter(h_ls_tiers)).items()]) if h_ls_tiers else "Brak"
+            
+            a_wins = a_wyj[a_wyj['FTAG'] > a_wyj['FTHG']]
+            a_ws_tiers = [team_tiers.get((league, x), 'Koszyk 3') for x in a_wins['Home']]
+            a_ws_txt = ", ".join([f"{k.replace('Koszyk ', 'K')}:{v}x" for k, v in dict(Counter(a_ws_tiers)).items()]) if a_ws_tiers else "Brak"
+            
+            a_losses = a_wyj[a_wyj['FTAG'] < a_wyj['FTHG']]
+            a_ls_tiers = [team_tiers.get((league, x), 'Koszyk 3') for x in a_losses['Home']]
+            a_ls_txt = ", ".join([f"{k.replace('Koszyk ', 'K')}:{v}x" for k, v in dict(Counter(a_ls_tiers)).items()]) if a_ls_tiers else "Brak"
+
             if typ_kod == "1X":
-                h_1x_c = sum(h_dom['FTHG'] >= h_dom['FTAG'])
-                a_win_c = sum(a_wyj['FTAG'] > a_wyj['FTHG'])
-                h_1x_tot = sum(h_tot_all['Team_GF'] >= h_tot_all['Team_GA'])
-                a_win_tot = sum(a_tot_all['Team_GF'] > a_tot_all['Team_GA'])
-                arg = f"Gosp ({h_tier}) dom bez porażki {h_1x_c}/{len(h_dom)} (Ogółem: {h_1x_tot}/{len(h_tot_all)}). Gość ({a_tier}) wyjazd wygrał {a_win_c}/{len(a_wyj)}."
+                arg = f"Gosp ({h_tier}) u siebie: wygrał z [{h_ws_txt}], przegrał z [{h_ls_txt}]. Gość ({a_tier}) na wyjeździe: wygrał z [{a_ws_txt}], przegrał z [{a_ls_txt}]."
             else:
-                a_x2_c = sum(a_wyj['FTAG'] >= a_wyj['FTHG'])
-                h_win_c = sum(h_dom['FTHG'] > h_dom['FTAG'])
-                a_x2_tot = sum(a_tot_all['Team_GF'] >= a_tot_all['Team_GA'])
-                h_win_tot = sum(h_tot_all['Team_GF'] > h_tot_all['Team_GA'])
-                arg = f"Gość ({a_tier}) wyjazd bez porażki {a_x2_c}/{len(a_wyj)} (Ogółem: {a_x2_tot}/{len(a_tot_all)}). Gosp ({h_tier}) dom wygrał {h_win_c}/{len(h_dom)}."
+                arg = f"Gość ({a_tier}) na wyjeździe: wygrał z [{a_ws_txt}], przegrał z [{a_ls_txt}]. Gosp ({h_tier}) u siebie: wygrał z [{h_ws_txt}], przegrał z [{h_ls_txt}]."
                 
             add_pred_local("1X Pro", typ_kod, round(final_prob*100, 1), fair_odd, arg)
 
-    # --- 6b. GOAL LINE PRO ---
+    # --- 6b. GOAL LINE PRO (Generuje tylko pożyteczne linie) ---
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
-        for line in [2.5, 3.5, 4.5, 5.5, 6.5]:
+        for line in [2.5, 3.5, 4.5]: # ŚMIEĆ U5.5 i U6.5 USUNIĘTY
             prob_h_u, h_th, h_tl, h_sm = get_weighted_stats(h_dom, 'Total_Goals', lambda x: pd.notna(x) and x < line, prior_prob=0.75)
             prob_a_u, a_th, a_tl, a_sm = get_weighted_stats(a_wyj, 'Total_Goals', lambda x: pd.notna(x) and x < line, prior_prob=0.75)
             avg_prob_u = (prob_h_u + prob_a_u) / 2
@@ -731,7 +756,7 @@ for idx, row in fixtures_clean.iterrows():
                 if h_sm or a_sm: arg += " | ⚠️ Bayes"
                 add_pred_local("Goal Line Pro", f"U{line}", round(avg_prob_u*100, 1), KOTWICE_KURSOWE.get(f"U{line}", 1.10), arg)
 
-        for line in [0.5, 1.5, 2.5]:
+        for line in [1.5, 2.5]: # ŚMIEĆ O0.5 USUNIĘTY
             prob_h_o, h_th, h_tl, h_sm = get_weighted_stats(h_dom, 'Total_Goals', lambda x: pd.notna(x) and x > line, prior_prob=0.30)
             prob_a_o, a_th, a_tl, a_sm = get_weighted_stats(a_wyj, 'Total_Goals', lambda x: pd.notna(x) and x > line, prior_prob=0.30)
             avg_prob_o = (prob_h_o + prob_a_o) / 2
@@ -740,22 +765,27 @@ for idx, row in fixtures_clean.iterrows():
                 if h_sm or a_sm: arg += " | ⚠️ Bayes"
                 add_pred_local("Goal Line Pro", f"O{line}", round(avg_prob_o*100, 1), KOTWICE_KURSOWE.get(f"O{line}", 1.10), arg)
 
-    # --- 6c. BETBUILDER PRO (Model Historyczny) ---
+    # --- 6c. BETBUILDER PRO (Nowy Silnik) ---
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
         h_dom['HT_Total'] = pd.to_numeric(h_dom['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(h_dom['HTAG'], errors='coerce').fillna(0)
         a_wyj['HT_Total'] = pd.to_numeric(a_wyj['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(a_wyj['HTAG'], errors='coerce').fillna(0)
+        h_dom['2H_Total'] = pd.to_numeric(h_dom['Total_Goals'], errors='coerce').fillna(0) - h_dom['HT_Total']
+        a_wyj['2H_Total'] = pd.to_numeric(a_wyj['Total_Goals'], errors='coerce').fillna(0) - a_wyj['HT_Total']
         
-        has_bb = False
         for tpl in BB_TEMPLATES:
-            # Używamy evaluate_bet by na żywo przetworzyć historyczne statystyki pod szablon
+            # Ewaluacja całego szablonu na bazie danych historycznych
             p_h, h_h, h_l, _ = get_weighted_stats(h_dom, None, lambda r, code=tpl['code']: evaluate_bet(code, r) == "WYGRANA", prior_prob=tpl['min_prob'])
             p_a, a_h, a_l, _ = get_weighted_stats(a_wyj, None, lambda r, code=tpl['code']: evaluate_bet(code, r) == "WYGRANA", prior_prob=tpl['min_prob'])
             
             p_combined = (p_h + p_a) / 2
             if p_combined >= tpl['min_prob']:
-                arg = f"BetBuilder {tpl['name']} | Prawd. bazowe układu: {round(p_combined*100)}%. Weryfikacja (Dom/Wyj): {h_h}/{h_l}, {a_h}/{a_l}."
-                add_pred_local(f"BetBuilder Pro", tpl['code'], round(p_combined*100, 1), tpl['base_odd'], arg)
-                has_bb = True
+                skladniki = tpl['code'].split("+")
+                k_skladowe = [KOTWICE_KURSOWE.get(sk.strip(), 1.05) for sk in skladniki]
+                est_odd = calc_betbuilder_copula(k_skladowe, rho=0.35) 
+                final_odd = max(tpl['base_odd'], est_odd)
+                
+                arg = f"BetBuilder {tpl['name']} | Prawd. bazowe układu: {round(p_combined*100)}%. Weryfikacja D/W: {h_h}/{h_l}, {a_h}/{a_l}."
+                add_pred_local(f"BetBuilder Pro", tpl['code'], round(p_combined*100, 1), final_odd, arg)
 
     # --- 6d. MULTIGOL ---
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
@@ -858,7 +888,7 @@ for idx, row in fixtures_clean.iterrows():
         if last_m['Away'] == home and last_m['FTHG'] >= last_m['FTAG']:
             opp_tier = team_tiers.get((last_m['League'], last_m['Home']), 'Koszyk 1')
             if opp_tier in ['Koszyk 4', 'Koszyk 5', 'Koszyk 6']:
-                add_pred_local("Cold Shower", "1", 85.0, 1.15, f"Gospodarz ({h_tier}) szuka rewanżu po stracie pkt z ({opp_tier}).")
+                add_pred_local("Cold Shower", "1", 85.0, 1.15, f"Gospodarz ({h_tier}) szuka rewanżu u siebie po stracie pkt z ({opp_tier}).")
 
     # --- POST-PROCESSING: CZYSZCZENIE ŚMIECI DLA AKTUALNEGO MECZU ---
     czy_jest_dobry_bb = any("BetBuilder Pro" in p['Engine'] for p in match_preds)
@@ -881,7 +911,7 @@ creds = Credentials.from_service_account_file("credentials.json", scopes=scope) 
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
-# UWAGA: USUNIĘTO KURS_RYNEK
+# CAŁKOWITE USUNIĘCIE "KURS_RYNEK" Z BAZY
 cols_all_pred = ["Match_ID", "Zagrane", "Wyslij_AKO", "Kupon_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 cols_historia = ["Match_ID", "Zagrane", "Kupon_ID", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 
@@ -1157,5 +1187,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Wdrożono poprawny priorytet wyceny statusu PRZEGRANA i skorygowano marżę dla BetBuilderów.")
+print("Wdrożono zaawansowaną argumentację H2H oraz ostatecznie usunięto kolumnę Kurs_Rynek.")
 print("=" * 60)
