@@ -1172,19 +1172,28 @@ time.sleep(1.5)
 spreadsheet.worksheet("All_Predictions").clear()
 if not df_all_predictions.empty: spreadsheet.worksheet("All_Predictions").update(prepare_for_gsheets(df_all_predictions))
 
+# --- POPRAWKA: PRAWIDŁOWE GENEROWANIE ZAKŁADKI SUMMARY Z LOGAMI ---
 summary_data = [
     ["==== PODSUMOWANIE OGÓLNE ====", "", ""],
     ["Ostatnia aktualizacja", datetime.now().strftime("%Y-%m-%d %H:%M:%S"), ""],
-    ["Fixtures Czyste", len(fixtures_clean), ""],
-    ["Results Zintegrowane", len(results_clean), ""],
-    ["Przetworzone Typy w Historii", len(df_historia), ""],
-    ["Wygenerowane Predykcje (Suma)", len(df_all_predictions), ""]
+    ["Fixtures Czyste", str(len(fixtures_clean)), ""],
+    ["Results Zintegrowane", str(len(results_clean)), ""],
+    ["Przetworzone Typy w Historii", str(len(df_historia)), ""],
+    ["Wygenerowane Predykcje (Suma)", str(len(df_all_predictions)), ""],
+    ["", "", ""],
+    ["==== STATUS POBIERANIA DANYCH (LOGI) ====", "", ""],
+    ["Źródło", "Adres URL", "Status / Wynik"]
 ]
+
+# Doklejenie pełnych logów (scrape_report) pod głównym podsumowaniem
+for log in scrape_report:
+    summary_data.append([str(item) for item in log])
+
 time.sleep(1.5)
 spreadsheet.worksheet("Summary").clear()
 spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Wdrożono całkowite usuwanie śmieciowych typów oraz precyzyjne H2H.")
+print("Wdrożono całkowite usuwanie śmieciowych typów, precyzyjne H2H oraz naprawiono logi w Summary.")
 print("=" * 60)
