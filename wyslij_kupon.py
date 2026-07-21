@@ -254,7 +254,7 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
                 try: kurs_ako = float(str(rekord.get('Kurs_AKO', '1.0')).replace(',', '.'))
                 except: kurs_ako = 1.0
             
-            # WŁASNY, KULOODPORNY MECHANIZM OCENY STATUSU KUPONU
+            # WŁASNY MECHANIZM OCENY STATUSU KUPONU
             if "PRZEGRANA" in statusy_zdarzen:
                 real_status_ako = "PRZEGRANA"
             elif "W OCZEKIWANIU" in statusy_zdarzen or "DO RĘCZNEJ KONTROLI" in statusy_zdarzen:
