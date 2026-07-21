@@ -235,10 +235,9 @@ def get_weighted_stats(df, target_col, condition_lambda, prior_prob=0.5, alpha=2
         
     return prob, total_hits, total_len, is_smoothed
 
-# Funkcja ewaluacyjna używana przez BetBuilder i Backtester (Zawsze szuka PRZEGRANEJ)
+# Funkcja ewaluacyjna do weryfikacji historycznej we wnętrzu BetBuildera
 def evaluate_bet(bet_type, row_data):
     bet = str(bet_type).upper().strip()
-    
     hg = pd.to_numeric(row_data.get('FTHG', np.nan))
     ag = pd.to_numeric(row_data.get('FTAG', np.nan))
     tg = pd.to_numeric(row_data.get('Total_Goals', np.nan))
@@ -246,17 +245,12 @@ def evaluate_bet(bet_type, row_data):
     ht_ag = pd.to_numeric(row_data.get('HTAG', np.nan))
     hc = pd.to_numeric(row_data.get('Corners_H', np.nan))
     ac = pd.to_numeric(row_data.get('Corners_A', np.nan))
-    hs = pd.to_numeric(row_data.get('Shots_H', np.nan))
-    away_s = pd.to_numeric(row_data.get('Shots_A', np.nan))
-    hst = pd.to_numeric(row_data.get('ShotsTarget_H', np.nan))
-    ast = pd.to_numeric(row_data.get('ShotsTarget_A', np.nan))
 
     if "+" in bet:
         parts = bet.split("+")
         results = [evaluate_bet(p.strip(), row_data) for p in parts]
         if "PRZEGRANA" in results: return "PRZEGRANA"
         if "W OCZEKIWANIU" in results: return "W OCZEKIWANIU"
-        if "DO RĘCZNEJ KONTROLI" in results: return "DO RĘCZNEJ KONTROLI"
         return "WYGRANA"
 
     if pd.isna(hg) or pd.isna(ag): return "W OCZEKIWANIU"
@@ -280,23 +274,6 @@ def evaluate_bet(bet_type, row_data):
             low, high = map(int, bet[3:].split("-"))
             return "WYGRANA" if low <= tg <= high else "PRZEGRANA"
         except: pass
-
-    if pd.notna(hc) and pd.notna(ac):
-        tc = hc + ac
-        if bet.startswith("C_U"): return "WYGRANA" if tc < float(bet[3:]) else "PRZEGRANA"
-        if bet.startswith("C_O"): return "WYGRANA" if tc > float(bet[3:]) else "PRZEGRANA"
-        if bet.startswith("HC_U"): return "WYGRANA" if hc < float(bet[4:]) else "PRZEGRANA"
-        if bet.startswith("AC_U"): return "WYGRANA" if ac < float(bet[4:]) else "PRZEGRANA"
-        if bet.startswith("HC_O"): return "WYGRANA" if hc > float(bet[4:]) else "PRZEGRANA"
-        if bet.startswith("AC_O"): return "WYGRANA" if ac > float(bet[4:]) else "PRZEGRANA"
-
-    if pd.notna(hs) and pd.notna(away_s):
-        if bet == "S_1": return "WYGRANA" if hs > away_s else "PRZEGRANA"
-        if bet == "S_2": return "WYGRANA" if hs < away_s else "PRZEGRANA"
-    
-    if pd.notna(hst) and pd.notna(ast):
-        if bet == "ST_1": return "WYGRANA" if hst > ast else "PRZEGRANA"
-        if bet == "ST_2": return "WYGRANA" if hst < ast else "PRZEGRANA"
 
     return "DO RĘCZNEJ KONTROLI"
 
@@ -495,7 +472,6 @@ golden_cols = {
     'FTHG': 'FTHG', 'FTAG': 'FTAG', 'Total_Goals': 'Total_Goals', 'HTHG': 'HTHG', 'HTAG': 'HTAG',
     'HS': 'Shots_H', 'AS': 'Shots_A', 'HST': 'ShotsTarget_H', 'AST': 'ShotsTarget_A',
     'HC': 'Corners_H', 'AC': 'Corners_A'
-    # Usunięto kolumny Odd_1, Odd_X, Odd_2 dla uproszczenia
 }
 
 if not results_df.empty:
@@ -620,7 +596,10 @@ if not fixtures_clean.empty and not valid_matches.empty:
 # ==========================================================
 all_generated_predictions = []
 
-# PODNIESIONE KOTWICE KURSOWE (Skorygowano, usunięto O0.5)
+# CZARNA LISTA TYPÓW (SOLO). Te typy mogą pojawić się w BB, ale nigdy jako pojedyncze zakłady.
+ZAKAZANE_TYPY_SOLO = ["O0.5", "U5.5", "U6.5", "HT_U1.5", "HT_U2.5", "2H_U3.5", "HU3.5", "AU2.5", "HU4.5", "AU4.5"]
+
+# PODNIESIONE KOTWICE KURSOWE (Skorygowano)
 KOTWICE_KURSOWE = {
     'U3.5': 1.40, 'U4.5': 1.18, 'U5.5': 1.05, 'U6.5': 1.02,
     'HT_U1.5': 1.50, 'HT_U2.5': 1.15, 'HT_U3.5': 1.04, 'HT_U4.5': 1.02,
@@ -635,11 +614,11 @@ KOTWICE_KURSOWE = {
     'S_1': 1.34, 'ST_1': 1.64
 }
 
-# Szablony BetBuilder sprawdzone rynkowo i ustalone przez użytkownika jako optymalne (bez zakazanych)
+# Szablony BetBuilder sprawdzone rynkowo (BEZ ryzykownych kombinacji typu HU2.5+AU2.5 itd.)
 BB_TEMPLATES = [
     {"name": "Optymalny", "code": "U6.5+HT_U4.5+2H_U4.5+HU4.5+AU4.5", "base_odd": 1.25, "min_prob": 0.85},
-    {"name": "Safe+", "code": "U5.5+HT_U3.5+2H_U4.5+HU4.5+AU4.5", "base_odd": 1.30, "min_prob": 0.80},
-    {"name": "Standard", "code": "U4.5+HT_U3.5+2H_U4.5+HU2.5+AU2.5", "base_odd": 1.60, "min_prob": 0.65}
+    {"name": "Bezpieczny", "code": "U5.5+HT_U4.5+2H_U4.5+HU4.5+AU4.5", "base_odd": 1.35, "min_prob": 0.80},
+    {"name": "Standard", "code": "U4.5+HT_U3.5+2H_U4.5+HU3.5+AU3.5", "base_odd": 1.60, "min_prob": 0.65}
 ]
 
 print("Uruchamiam Modele Predykcyjne...")
@@ -676,9 +655,9 @@ for idx, row in fixtures_clean.iterrows():
 
         prob_decimal = float(szansa) / 100.0
         
-        # SYSTEM KLASYFIKACJI RYZYKA 
+        # AKTUALIZACJA PROGÓW RYZYKA ZGODNIE Z WYTYCZNYMI
         if prob_decimal >= 0.95 and kurs_docelowy >= 1.20: risk_tag = "👑 GOLDEN PICK"
-        elif prob_decimal >= 0.95 and kurs_docelowy >= 1.10: risk_tag = "🥈 SILVER PICK"
+        elif prob_decimal >= 0.95 and 1.10 <= kurs_docelowy < 1.20: risk_tag = "🥈 SILVER PICK"
         elif prob_decimal >= 0.95: risk_tag = "SAFE (95%+)"
         elif prob_decimal >= 0.85: risk_tag = "STANDARD (85-94%)"
         elif prob_decimal >= 0.75: risk_tag = "VALUE (75-84%)"
@@ -694,7 +673,7 @@ for idx, row in fixtures_clean.iterrows():
             "Szansa": szansa, "Kurs_Szac": kurs_docelowy, "Argumentacja": arg_final
         })
 
-    # --- 6a. 1X PRO ---
+    # --- 6a. 1X PRO Z SZCZEGÓŁOWĄ ANALIZĄ H2H ---
     lg_matches = valid_matches[valid_matches['Base_League'] == fixture_base]
     if len(lg_matches) >= 20 and len(h_tot_all) >= 5 and len(a_tot_all) >= 5 and len(h_dom) > 0 and len(a_wyj) > 0:
         lg_home_goals, lg_away_goals = lg_matches['FTHG'].mean(), lg_matches['FTAG'].mean()
@@ -714,40 +693,50 @@ for idx, row in fixtures_clean.iterrows():
         lam_a = a_att * h_def * lg_away_goals
         p1_g, px_g, p2_g = get_poisson_match_prob(lam_h, lam_a, max_val=15)
         
-        prob_1x, prob_x2 = p1_g + px_g, px_g + p2_g
-        if prob_1x >= prob_x2: typ_kod, final_prob = "1X", min(prob_1x, 0.95)
-        else: typ_kod, final_prob = "X2", min(prob_x2, 0.95)
+        prob_1 = p1_g
+        prob_x = px_g
+        prob_2 = p2_g
+        prob_1x = p1_g + px_g
+        prob_x2 = px_g + p2_g
+        
+        # Wybór optymalnego typu
+        najlepszy_typ = "1X"
+        najlepsze_prob = prob_1x
+        if prob_x2 > najlepsze_prob:
+            najlepszy_typ = "X2"
+            najlepsze_prob = prob_x2
+        if prob_1 > 0.65 and prob_1 > najlepsze_prob * 0.8:
+            najlepszy_typ = "1"
+            najlepsze_prob = prob_1
+        elif prob_2 > 0.65 and prob_2 > najlepsze_prob * 0.8:
+            najlepszy_typ = "2"
+            najlepsze_prob = prob_2
 
-        if final_prob >= 0.70:
-            fair_odd = round(1 / final_prob, 2)
+        if najlepsze_prob >= 0.70:
+            fair_odd = round(1 / najlepsze_prob, 2)
             
-            # Wyczerpująca analityka w Argumentacji (zgodnie z życzeniem - ilości, koszyki, wygrane/porażki)
+            # Wyczerpująca analityka w Argumentacji - Wszystkie rozegrane mecze (Koszyki i Wygrane/Przegrane)
             h_wins = h_dom[h_dom['FTHG'] > h_dom['FTAG']]
-            h_ws_tiers = [team_tiers.get((league, x), 'Koszyk 3') for x in h_wins['Away']]
-            h_ws_txt = ", ".join([f"{k.replace('Koszyk ', 'K')}:{v}x" for k, v in dict(Counter(h_ws_tiers)).items()]) if h_ws_tiers else "Brak"
-            
             h_losses = h_dom[h_dom['FTHG'] < h_dom['FTAG']]
-            h_ls_tiers = [team_tiers.get((league, x), 'Koszyk 3') for x in h_losses['Away']]
-            h_ls_txt = ", ".join([f"{k.replace('Koszyk ', 'K')}:{v}x" for k, v in dict(Counter(h_ls_tiers)).items()]) if h_ls_tiers else "Brak"
-            
             a_wins = a_wyj[a_wyj['FTAG'] > a_wyj['FTHG']]
-            a_ws_tiers = [team_tiers.get((league, x), 'Koszyk 3') for x in a_wins['Home']]
-            a_ws_txt = ", ".join([f"{k.replace('Koszyk ', 'K')}:{v}x" for k, v in dict(Counter(a_ws_tiers)).items()]) if a_ws_tiers else "Brak"
-            
             a_losses = a_wyj[a_wyj['FTAG'] < a_wyj['FTHG']]
-            a_ls_tiers = [team_tiers.get((league, x), 'Koszyk 3') for x in a_losses['Home']]
-            a_ls_txt = ", ".join([f"{k.replace('Koszyk ', 'K')}:{v}x" for k, v in dict(Counter(a_ls_tiers)).items()]) if a_ls_tiers else "Brak"
+            
+            h_ws_txt = ", ".join([f"{k.replace('Koszyk ', 'K')}:{v}x" for k, v in dict(Counter([team_tiers.get((league, x), 'K3') for x in h_wins['Away']])).items()]) or "Brak"
+            h_ls_txt = ", ".join([f"{k.replace('Koszyk ', 'K')}:{v}x" for k, v in dict(Counter([team_tiers.get((league, x), 'K3') for x in h_losses['Away']])).items()]) or "Brak"
+            
+            a_ws_txt = ", ".join([f"{k.replace('Koszyk ', 'K')}:{v}x" for k, v in dict(Counter([team_tiers.get((league, x), 'K3') for x in a_wins['Home']])).items()]) or "Brak"
+            a_ls_txt = ", ".join([f"{k.replace('Koszyk ', 'K')}:{v}x" for k, v in dict(Counter([team_tiers.get((league, x), 'K3') for x in a_losses['Home']])).items()]) or "Brak"
 
-            if typ_kod == "1X":
-                arg = f"Gosp ({h_tier}) u siebie: wygrał z [{h_ws_txt}], przegrał z [{h_ls_txt}]. Gość ({a_tier}) na wyjeździe: wygrał z [{a_ws_txt}], przegrał z [{a_ls_txt}]."
+            if najlepszy_typ in ["1X", "1"]:
+                arg = f"Gosp ({h_tier}) u siebie: wygrał {len(h_wins)}/{len(h_dom)} [{h_ws_txt}], przegrał {len(h_losses)}/{len(h_dom)} [{h_ls_txt}]. Gość ({a_tier}) na wyjeździe: wygrał {len(a_wins)}/{len(a_wyj)} [{a_ws_txt}], przegrał {len(a_losses)}/{len(a_wyj)} [{a_ls_txt}]."
             else:
-                arg = f"Gość ({a_tier}) na wyjeździe: wygrał z [{a_ws_txt}], przegrał z [{a_ls_txt}]. Gosp ({h_tier}) u siebie: wygrał z [{h_ws_txt}], przegrał z [{h_ls_txt}]."
+                arg = f"Gość ({a_tier}) na wyjeździe: wygrał {len(a_wins)}/{len(a_wyj)} [{a_ws_txt}], przegrał {len(a_losses)}/{len(a_wyj)} [{a_ls_txt}]. Gosp ({h_tier}) u siebie: wygrał {len(h_wins)}/{len(h_dom)} [{h_ws_txt}], przegrał {len(h_losses)}/{len(h_dom)} [{h_ls_txt}]."
                 
-            add_pred_local("1X Pro", typ_kod, round(final_prob*100, 1), fair_odd, arg)
+            add_pred_local("1X Pro", najlepszy_typ, round(najlepsze_prob*100, 1), fair_odd, arg)
 
     # --- 6b. GOAL LINE PRO (Generuje tylko pożyteczne linie) ---
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
-        for line in [2.5, 3.5, 4.5]: # ŚMIEĆ U5.5 i U6.5 USUNIĘTY
+        for line in [2.5, 3.5, 4.5]: 
             prob_h_u, h_th, h_tl, h_sm = get_weighted_stats(h_dom, 'Total_Goals', lambda x: pd.notna(x) and x < line, prior_prob=0.75)
             prob_a_u, a_th, a_tl, a_sm = get_weighted_stats(a_wyj, 'Total_Goals', lambda x: pd.notna(x) and x < line, prior_prob=0.75)
             avg_prob_u = (prob_h_u + prob_a_u) / 2
@@ -756,7 +745,7 @@ for idx, row in fixtures_clean.iterrows():
                 if h_sm or a_sm: arg += " | ⚠️ Bayes"
                 add_pred_local("Goal Line Pro", f"U{line}", round(avg_prob_u*100, 1), KOTWICE_KURSOWE.get(f"U{line}", 1.10), arg)
 
-        for line in [1.5, 2.5]: # ŚMIEĆ O0.5 USUNIĘTY
+        for line in [1.5, 2.5]: 
             prob_h_o, h_th, h_tl, h_sm = get_weighted_stats(h_dom, 'Total_Goals', lambda x: pd.notna(x) and x > line, prior_prob=0.30)
             prob_a_o, a_th, a_tl, a_sm = get_weighted_stats(a_wyj, 'Total_Goals', lambda x: pd.notna(x) and x > line, prior_prob=0.30)
             avg_prob_o = (prob_h_o + prob_a_o) / 2
@@ -765,7 +754,7 @@ for idx, row in fixtures_clean.iterrows():
                 if h_sm or a_sm: arg += " | ⚠️ Bayes"
                 add_pred_local("Goal Line Pro", f"O{line}", round(avg_prob_o*100, 1), KOTWICE_KURSOWE.get(f"O{line}", 1.10), arg)
 
-    # --- 6c. BETBUILDER PRO (Nowy Silnik) ---
+    # --- 6c. BETBUILDER PRO (Tylko najmocniejsze układy z Backtestingu) ---
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
         h_dom['HT_Total'] = pd.to_numeric(h_dom['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(h_dom['HTAG'], errors='coerce').fillna(0)
         a_wyj['HT_Total'] = pd.to_numeric(a_wyj['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(a_wyj['HTAG'], errors='coerce').fillna(0)
@@ -773,9 +762,8 @@ for idx, row in fixtures_clean.iterrows():
         a_wyj['2H_Total'] = pd.to_numeric(a_wyj['Total_Goals'], errors='coerce').fillna(0) - a_wyj['HT_Total']
         
         for tpl in BB_TEMPLATES:
-            # Ewaluacja całego szablonu na bazie danych historycznych
-            p_h, h_h, h_l, _ = get_weighted_stats(h_dom, None, lambda r, code=tpl['code']: evaluate_bet(code, r) == "WYGRANA", prior_prob=tpl['min_prob'])
-            p_a, a_h, a_l, _ = get_weighted_stats(a_wyj, None, lambda r, code=tpl['code']: evaluate_bet(code, r) == "WYGRANA", prior_prob=tpl['min_prob'])
+            p_h, h_h, h_l, h_sm = get_weighted_stats(h_dom, None, lambda r, code=tpl['code']: evaluate_bet(code, r) == "WYGRANA", prior_prob=tpl['min_prob'])
+            p_a, a_h, a_l, a_sm = get_weighted_stats(a_wyj, None, lambda r, code=tpl['code']: evaluate_bet(code, r) == "WYGRANA", prior_prob=tpl['min_prob'])
             
             p_combined = (p_h + p_a) / 2
             if p_combined >= tpl['min_prob']:
@@ -785,21 +773,20 @@ for idx, row in fixtures_clean.iterrows():
                 final_odd = max(tpl['base_odd'], est_odd)
                 
                 arg = f"BetBuilder {tpl['name']} | Prawd. bazowe układu: {round(p_combined*100)}%. Weryfikacja D/W: {h_h}/{h_l}, {a_h}/{a_l}."
+                if h_sm or a_sm: arg += " | ⚠️ Bayes"
                 add_pred_local(f"BetBuilder Pro", tpl['code'], round(p_combined*100, 1), final_odd, arg)
 
     # --- 6d. MULTIGOL ---
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
-        prob_h_15 = get_weighted_stats(h_dom, 'Total_Goals', lambda x: pd.notna(x) and 1 <= x <= 5, prior_prob=0.80)[0]
-        prob_a_15 = get_weighted_stats(a_wyj, 'Total_Goals', lambda x: pd.notna(x) and 1 <= x <= 5, prior_prob=0.80)[0]
+        prob_h_15, h_th, h_tl, h_sm = get_weighted_stats(h_dom, 'Total_Goals', lambda x: pd.notna(x) and 1 <= x <= 5, prior_prob=0.80)
+        prob_a_15, a_th, a_tl, a_sm = get_weighted_stats(a_wyj, 'Total_Goals', lambda x: pd.notna(x) and 1 <= x <= 5, prior_prob=0.80)
         prob_1_5 = (prob_h_15 + prob_a_15) / 2
         
-        prob_h_16 = get_weighted_stats(h_dom, 'Total_Goals', lambda x: pd.notna(x) and 1 <= x <= 6, prior_prob=0.85)[0]
-        prob_a_16 = get_weighted_stats(a_wyj, 'Total_Goals', lambda x: pd.notna(x) and 1 <= x <= 6, prior_prob=0.85)[0]
-        prob_1_6 = (prob_h_16 + prob_a_16) / 2
-        
-        if prob_1_5 >= 0.90 or prob_1_6 >= 0.90:
-            typ_kod, pewnosc, est_odd = ("MG_1-5", prob_1_5, 1.15) if prob_1_5 >= 0.90 else ("MG_1-6", prob_1_6, 1.09)
-            add_pred_local("Multigol", typ_kod, round(pewnosc*100, 1), est_odd, f"Szeroki przedział bramkowy chroniący przed wariancją. Prawdopodobieństwo: {round(pewnosc*100)}%.")
+        if prob_1_5 >= 0.90:
+            est_odd = round(1.0 + (((1/prob_1_5) - 1.0) / 1.5), 2)
+            arg = f"Szeroki przedział bramkowy. Prawdopodobieństwo: {round(prob_1_5*100)}%. D/W: {h_th}/{h_tl}, {a_th}/{a_tl}."
+            if h_sm or a_sm: arg += " | ⚠️ Bayes"
+            add_pred_local("Multigol", "MG_1-5", round(prob_1_5*100, 1), est_odd, arg)
 
     # --- 6e. CORNERS PRO ---
     valid_corners = valid_matches.dropna(subset=['Corners_H', 'Corners_A']).copy()
@@ -816,8 +803,8 @@ for idx, row in fixtures_clean.iterrows():
 
         for line in [8.5, 9.5, 10.5, 11.5, 12.5, 13.5, 14.5]:
             if line > max_match - 2:
-                prob_h_c, h_th, h_tl, _ = get_weighted_stats(h_dom_c, 'Total_Corners', lambda x: pd.notna(x) and x < line, prior_prob=0.70)
-                prob_a_c, a_th, a_tl, _ = get_weighted_stats(a_wyj_c, 'Total_Corners', lambda x: pd.notna(x) and x < line, prior_prob=0.70)
+                prob_h_c, h_th, h_tl, c_h_sm = get_weighted_stats(h_dom_c, 'Total_Corners', lambda x: pd.notna(x) and x < line, prior_prob=0.70)
+                prob_a_c, a_th, a_tl, c_a_sm = get_weighted_stats(a_wyj_c, 'Total_Corners', lambda x: pd.notna(x) and x < line, prior_prob=0.70)
                 avg_p = (prob_h_c + prob_a_c) / 2
                 if avg_p >= 0.90:
                     c_blocks_code.append(f"C_U{line}"); c_probs.append(avg_p); c_odds.append(round(1/(avg_p*0.90), 2))
@@ -874,13 +861,19 @@ for idx, row in fixtures_clean.iterrows():
             a_st_lose_prob = (a_st_lose + 1.5 * 0.6) / (a_len + 1.5) if a_len < 12 else a_st_lose / a_len
             prob_h_st = (h_st_win_prob * 4.0 + a_st_lose_prob * 1.0) / 5.0
             
+            any_sm = h_len < 12 or a_len < 12
+
             if prob_h_s > 0.80:
                 est_odd_s = round(1.0 + (((1/prob_h_s) - 1.0) / 1.5), 2) if prob_h_s < 1.0 else 1.01
-                add_pred_local("Shots Pro", "S_1", round(prob_h_s*100, 1), round(est_odd_s, 2), f"Strzały Ogółem: Gosp win u siebie {h_s_win}/{h_len}. Gość lose wyjazd {a_s_lose}/{a_len}.")
+                arg = f"Strzały Ogółem: Gosp win u siebie {h_s_win}/{h_len}. Gość lose wyjazd {a_s_lose}/{a_len}."
+                if any_sm: arg += " | ⚠️ Bayes"
+                add_pred_local("Shots Pro", "S_1", round(prob_h_s*100, 1), round(est_odd_s, 2), arg)
             
             if prob_h_st > 0.80:
                 est_odd_st = round(1.0 + (((1/prob_h_st) - 1.0) / 1.5), 2) if prob_h_st < 1.0 else 1.01
-                add_pred_local("Shots Pro", "ST_1", round(prob_h_st*100, 1), round(est_odd_st, 2), f"Strzały Celne: Gosp win u siebie {h_st_win}/{h_len}. Gość lose wyjazd {a_st_lose}/{a_len}.")
+                arg = f"Strzały Celne: Gosp win u siebie {h_st_win}/{h_len}. Gość lose wyjazd {a_st_lose}/{a_len}."
+                if any_sm: arg += " | ⚠️ Bayes"
+                add_pred_local("Shots Pro", "ST_1", round(prob_h_st*100, 1), round(est_odd_st, 2), arg)
 
     # --- 6g. ZIMNY PRYSZNIC ---
     if h_tier in ['Koszyk 1', 'Koszyk 2'] and len(h_tot_all) > 0:
@@ -888,16 +881,22 @@ for idx, row in fixtures_clean.iterrows():
         if last_m['Away'] == home and last_m['FTHG'] >= last_m['FTAG']:
             opp_tier = team_tiers.get((last_m['League'], last_m['Home']), 'Koszyk 1')
             if opp_tier in ['Koszyk 4', 'Koszyk 5', 'Koszyk 6']:
-                add_pred_local("Cold Shower", "1", 85.0, 1.15, f"Gospodarz ({h_tier}) szuka rewanżu u siebie po stracie pkt z ({opp_tier}).")
+                add_pred_local("Cold Shower", "1", 85.0, 1.15, f"Gospodarz ({h_tier}) szuka rewanżu po stracie pkt z ({opp_tier}).")
 
-    # --- POST-PROCESSING: CZYSZCZENIE ŚMIECI DLA AKTUALNEGO MECZU ---
+    # --- POST-PROCESSING: CZYSZCZENIE ŚMIECI (GARBAGE COLLECTOR) ---
     czy_jest_dobry_bb = any("BetBuilder Pro" in p['Engine'] for p in match_preds)
+    
     for p in match_preds:
-        # Usuwamy pojedyncze, nudne typy poniżej kursu 1.35, jeśli dla tego meczu wygenerował się soczysty BetBuilder
+        # Usuwamy kategorycznie zakazane typy solowe!
+        if p['Typ'] in ZAKAZANE_TYPY_SOLO and p['Engine'] != "BetBuilder Pro":
+            continue
+            
+        # Usuwamy słabe kursy pojedyncze jeśli w meczu wygenerował się soczysty BetBuilder
         if czy_jest_dobry_bb and p['Engine'] in ['Goal Line Pro', 'Multigol']:
             try:
                 if float(p['Kurs_Szac']) < 1.35: continue 
             except: pass
+            
         all_generated_predictions.append(p)
 
 
@@ -911,7 +910,7 @@ creds = Credentials.from_service_account_file("credentials.json", scopes=scope) 
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
-# CAŁKOWITE USUNIĘCIE "KURS_RYNEK" Z BAZY
+# CAŁKOWITE USUNIĘCIE "KURS_RYNEK" Z BAZY ORAZ LOGIKI
 cols_all_pred = ["Match_ID", "Zagrane", "Wyslij_AKO", "Kupon_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 cols_historia = ["Match_ID", "Zagrane", "Kupon_ID", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 
@@ -1187,5 +1186,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Wdrożono zaawansowaną argumentację H2H oraz ostatecznie usunięto kolumnę Kurs_Rynek.")
+print("Wdrożono całkowite usuwanie śmieciowych typów oraz precyzyjne H2H.")
 print("=" * 60)
