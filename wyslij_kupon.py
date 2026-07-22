@@ -101,7 +101,7 @@ def send_telegram(text):
     return True
 
 # ==========================================
-# FUNKCJA GENERUJĄCA STATYSTYKI I POWODY PORAŻKI (KULOODPORNA)
+# FUNKCJA GENERUJĄCA STATYSTYKI I POWODY PORAŻKI (FORMAT ANALITYCZNY)
 # ==========================================
 def format_match_details(m_row, df_results):
     match_id = str(m_row.get('Match_ID', '')).strip()
@@ -139,22 +139,22 @@ def format_match_details(m_row, df_results):
         for sub_bet in sub_bets:
             # 1X2 / 1X / X2
             if sub_bet in ["1", "1X"] and pd.notna(hg) and pd.notna(ag) and hg < ag:
-                reasons.append(f"Gospodarz przegrał spotkanie ({int(hg)}:{int(ag)})")
+                reasons.append(f"Porażka gospodarzy ({int(hg)}:{int(ag)})")
             elif sub_bet == "1" and pd.notna(hg) and pd.notna(ag) and hg == ag:
-                reasons.append(f"Mecz zakończył się remisem ({int(hg)}:{int(ag)})")
+                reasons.append(f"Remis w meczu ({int(hg)}:{int(ag)})")
             elif sub_bet in ["2", "X2"] and pd.notna(hg) and pd.notna(ag) and hg > ag:
-                reasons.append(f"Gość przegrał spotkanie ({int(hg)}:{int(ag)})")
+                reasons.append(f"Porażka gości ({int(hg)}:{int(ag)})")
                 
             # Gole ogółem (Under / Over)
             elif sub_bet.startswith("U") and not sub_bet.startswith(("HT_U", "2H_U", "HU", "AU", "C_U", "HC_U", "AC_U")) and pd.notna(tg):
                 try:
                     line = float(sub_bet[1:])
-                    if tg > line: reasons.append(f"Padło {int(tg)} goli (limit {line})")
+                    if tg > line: reasons.append(f"Łącznie goli: {int(tg)} (limit: <{line})")
                 except: pass
             elif sub_bet.startswith("O") and not sub_bet.startswith(("HC_O", "AC_O")) and pd.notna(tg):
                 try:
                     line = float(sub_bet[1:])
-                    if tg < line: reasons.append(f"Padło tylko {int(tg)} goli (wymagano >{line})")
+                    if tg < line: reasons.append(f"Łącznie goli: {int(tg)} (wymagano: >{line})")
                 except: pass
                 
             # Gole 1H i 2H
@@ -162,56 +162,56 @@ def format_match_details(m_row, df_results):
                 try:
                     line = float(sub_bet.replace("HT_U", ""))
                     ht_tg = ht_h + ht_a
-                    if ht_tg > line: reasons.append(f"W 1H padło {int(ht_tg)} goli (limit {line})")
+                    if ht_tg > line: reasons.append(f"Gole w 1. połowie: {int(ht_tg)} (limit: <{line})")
                 except: pass
             elif sub_bet.startswith("2H_U") and pd.notna(tg) and pd.notna(ht_h) and pd.notna(ht_a):
                 try:
                     line = float(sub_bet.replace("2H_U", ""))
                     h2_tg = tg - (ht_h + ht_a)
-                    if h2_tg > line: reasons.append(f"W 2H padło {int(h2_tg)} goli (limit {line})")
+                    if h2_tg > line: reasons.append(f"Gole w 2. połowie: {int(h2_tg)} (limit: <{line})")
                 except: pass
                 
             # Gole drużyn
             elif sub_bet.startswith("HU") and pd.notna(hg):
                 try:
                     line = float(sub_bet.replace("HU", ""))
-                    if hg > line: reasons.append(f"Gospodarz zdobył {int(hg)} goli (limit {line})")
+                    if hg > line: reasons.append(f"Gole gospodarzy: {int(hg)} (limit: <{line})")
                 except: pass
             elif sub_bet.startswith("AU") and pd.notna(ag):
                 try:
                     line = float(sub_bet.replace("AU", ""))
-                    if ag > line: reasons.append(f"Gość zdobył {int(ag)} goli (limit {line})")
+                    if ag > line: reasons.append(f"Gole gości: {int(ag)} (limit: <{line})")
                 except: pass
                 
             # Rożne
             elif sub_bet.startswith("C_U") and pd.notna(tc):
                 try:
                     line = float(sub_bet.replace("C_U", ""))
-                    if tc > line: reasons.append(f"Padło {int(tc)} rożnych (limit {line})")
+                    if tc > line: reasons.append(f"Suma rzutów rożnych: {int(tc)} (limit: <{line})")
                 except: pass
             elif sub_bet.startswith("HC_U") and pd.notna(hc):
                 try:
                     line = float(sub_bet.replace("HC_U", ""))
-                    if hc > line: reasons.append(f"Gospodarz wykonał {int(hc)} rożnych (limit {line})")
+                    if hc > line: reasons.append(f"Rożne gospodarzy: {int(hc)} (limit: <{line})")
                 except: pass
             elif sub_bet.startswith("AC_U") and pd.notna(ac):
                 try:
                     line = float(sub_bet.replace("AC_U", ""))
-                    if ac > line: reasons.append(f"Gość wykonał {int(ac)} rożnych (limit {line})")
+                    if ac > line: reasons.append(f"Rożne gości: {int(ac)} (limit: <{line})")
                 except: pass
                 
             # Strzały
             elif sub_bet == "S_1" and pd.notna(sh) and pd.notna(sa) and sh <= sa:
-                reasons.append(f"Strzały ogółem: {int(sh)} vs {int(sa)} na korzyść gości/remis")
+                reasons.append(f"Strzały ogółem: {int(sh)}:{int(sa)} (brak wygranej gospodarzy)")
             elif sub_bet == "ST_1" and pd.notna(sth) and pd.notna(sta) and sth <= sta:
-                reasons.append(f"Strzały celne: {int(sth)} vs {int(sta)} na korzyść gości/remis")
+                reasons.append(f"Strzały celne: {int(sth)}:{int(sta)} (brak wygranej gospodarzy)")
 
         reasons = list(dict.fromkeys(reasons))
 
         if reasons:
             stats_str = f"   └ 💡 <i>Powód porażki: {', '.join(reasons)}</i>\n"
         elif pd.notna(hg) and pd.notna(ag):
-            stats_str = f"   └ 💡 <i>Wynik: {int(hg)}:{int(ag)}</i>\n"
+            stats_str = f"   └ 💡 <i>Wynik końcowy: {int(hg)}:{int(ag)}</i>\n"
 
     # 2. GENEROWANIE STATYSTYK POTWIERDZAJĄCYCH SUKCES (Dla zdarzeń zielonych)
     elif status == "WYGRANA":
@@ -231,7 +231,7 @@ def format_match_details(m_row, df_results):
             parts.append(f"Strzały {int(sh)}:{int(sa)}")
 
         if parts:
-            stats_str = f"   └ 📊 <i>Mecz: {' | '.join(parts)}</i>\n"
+            stats_str = f"   └ 📊 <i>Statystyki: {' | '.join(parts)}</i>\n"
 
     return stats_str
 
