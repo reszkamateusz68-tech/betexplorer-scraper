@@ -13,7 +13,7 @@ WARTOSC_JEDNOSTKI_PLN = 100.0
 PODATEK_BUKMACHERSKI = 0.88    
 
 # ==========================================
-# SZABLONY WIADOMOŚCI
+# SZABLONY WIADOMOŚCI TELEGRAM
 # ==========================================
 SZABLON_NOWY = """
 🔥 <b>PROPOZYCJA AKO</b> 🔥
@@ -75,6 +75,12 @@ ws_pred = spreadsheet.worksheet("All_Predictions")
 ws_ako = spreadsheet.worksheet("Kupony_AKO")
 ws_hist = spreadsheet.worksheet("Historia_Typow")
 
+try:
+    ws_res = spreadsheet.worksheet("Results")
+    df_res = pd.DataFrame(ws_res.get_all_records())
+except Exception:
+    df_res = pd.DataFrame()
+
 df_pred = pd.DataFrame(ws_pred.get_all_records())
 df_ako = pd.DataFrame(ws_ako.get_all_records())
 df_hist = pd.DataFrame(ws_hist.get_all_records())
@@ -93,6 +99,116 @@ def send_telegram(text):
         print(f"Błąd wysyłki Telegram: {response.text}")
         return False
     return True
+
+# ==========================================
+# FUNKCJA GENERUJĄCA STATYSTYKI I POWODY PORAŻKI
+# ==========================================
+def format_match_details(m_row, df_results):
+    match_id = str(m_row.get('Match_ID', '')).strip()
+    status = str(m_row.get('Status', 'W OCZEKIWANIU')).upper()
+    typ = str(m_row.get('Typ', '')).strip()
+    
+    # Próba odnalezienia pełnych statystyk z zakładki Results
+    res_match = df_results[df_results['Match_ID'] == match_id] if not df_results.empty and 'Match_ID' in df_results.columns else pd.DataFrame()
+    
+    if res_match.empty:
+        return ""
+        
+    r = res_match.iloc[0]
+    
+    hg = pd.to_numeric(r.get('FTHG', None), errors='coerce')
+    ag = pd.to_numeric(r.get('FTAG', None), errors='coerce')
+    tg = pd.to_numeric(r.get('Total_Goals', None), errors='coerce')
+    ht_h = pd.to_numeric(r.get('HTHG', None), errors='coerce')
+    ht_a = pd.to_numeric(r.get('HTAG', None), errors='coerce')
+    hc = pd.to_numeric(r.get('Corners_H', None), errors='coerce')
+    ac = pd.to_numeric(r.get('Corners_A', None), errors='coerce')
+    tc = pd.to_numeric(r.get('Total_Corners', None), errors='coerce')
+    sh = pd.to_numeric(r.get('Shots_H', None), errors='coerce')
+    sa = pd.to_numeric(r.get('Shots_A', None), errors='coerce')
+    sth = pd.to_numeric(r.get('ShotsTarget_H', None), errors='coerce')
+    sta = pd.to_numeric(r.get('ShotsTarget_A', None), errors='coerce')
+    
+    stats_str = ""
+    
+    # 1. GENEROWANIE POWODU PORAŻKI (Dla zdarzeń czerwonych)
+    if status == "PRZEGRANA":
+        reasons = []
+        if typ in ["1", "1X"] and pd.notna(hg) and pd.notna(ag) and hg < ag:
+            reasons.append(f"Gospodarz przegrał spotkanie ({int(hg)}:{int(ag)})")
+        elif typ == "1" and pd.notna(hg) and pd.notna(ag) and hg == ag:
+            reasons.append(f"Mecz zakończył się remisowym wynikiem ({int(hg)}:{int(ag)})")
+        elif typ in ["2", "X2"] and pd.notna(hg) and pd.notna(ag) and hg > ag:
+            reasons.append(f"Gość przegrał spotkanie ({int(hg)}:{int(ag)})")
+            
+        elif typ.startswith("U") and pd.notna(tg) and "_" not in typ:
+            line = float(typ[1:])
+            if tg > line:
+                reasons.append(f"Padło {int(tg)} goli (limit {line})")
+        elif typ.startswith("O") and pd.notna(tg) and "_" not in typ:
+            line = float(typ[1:])
+            if tg < line:
+                reasons.append(f"Padło tylko {int(tg)} goli (wymagano >{line})")
+                
+        elif "HT_U" in typ and pd.notna(ht_h) and pd.notna(ht_a):
+            line = float(typ.split("HT_U")[1])
+            ht_tg = ht_h + ht_a
+            if ht_tg > line:
+                reasons.append(f"W 1H padło {int(ht_tg)} goli (limit {line})")
+                
+        elif "HU" in typ and pd.notna(hg):
+            line = float(typ.split("HU")[1])
+            if hg > line:
+                reasons.append(f"Gospodarz zdobył {int(hg)} goli (limit {line})")
+        elif "AU" in typ and pd.notna(ag):
+            line = float(typ.split("AU")[1])
+            if ag > line:
+                reasons.append(f"Gość zdobył {int(ag)} goli (limit {line})")
+                
+        elif "C_U" in typ and pd.notna(tc):
+            line = float(typ.split("C_U")[1])
+            if tc > line:
+                reasons.append(f"Padło {int(tc)} rożnych (limit {line})")
+        elif "HC_U" in typ and pd.notna(hc):
+            line = float(typ.split("HC_U")[1])
+            if hc > line:
+                reasons.append(f"Gospodarz wykonał {int(hc)} rożnych (limit {line})")
+        elif "AC_U" in typ and pd.notna(ac):
+            line = float(typ.split("AC_U")[1])
+            if ac > line:
+                reasons.append(f"Gość wykonał {int(ac)} rożnych (limit {line})")
+                
+        elif typ == "S_1" and pd.notna(sh) and pd.notna(sa) and sh <= sa:
+            reasons.append(f"Strzały ogółem: {int(sh)} vs {int(sa)} na korzyść gości")
+        elif typ == "ST_1" and pd.notna(sth) and pd.notna(sta) and sth <= sta:
+            reasons.append(f"Strzały celne: {int(sth)} vs {int(sta)} na korzyść gości")
+
+        if reasons:
+            stats_str = f"   └ 💡 <i>Powód porażki: {', '.join(reasons)}</i>\n"
+        else:
+            stats_str = f"   └ 💡 <i>Wynik: {int(hg)}:{int(ag)}</i>\n"
+
+    # 2. GENEROWANIE STATYSTYK POTWIERDZAJĄCYCH SUKCES (Dla zdarzeń zielonych)
+    elif status == "WYGRANA":
+        parts = []
+        if pd.notna(hg) and pd.notna(ag):
+            score_txt = f"Wynik {int(hg)}:{int(ag)}"
+            if pd.notna(ht_h) and pd.notna(ht_a):
+                score_txt += f" (1H {int(ht_h)}:{int(ht_a)})"
+            parts.append(score_txt)
+            
+        if pd.notna(hc) and pd.notna(ac) and any(k in typ for k in ["C_", "HC_", "AC_"]):
+            parts.append(f"Rożne {int(hc)}:{int(ac)}")
+            
+        if pd.notna(sth) and pd.notna(sta) and "ST_" in typ:
+            parts.append(f"Strzały celne {int(sth)}:{int(sta)}")
+        elif pd.notna(sh) and pd.notna(sa) and "S_" in typ:
+            parts.append(f"Strzały {int(sh)}:{int(sa)}")
+
+        if parts:
+            stats_str = f"   └ 📊 <i>Mecz: {' | '.join(parts)}</i>\n"
+
+    return stats_str
 
 # ==========================================
 # 1. WYSYŁKA NOWYCH KUPONÓW
@@ -195,7 +311,7 @@ if 'Wyslij_AKO' in df_pred.columns:
             if komorki_do_odznaczenia: ws_pred.update_cells(komorki_do_odznaczenia)
 
 # ==========================================
-# 2. WYSYŁKA PODSUMOWAŃ (KULOODPORNA)
+# 2. WYSYŁKA PODSUMOWAŃ (Z DETALAMI I POWODEM PORAŻKI)
 # ==========================================
 if 'Telegram_Status' not in df_ako.columns:
     df_ako['Telegram_Status'] = ""
@@ -219,7 +335,6 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
             kupon_id = str(rekord['Kupon_ID']).strip()
             if not kupon_id: continue
             
-            # NAPRAWA BŁĘDU (inicjalizacja przed weryfikacją)
             is_manual = str(rekord.get('Wyslij_Podsumowanie', '')).upper() in ['TRUE', 'TAK', '1']
             
             mecze_hist = df_hist[df_hist['Kupon_ID'].astype(str).str.strip() == kupon_id] if not df_hist.empty and 'Kupon_ID' in df_hist.columns else pd.DataFrame()
@@ -248,13 +363,18 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
                 if k_val > 1.0: dynamic_kurs *= k_val
                     
                 lista_meczow_txt += f"{emoji} {m['Gospodarz']} - {m['Gość']} | Typ: <b>{m['Typ']}</b> | 📈 {k_val:.2f}\n"
+                
+                # DOKLEJENIE STATYSTYK LUB POWODU PORAŻKI
+                detale_txt = format_match_details(m, df_res)
+                if detale_txt:
+                    lista_meczow_txt += detale_txt
             
             kurs_ako = round(dynamic_kurs, 2)
             if kurs_ako == 1.0:
                 try: kurs_ako = float(str(rekord.get('Kurs_AKO', '1.0')).replace(',', '.'))
                 except: kurs_ako = 1.0
             
-            # WŁASNY MECHANIZM OCENY STATUSU KUPONU
+            # OCENA STATUSU KUPONU
             if "PRZEGRANA" in statusy_zdarzen:
                 real_status_ako = "PRZEGRANA"
             elif "W OCZEKIWANIU" in statusy_zdarzen or "DO RĘCZNEJ KONTROLI" in statusy_zdarzen:
@@ -312,4 +432,4 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
 
         if komorki_ako_do_aktualizacji:
             ws_ako.update_cells(komorki_ako_do_aktualizacji)
-            print("Pomyślnie wysłano podsumowania i zaktualizowano arkusz.")
+            print("Pomyślnie wysłano rozszerzone podsumowania i zaktualizowano arkusz.")
