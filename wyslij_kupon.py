@@ -101,16 +101,17 @@ def send_telegram(text):
     return True
 
 # ==========================================
-# FUNKCJA GENERUJĄCA STATYSTYKI I POWODY PORAŻKI
+# FUNKCJA GENERUJĄCA STATYSTYKI I POWODY PORAŻKI (KULOODPORNA)
 # ==========================================
 def format_match_details(m_row, df_results):
     match_id = str(m_row.get('Match_ID', '')).strip()
     status = str(m_row.get('Status', 'W OCZEKIWANIU')).upper()
     typ = str(m_row.get('Typ', '')).strip()
     
-    # Próba odnalezienia pełnych statystyk z zakładki Results
-    res_match = df_results[df_results['Match_ID'] == match_id] if not df_results.empty and 'Match_ID' in df_results.columns else pd.DataFrame()
-    
+    if df_results.empty or 'Match_ID' not in df_results.columns:
+        return ""
+        
+    res_match = df_results[df_results['Match_ID'] == match_id]
     if res_match.empty:
         return ""
         
@@ -130,62 +131,86 @@ def format_match_details(m_row, df_results):
     sta = pd.to_numeric(r.get('ShotsTarget_A', None), errors='coerce')
     
     stats_str = ""
+    sub_bets = [b.strip() for b in typ.split("+") if b.strip()]
     
     # 1. GENEROWANIE POWODU PORAŻKI (Dla zdarzeń czerwonych)
     if status == "PRZEGRANA":
         reasons = []
-        if typ in ["1", "1X"] and pd.notna(hg) and pd.notna(ag) and hg < ag:
-            reasons.append(f"Gospodarz przegrał spotkanie ({int(hg)}:{int(ag)})")
-        elif typ == "1" and pd.notna(hg) and pd.notna(ag) and hg == ag:
-            reasons.append(f"Mecz zakończył się remisowym wynikiem ({int(hg)}:{int(ag)})")
-        elif typ in ["2", "X2"] and pd.notna(hg) and pd.notna(ag) and hg > ag:
-            reasons.append(f"Gość przegrał spotkanie ({int(hg)}:{int(ag)})")
-            
-        elif typ.startswith("U") and pd.notna(tg) and "_" not in typ:
-            line = float(typ[1:])
-            if tg > line:
-                reasons.append(f"Padło {int(tg)} goli (limit {line})")
-        elif typ.startswith("O") and pd.notna(tg) and "_" not in typ:
-            line = float(typ[1:])
-            if tg < line:
-                reasons.append(f"Padło tylko {int(tg)} goli (wymagano >{line})")
+        for sub_bet in sub_bets:
+            # 1X2 / 1X / X2
+            if sub_bet in ["1", "1X"] and pd.notna(hg) and pd.notna(ag) and hg < ag:
+                reasons.append(f"Gospodarz przegrał spotkanie ({int(hg)}:{int(ag)})")
+            elif sub_bet == "1" and pd.notna(hg) and pd.notna(ag) and hg == ag:
+                reasons.append(f"Mecz zakończył się remisem ({int(hg)}:{int(ag)})")
+            elif sub_bet in ["2", "X2"] and pd.notna(hg) and pd.notna(ag) and hg > ag:
+                reasons.append(f"Gość przegrał spotkanie ({int(hg)}:{int(ag)})")
                 
-        elif "HT_U" in typ and pd.notna(ht_h) and pd.notna(ht_a):
-            line = float(typ.split("HT_U")[1])
-            ht_tg = ht_h + ht_a
-            if ht_tg > line:
-                reasons.append(f"W 1H padło {int(ht_tg)} goli (limit {line})")
+            # Gole ogółem (Under / Over)
+            elif sub_bet.startswith("U") and not sub_bet.startswith(("HT_U", "2H_U", "HU", "AU", "C_U", "HC_U", "AC_U")) and pd.notna(tg):
+                try:
+                    line = float(sub_bet[1:])
+                    if tg > line: reasons.append(f"Padło {int(tg)} goli (limit {line})")
+                except: pass
+            elif sub_bet.startswith("O") and not sub_bet.startswith(("HC_O", "AC_O")) and pd.notna(tg):
+                try:
+                    line = float(sub_bet[1:])
+                    if tg < line: reasons.append(f"Padło tylko {int(tg)} goli (wymagano >{line})")
+                except: pass
                 
-        elif "HU" in typ and pd.notna(hg):
-            line = float(typ.split("HU")[1])
-            if hg > line:
-                reasons.append(f"Gospodarz zdobył {int(hg)} goli (limit {line})")
-        elif "AU" in typ and pd.notna(ag):
-            line = float(typ.split("AU")[1])
-            if ag > line:
-                reasons.append(f"Gość zdobył {int(ag)} goli (limit {line})")
+            # Gole 1H i 2H
+            elif sub_bet.startswith("HT_U") and pd.notna(ht_h) and pd.notna(ht_a):
+                try:
+                    line = float(sub_bet.replace("HT_U", ""))
+                    ht_tg = ht_h + ht_a
+                    if ht_tg > line: reasons.append(f"W 1H padło {int(ht_tg)} goli (limit {line})")
+                except: pass
+            elif sub_bet.startswith("2H_U") and pd.notna(tg) and pd.notna(ht_h) and pd.notna(ht_a):
+                try:
+                    line = float(sub_bet.replace("2H_U", ""))
+                    h2_tg = tg - (ht_h + ht_a)
+                    if h2_tg > line: reasons.append(f"W 2H padło {int(h2_tg)} goli (limit {line})")
+                except: pass
                 
-        elif "C_U" in typ and pd.notna(tc):
-            line = float(typ.split("C_U")[1])
-            if tc > line:
-                reasons.append(f"Padło {int(tc)} rożnych (limit {line})")
-        elif "HC_U" in typ and pd.notna(hc):
-            line = float(typ.split("HC_U")[1])
-            if hc > line:
-                reasons.append(f"Gospodarz wykonał {int(hc)} rożnych (limit {line})")
-        elif "AC_U" in typ and pd.notna(ac):
-            line = float(typ.split("AC_U")[1])
-            if ac > line:
-                reasons.append(f"Gość wykonał {int(ac)} rożnych (limit {line})")
+            # Gole drużyn
+            elif sub_bet.startswith("HU") and pd.notna(hg):
+                try:
+                    line = float(sub_bet.replace("HU", ""))
+                    if hg > line: reasons.append(f"Gospodarz zdobył {int(hg)} goli (limit {line})")
+                except: pass
+            elif sub_bet.startswith("AU") and pd.notna(ag):
+                try:
+                    line = float(sub_bet.replace("AU", ""))
+                    if ag > line: reasons.append(f"Gość zdobył {int(ag)} goli (limit {line})")
+                except: pass
                 
-        elif typ == "S_1" and pd.notna(sh) and pd.notna(sa) and sh <= sa:
-            reasons.append(f"Strzały ogółem: {int(sh)} vs {int(sa)} na korzyść gości")
-        elif typ == "ST_1" and pd.notna(sth) and pd.notna(sta) and sth <= sta:
-            reasons.append(f"Strzały celne: {int(sth)} vs {int(sta)} na korzyść gości")
+            # Rożne
+            elif sub_bet.startswith("C_U") and pd.notna(tc):
+                try:
+                    line = float(sub_bet.replace("C_U", ""))
+                    if tc > line: reasons.append(f"Padło {int(tc)} rożnych (limit {line})")
+                except: pass
+            elif sub_bet.startswith("HC_U") and pd.notna(hc):
+                try:
+                    line = float(sub_bet.replace("HC_U", ""))
+                    if hc > line: reasons.append(f"Gospodarz wykonał {int(hc)} rożnych (limit {line})")
+                except: pass
+            elif sub_bet.startswith("AC_U") and pd.notna(ac):
+                try:
+                    line = float(sub_bet.replace("AC_U", ""))
+                    if ac > line: reasons.append(f"Gość wykonał {int(ac)} rożnych (limit {line})")
+                except: pass
+                
+            # Strzały
+            elif sub_bet == "S_1" and pd.notna(sh) and pd.notna(sa) and sh <= sa:
+                reasons.append(f"Strzały ogółem: {int(sh)} vs {int(sa)} na korzyść gości/remis")
+            elif sub_bet == "ST_1" and pd.notna(sth) and pd.notna(sta) and sth <= sta:
+                reasons.append(f"Strzały celne: {int(sth)} vs {int(sta)} na korzyść gości/remis")
+
+        reasons = list(dict.fromkeys(reasons))
 
         if reasons:
             stats_str = f"   └ 💡 <i>Powód porażki: {', '.join(reasons)}</i>\n"
-        else:
+        elif pd.notna(hg) and pd.notna(ag):
             stats_str = f"   └ 💡 <i>Wynik: {int(hg)}:{int(ag)}</i>\n"
 
     # 2. GENEROWANIE STATYSTYK POTWIERDZAJĄCYCH SUKCES (Dla zdarzeń zielonych)
@@ -311,7 +336,7 @@ if 'Wyslij_AKO' in df_pred.columns:
             if komorki_do_odznaczenia: ws_pred.update_cells(komorki_do_odznaczenia)
 
 # ==========================================
-# 2. WYSYŁKA PODSUMOWAŃ (Z DETALAMI I POWODEM PORAŻKI)
+# 2. WYSYŁKA PODSUMOWAŃ
 # ==========================================
 if 'Telegram_Status' not in df_ako.columns:
     df_ako['Telegram_Status'] = ""
@@ -432,4 +457,4 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
 
         if komorki_ako_do_aktualizacji:
             ws_ako.update_cells(komorki_ako_do_aktualizacji)
-            print("Pomyślnie wysłano rozszerzone podsumowania i zaktualizowano arkusz.")
+            print("Pomyślnie wysłano podsumowania i zaktualizowano arkusz.")
