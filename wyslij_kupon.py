@@ -101,7 +101,7 @@ def send_telegram(text):
     return True
 
 # ==========================================
-# FUNKCJA GENERUJĄCA STATYSTYKI I POWODY PORAŻKI (FORMAT ANALITYCZNY)
+# FUNKCJA GENERUJĄCA STATYSTYKI I POWODY PORAŻKI
 # ==========================================
 def format_match_details(m_row, df_results):
     match_id = str(m_row.get('Match_ID', '')).strip()
@@ -133,7 +133,6 @@ def format_match_details(m_row, df_results):
     stats_str = ""
     sub_bets = [b.strip() for b in typ.split("+") if b.strip()]
     
-    # 1. GENEROWANIE POWODU PORAŻKI (Dla zdarzeń czerwonych)
     if status == "PRZEGRANA":
         reasons = []
         for sub_bet in sub_bets:
@@ -145,16 +144,16 @@ def format_match_details(m_row, df_results):
             elif sub_bet in ["2", "X2"] and pd.notna(hg) and pd.notna(ag) and hg > ag:
                 reasons.append(f"Porażka gości ({int(hg)}:{int(ag)})")
                 
-            # Gole ogółem (Under / Over)
+            # Gole ogółem
             elif sub_bet.startswith("U") and not sub_bet.startswith(("HT_U", "2H_U", "HU", "AU", "C_U", "HC_U", "AC_U")) and pd.notna(tg):
                 try:
                     line = float(sub_bet[1:])
-                    if tg > line: reasons.append(f"Łącznie goli: {int(tg)} (limit: <{line})")
+                    if tg > line: reasons.append(f"Łącznie goli: {int(tg)} (linia: {line})")
                 except: pass
             elif sub_bet.startswith("O") and not sub_bet.startswith(("HC_O", "AC_O")) and pd.notna(tg):
                 try:
                     line = float(sub_bet[1:])
-                    if tg < line: reasons.append(f"Łącznie goli: {int(tg)} (wymagano: >{line})")
+                    if tg < line: reasons.append(f"Łącznie goli: {int(tg)} (wymagano: ponad {line})")
                 except: pass
                 
             # Gole 1H i 2H
@@ -162,42 +161,42 @@ def format_match_details(m_row, df_results):
                 try:
                     line = float(sub_bet.replace("HT_U", ""))
                     ht_tg = ht_h + ht_a
-                    if ht_tg > line: reasons.append(f"Gole w 1. połowie: {int(ht_tg)} (limit: <{line})")
+                    if ht_tg > line: reasons.append(f"Gole w 1. połowie: {int(ht_tg)} (linia: {line})")
                 except: pass
             elif sub_bet.startswith("2H_U") and pd.notna(tg) and pd.notna(ht_h) and pd.notna(ht_a):
                 try:
                     line = float(sub_bet.replace("2H_U", ""))
                     h2_tg = tg - (ht_h + ht_a)
-                    if h2_tg > line: reasons.append(f"Gole w 2. połowie: {int(h2_tg)} (limit: <{line})")
+                    if h2_tg > line: reasons.append(f"Gole w 2. połowie: {int(h2_tg)} (linia: {line})")
                 except: pass
                 
             # Gole drużyn
             elif sub_bet.startswith("HU") and pd.notna(hg):
                 try:
                     line = float(sub_bet.replace("HU", ""))
-                    if hg > line: reasons.append(f"Gole gospodarzy: {int(hg)} (limit: <{line})")
+                    if hg > line: reasons.append(f"Gole gospodarzy: {int(hg)} (linia: {line})")
                 except: pass
             elif sub_bet.startswith("AU") and pd.notna(ag):
                 try:
                     line = float(sub_bet.replace("AU", ""))
-                    if ag > line: reasons.append(f"Gole gości: {int(ag)} (limit: <{line})")
+                    if ag > line: reasons.append(f"Gole gości: {int(ag)} (linia: {line})")
                 except: pass
                 
             # Rożne
             elif sub_bet.startswith("C_U") and pd.notna(tc):
                 try:
                     line = float(sub_bet.replace("C_U", ""))
-                    if tc > line: reasons.append(f"Suma rzutów rożnych: {int(tc)} (limit: <{line})")
+                    if tc > line: reasons.append(f"Suma rzutów rożnych: {int(tc)} (linia: {line})")
                 except: pass
             elif sub_bet.startswith("HC_U") and pd.notna(hc):
                 try:
                     line = float(sub_bet.replace("HC_U", ""))
-                    if hc > line: reasons.append(f"Rożne gospodarzy: {int(hc)} (limit: <{line})")
+                    if hc > line: reasons.append(f"Rożne gospodarzy: {int(hc)} (linia: {line})")
                 except: pass
             elif sub_bet.startswith("AC_U") and pd.notna(ac):
                 try:
                     line = float(sub_bet.replace("AC_U", ""))
-                    if ac > line: reasons.append(f"Rożne gości: {int(ac)} (limit: <{line})")
+                    if ac > line: reasons.append(f"Rożne gości: {int(ac)} (linia: {line})")
                 except: pass
                 
             # Strzały
@@ -213,7 +212,6 @@ def format_match_details(m_row, df_results):
         elif pd.notna(hg) and pd.notna(ag):
             stats_str = f"   └ 💡 <i>Wynik końcowy: {int(hg)}:{int(ag)}</i>\n"
 
-    # 2. GENEROWANIE STATYSTYK POTWIERDZAJĄCYCH SUKCES (Dla zdarzeń zielonych)
     elif status == "WYGRANA":
         parts = []
         if pd.notna(hg) and pd.notna(ag):
@@ -336,7 +334,7 @@ if 'Wyslij_AKO' in df_pred.columns:
             if komorki_do_odznaczenia: ws_pred.update_cells(komorki_do_odznaczenia)
 
 # ==========================================
-# 2. WYSYŁKA PODSUMOWAŃ
+# 2. WYSYŁKA PODSUMOWAŃ (KULOODPORNA)
 # ==========================================
 if 'Telegram_Status' not in df_ako.columns:
     df_ako['Telegram_Status'] = ""
@@ -389,7 +387,7 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
                     
                 lista_meczow_txt += f"{emoji} {m['Gospodarz']} - {m['Gość']} | Typ: <b>{m['Typ']}</b> | 📈 {k_val:.2f}\n"
                 
-                # DOKLEJENIE STATYSTYK LUB POWODU PORAŻKI
+                # DOKLEJENIE STATYSTYK LUB POWODU PORAŻKI (TERAZ DEFINICJA JEST NA PEWNO)
                 detale_txt = format_match_details(m, df_res)
                 if detale_txt:
                     lista_meczow_txt += detale_txt
@@ -399,7 +397,7 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
                 try: kurs_ako = float(str(rekord.get('Kurs_AKO', '1.0')).replace(',', '.'))
                 except: kurs_ako = 1.0
             
-            # OCENA STATUSU KUPONU
+            # WŁASNY MECHANIZM OCENY STATUSU KUPONU
             if "PRZEGRANA" in statusy_zdarzen:
                 real_status_ako = "PRZEGRANA"
             elif "W OCZEKIWANIU" in statusy_zdarzen or "DO RĘCZNEJ KONTROLI" in statusy_zdarzen:
