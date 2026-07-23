@@ -178,10 +178,6 @@ def get_poisson_match_prob(lam_h, lam_a, max_val=35):
     return p_1, p_x, p_2
 
 def calc_betbuilder_copula(odds_list, rho=0.85):
-    """
-    Kalkulator kursu dla zakładów akumulowanych w obrębie jednego meczu.
-    Domyślne rho=0.85 symuluje wysoką korelację między zdarzeniami underowymi.
-    """
     if not odds_list: return 1.0
     q_list = [1.0 / o for o in odds_list if o > 0]
     if not q_list: return 1.0
@@ -239,7 +235,22 @@ def get_weighted_stats(df, target_col, condition_lambda, prior_prob=0.5, alpha=2
         
     return prob, total_hits, total_len, is_smoothed
 
-# Funkcja ewaluacyjna do weryfikacji historycznej we wnętrzu BetBuildera
+# Funkcja wyciągająca detale o koszykach rozegranych meczów do argumentacji
+def get_tier_stats(df, is_home, league, team_tiers, target_col, condition):
+    if df.empty: return "0/0 [Brak]"
+    try:
+        if target_col is None:
+            hits_df = df[df.apply(condition, axis=1)]
+        else:
+            hits_df = df[df[target_col].apply(condition)]
+            
+        opp_col = 'Away' if is_home else 'Home'
+        tiers = dict(Counter([team_tiers.get((league, x), 'K3').replace('Koszyk ', 'K') for x in hits_df[opp_col]]))
+        tiers_str = ", ".join([f"{k}:{v}x" for k, v in tiers.items()]) if tiers else "Brak"
+        return f"{len(hits_df)}/{len(df)} [{tiers_str}]"
+    except Exception:
+        return "?/? [Błąd]"
+
 def evaluate_bet(bet_type, row_data):
     bet = str(bet_type).upper().strip()
     hg = pd.to_numeric(row_data.get('FTHG', np.nan))
@@ -604,7 +615,6 @@ ZAKAZANE_TYPY_SOLO = ["O0.5", "U5.5", "U6.5", "HT_U1.5", "HT_U2.5", "2H_U3.5", "
 
 # KOMPLETNA BAZA KOTWIC Z MATEMATYCZNEGO MODELU KALIBRACJI
 KOTWICE_KURSOWE = {
-    # BRAMKI 
     'U2.5': 1.85, 'U3.5': 1.31, 'U4.5': 1.10, 'U5.5': 1.015, 'U6.5': 1.01,
     'O0.5': 1.03, 'O1.5': 1.25, 'O2.5': 1.85,
     'HT_U1.5': 1.42, 'HT_U2.5': 1.138, 'HT_U3.5': 1.053, 'HT_U4.5': 1.01,
@@ -612,18 +622,13 @@ KOTWICE_KURSOWE = {
     'HU2.5': 1.20, 'HU3.5': 1.06, 'HU4.5': 1.01,
     'AU2.5': 1.15, 'AU3.5': 1.04, 'AU4.5': 1.01,
     'MG_1-5': 1.09,
-    
-    # ROŻNE
     'C_U8.5': 3.00, 'C_U9.5': 2.18, 'C_U10.5': 1.71, 'C_U11.5': 1.43,
     'C_U12.5': 1.26, 'C_U13.5': 1.15, 'C_U14.5': 1.09,
     'HC_U4.5': 2.79, 'HC_U5.5': 1.89, 'HC_U6.5': 1.45, 'HC_U7.5': 1.23, 'HC_U8.5': 1.11,
     'AC_U4.5': 1.87, 'AC_U5.5': 1.42, 'AC_U6.5': 1.20, 'AC_U7.5': 1.09, 'AC_U8.5': 1.04,
-    
-    # STRZAŁY
     'S_1': 1.34, 'ST_1': 1.64
 }
 
-# SZABLONY POZBAWIONE SZTUCZNEGO ZAWYŻANIA KURSU (base_odd USUNIĘTE)
 BB_TEMPLATES = [
     {"name": "Optymalny", "code": "U6.5+HT_U4.5+2H_U4.5+HU4.5+AU4.5", "min_prob": 0.85},
     {"name": "Bezpieczny", "code": "U5.5+HT_U4.5+2H_U4.5+HU4.5+AU4.5", "min_prob": 0.80},
@@ -747,7 +752,9 @@ for idx, row in fixtures_clean.iterrows():
             prob_a_u, a_th, a_tl, a_sm = get_weighted_stats(a_wyj, 'Total_Goals', lambda x: pd.notna(x) and x < line, prior_prob=0.75)
             avg_prob_u = (prob_h_u + prob_a_u) / 2
             if avg_prob_u >= 0.70:
-                arg = f"U{line} | Ważone szanse: Gosp {round(prob_h_u*100)}%, Gość {round(prob_a_u*100)}%. Trafienia (D/W): {h_th}/{h_tl}, {a_th}/{a_tl}."
+                h_stat = get_tier_stats(h_dom, True, league, team_tiers, 'Total_Goals', lambda x: pd.notna(x) and x < line)
+                a_stat = get_tier_stats(a_wyj, False, league, team_tiers, 'Total_Goals', lambda x: pd.notna(x) and x < line)
+                arg = f"Gosp ({h_tier}): {h_stat} | Gość ({a_tier}): {a_stat}"
                 if h_sm or a_sm: arg += " | ⚠️ Bayes"
                 add_pred_local("Goal Line Pro", f"U{line}", round(avg_prob_u*100, 1), KOTWICE_KURSOWE.get(f"U{line}", 1.10), arg)
 
@@ -756,11 +763,13 @@ for idx, row in fixtures_clean.iterrows():
             prob_a_o, a_th, a_tl, a_sm = get_weighted_stats(a_wyj, 'Total_Goals', lambda x: pd.notna(x) and x > line, prior_prob=0.30)
             avg_prob_o = (prob_h_o + prob_a_o) / 2
             if avg_prob_o >= 0.70: 
-                arg = f"O{line} | Ważone szanse: Gosp {round(prob_h_o*100)}%, Gość {round(prob_a_o*100)}%. Trafienia (D/W): {h_th}/{h_tl}, {a_th}/{a_tl}."
+                h_stat = get_tier_stats(h_dom, True, league, team_tiers, 'Total_Goals', lambda x: pd.notna(x) and x > line)
+                a_stat = get_tier_stats(a_wyj, False, league, team_tiers, 'Total_Goals', lambda x: pd.notna(x) and x > line)
+                arg = f"Gosp ({h_tier}): {h_stat} | Gość ({a_tier}): {a_stat}"
                 if h_sm or a_sm: arg += " | ⚠️ Bayes"
                 add_pred_local("Goal Line Pro", f"O{line}", round(avg_prob_o*100, 1), KOTWICE_KURSOWE.get(f"O{line}", 1.10), arg)
 
-    # --- 6c. BETBUILDER PRO (Model z wysoką korelacją - naprawiony) ---
+    # --- 6c. BETBUILDER PRO (Model z wysoką korelacją) ---
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
         h_dom['HT_Total'] = pd.to_numeric(h_dom['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(h_dom['HTAG'], errors='coerce').fillna(0)
         a_wyj['HT_Total'] = pd.to_numeric(a_wyj['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(a_wyj['HTAG'], errors='coerce').fillna(0)
@@ -775,10 +784,11 @@ for idx, row in fixtures_clean.iterrows():
             if p_combined >= tpl['min_prob']:
                 skladniki = tpl['code'].split("+")
                 k_skladowe = [KOTWICE_KURSOWE.get(sk.strip(), 1.05) for sk in skladniki]
-                # Używamy wysokiej korelacji (0.85) zamiast 0.35, bo U6.5 pociąga za sobą HT_U4.5
                 final_odd = calc_betbuilder_copula(k_skladowe, rho=0.85) 
                 
-                arg = f"BetBuilder {tpl['name']} | Prawd. bazowe układu: {round(p_combined*100)}%. Weryfikacja D/W: {h_h}/{h_l}, {a_h}/{a_l}."
+                h_stat = get_tier_stats(h_dom, True, league, team_tiers, None, lambda r, code=tpl['code']: evaluate_bet(code, r) == "WYGRANA")
+                a_stat = get_tier_stats(a_wyj, False, league, team_tiers, None, lambda r, code=tpl['code']: evaluate_bet(code, r) == "WYGRANA")
+                arg = f"BB {tpl['name']} | Gosp ({h_tier}): {h_stat} | Gość ({a_tier}): {a_stat}"
                 if h_sm or a_sm: arg += " | ⚠️ Bayes"
                 add_pred_local(f"BetBuilder Pro", tpl['code'], round(p_combined*100, 1), final_odd, arg)
 
@@ -790,7 +800,9 @@ for idx, row in fixtures_clean.iterrows():
         
         if prob_1_5 >= 0.90:
             est_odd = KOTWICE_KURSOWE.get("MG_1-5", 1.09)
-            arg = f"Szeroki przedział bramkowy. Prawdopodobieństwo: {round(prob_1_5*100)}%. D/W: {h_th}/{h_tl}, {a_th}/{a_tl}."
+            h_stat = get_tier_stats(h_dom, True, league, team_tiers, 'Total_Goals', lambda x: pd.notna(x) and 1 <= x <= 5)
+            a_stat = get_tier_stats(a_wyj, False, league, team_tiers, 'Total_Goals', lambda x: pd.notna(x) and 1 <= x <= 5)
+            arg = f"Gosp ({h_tier}): {h_stat} | Gość ({a_tier}): {a_stat}"
             if h_sm or a_sm: arg += " | ⚠️ Bayes"
             add_pred_local("Multigol", "MG_1-5", round(prob_1_5*100, 1), est_odd, arg)
 
@@ -816,7 +828,9 @@ for idx, row in fixtures_clean.iterrows():
                     c_blocks_code.append(f"C_U{line}")
                     c_probs.append(avg_p)
                     c_odds.append(KOTWICE_KURSOWE.get(f"C_U{line}", round(1/(avg_p*0.90), 2)))
-                    arg_c.append(f"C_U{line} ({h_th}/{h_tl}, {a_th}/{a_tl})")
+                    h_stat = get_tier_stats(h_dom_c, True, league, team_tiers, 'Total_Corners', lambda x: pd.notna(x) and x < line)
+                    a_stat = get_tier_stats(a_wyj_c, False, league, team_tiers, 'Total_Corners', lambda x: pd.notna(x) and x < line)
+                    arg_c.append(f"C_U{line} (Gosp: {h_stat}, Gość: {a_stat})")
                     break
 
         for line in [4.5, 5.5, 6.5, 7.5, 8.5]:
@@ -826,7 +840,8 @@ for idx, row in fixtures_clean.iterrows():
                     c_blocks_code.append(f"HC_U{line}")
                     c_probs.append(prob_hc)
                     c_odds.append(KOTWICE_KURSOWE.get(f"HC_U{line}", round(1/(prob_hc*0.90), 2)))
-                    arg_c.append(f"HC_U{line} ({h_th}/{h_tl})")
+                    h_stat = get_tier_stats(h_dom_c, True, league, team_tiers, 'Corners_H', lambda x: pd.notna(x) and x < line)
+                    arg_c.append(f"HC_U{line} (Gosp: {h_stat})")
                     break
 
         for line in [3.5, 4.5, 5.5, 6.5, 7.5]:
@@ -836,7 +851,8 @@ for idx, row in fixtures_clean.iterrows():
                     c_blocks_code.append(f"AC_U{line}")
                     c_probs.append(prob_ac)
                     c_odds.append(KOTWICE_KURSOWE.get(f"AC_U{line}", round(1/(prob_ac*0.90), 2)))
-                    arg_c.append(f"AC_U{line} ({a_th}/{a_tl})")
+                    a_stat = get_tier_stats(a_wyj_c, False, league, team_tiers, 'Corners_A', lambda x: pd.notna(x) and x < line)
+                    arg_c.append(f"AC_U{line} (Gość: {a_stat})")
                     break
 
         if len(c_blocks_code) >= 1:
@@ -877,15 +893,19 @@ for idx, row in fixtures_clean.iterrows():
 
             if prob_h_s > 0.80:
                 est_odd_s = KOTWICE_KURSOWE.get("S_1", 1.34)
-                arg = f"Strzały Ogółem: Gosp win u siebie {h_s_win}/{h_len}. Gość lose wyjazd {a_s_lose}/{a_len}."
+                h_stat = get_tier_stats(h_dom_s, True, league, team_tiers, None, lambda r: (pd.to_numeric(r['Shots_H'], errors='coerce') - pd.to_numeric(r['Shots_A'], errors='coerce')) > 0)
+                a_stat = get_tier_stats(a_wyj_s, False, league, team_tiers, None, lambda r: (pd.to_numeric(r['Shots_A'], errors='coerce') - pd.to_numeric(r['Shots_H'], errors='coerce')) < 0)
+                arg = f"Strzały Ogółem: Gosp ({h_tier}) win u siebie: {h_stat}. Gość ({a_tier}) brak winu wyjazd: {a_stat}."
                 if any_sm: arg += " | ⚠️ Bayes"
                 add_pred_local("Shots Pro", "S_1", round(prob_h_s*100, 1), round(est_odd_s, 2), arg)
             
             if prob_h_st > 0.80:
                 est_odd_st = KOTWICE_KURSOWE.get("ST_1", 1.64)
-                arg = f"Strzały Celne: Gosp win u siebie {h_st_win}/{h_len}. Gość lose wyjazd {a_st_lose}/{a_len}."
-                if any_sm: arg += " | ⚠️ Bayes"
-                add_pred_local("Shots Pro", "ST_1", round(prob_h_st*100, 1), round(est_odd_st, 2), arg)
+                h_stat_st = get_tier_stats(h_dom_s, True, league, team_tiers, None, lambda r: (pd.to_numeric(r['ShotsTarget_H'], errors='coerce') - pd.to_numeric(r['ShotsTarget_A'], errors='coerce')) > 0)
+                a_stat_st = get_tier_stats(a_wyj_s, False, league, team_tiers, None, lambda r: (pd.to_numeric(r['ShotsTarget_A'], errors='coerce') - pd.to_numeric(r['ShotsTarget_H'], errors='coerce')) < 0)
+                arg_st = f"Strzały Celne: Gosp ({h_tier}) win u siebie: {h_stat_st}. Gość ({a_tier}) brak winu wyjazd: {a_stat_st}."
+                if any_sm: arg_st += " | ⚠️ Bayes"
+                add_pred_local("Shots Pro", "ST_1", round(prob_h_st*100, 1), round(est_odd_st, 2), arg_st)
 
     # --- 6g. ZIMNY PRYSZNIC ---
     if h_tier in ['Koszyk 1', 'Koszyk 2'] and len(h_tot_all) > 0:
@@ -899,11 +919,9 @@ for idx, row in fixtures_clean.iterrows():
     czy_jest_dobry_bb = any("BetBuilder Pro" in p['Engine'] for p in match_preds)
     
     for p in match_preds:
-        # Usuwamy kategorycznie zakazane typy solowe!
         if p['Typ'] in ZAKAZANE_TYPY_SOLO and p['Engine'] != "BetBuilder Pro":
             continue
             
-        # Usuwamy słabe kursy pojedyncze jeśli w meczu wygenerował się soczysty BetBuilder
         if czy_jest_dobry_bb and p['Engine'] in ['Goal Line Pro', 'Multigol']:
             try:
                 if float(p['Kurs_Szac']) < 1.35: continue 
@@ -922,7 +940,6 @@ creds = Credentials.from_service_account_file("credentials.json", scopes=scope) 
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
-# CAŁKOWITE USUNIĘCIE "KURS_RYNEK" Z BAZY ORAZ LOGIKI
 cols_all_pred = ["Match_ID", "Zagrane", "Wyslij_AKO", "Kupon_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 cols_historia = ["Match_ID", "Zagrane", "Kupon_ID", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 
@@ -1135,16 +1152,24 @@ if not df_historia.empty:
     df_ako = pd.DataFrame(nowe_ako_list, columns=cols_ako)
     df_ako = df_ako.sort_values(by="Data_Zawarcia", ascending=False)
 
+# --- NAPRAWA SORTOWANIA W HISTORIA TYPÓW ---
 if not df_historia.empty:
-    df_historia['Data_Sort'] = pd.to_datetime(df_historia['Data'].astype(str) + ' ' + df_historia['Godzina'].astype(str).replace('', '00:00').replace('-', '00:00'), errors='coerce')
+    mask_puste_daty_h = df_historia['Data'].astype(str).str.strip().isin(['', 'nan', 'None', 'Nieznany'])
+    df_historia['Data_Sort'] = pd.to_datetime(df_historia['Data'].astype(str) + ' ' + df_historia['Godzina'].astype(str).replace(['', '-', 'nan', 'None'], '00:00'), errors='coerce')
+    df_historia.loc[mask_puste_daty_h, 'Data_Sort'] = pd.NaT 
+    
     mask_oczek = df_historia['Status'] == 'W OCZEKIWANIU'
-    df_oczek = df_historia[mask_oczek].sort_values(by=['Data_Sort'], ascending=[True])
-    df_rozst = df_historia[~mask_oczek].sort_values(by=['Data_Sort'], ascending=[False])
+    df_oczek = df_historia[mask_oczek].sort_values(by=['Data_Sort'], ascending=[True], na_position='last')
+    df_rozst = df_historia[~mask_oczek].sort_values(by=['Data_Sort'], ascending=[False], na_position='last')
     df_historia = pd.concat([df_oczek, df_rozst]).drop(columns=['Data_Sort', 'Unikalny_Klucz'], errors='ignore')
 
+# --- NAPRAWA SORTOWANIA W ALL PREDICTIONS ---
 if not df_all_predictions.empty: 
-    df_all_predictions['Data_Sort'] = pd.to_datetime(df_all_predictions['Data'].astype(str) + ' ' + df_all_predictions['Godzina'].astype(str).replace('', '00:00').replace('-', '00:00'), errors='coerce')
-    df_all_predictions = df_all_predictions.sort_values(by=["Data_Sort", "Szansa"], ascending=[True, False]).drop(columns=['Data_Sort', 'Unikalny_Klucz'], errors='ignore')
+    mask_puste_daty_p = df_all_predictions['Data'].astype(str).str.strip().isin(['', 'nan', 'None', 'Nieznany'])
+    df_all_predictions['Data_Sort'] = pd.to_datetime(df_all_predictions['Data'].astype(str) + ' ' + df_all_predictions['Godzina'].astype(str).replace(['', '-', 'nan', 'None'], '00:00'), errors='coerce')
+    df_all_predictions.loc[mask_puste_daty_p, 'Data_Sort'] = pd.NaT
+    
+    df_all_predictions = df_all_predictions.sort_values(by=["Data_Sort", "Szansa"], ascending=[True, False], na_position='last').drop(columns=['Data_Sort', 'Unikalny_Klucz'], errors='ignore')
 
 # ==========================================
 # 8. WYSYŁKA GOOGLE SHEETS
@@ -1198,5 +1223,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Wdrożono analityczną kalibrację kursów, skorygowaną korelację i poprawiono zawyżanie kursów BetBuilder.")
+print("Wdrożono analityczną kalibrację kursów, szczegółową argumentację i zaktualizowano sortowanie.")
 print("=" * 60)
