@@ -596,10 +596,8 @@ if not fixtures_clean.empty and not valid_matches.empty:
 # ==========================================================
 all_generated_predictions = []
 
-# CZARNA LISTA TYPÓW (SOLO). Te typy mogą pojawić się w BB, ale nigdy jako pojedyncze zakłady.
 ZAKAZANE_TYPY_SOLO = ["O0.5", "U5.5", "U6.5", "HT_U1.5", "HT_U2.5", "2H_U3.5", "HU3.5", "AU2.5", "HU4.5", "AU4.5"]
 
-# PODNIESIONE KOTWICE KURSOWE (Skorygowano)
 KOTWICE_KURSOWE = {
     'U3.5': 1.40, 'U4.5': 1.18, 'U5.5': 1.05, 'U6.5': 1.02,
     'HT_U1.5': 1.50, 'HT_U2.5': 1.15, 'HT_U3.5': 1.04, 'HT_U4.5': 1.02,
@@ -614,7 +612,6 @@ KOTWICE_KURSOWE = {
     'S_1': 1.34, 'ST_1': 1.64
 }
 
-# Szablony BetBuilder sprawdzone rynkowo (BEZ ryzykownych kombinacji typu HU2.5+AU2.5 itd.)
 BB_TEMPLATES = [
     {"name": "Optymalny", "code": "U6.5+HT_U4.5+2H_U4.5+HU4.5+AU4.5", "base_odd": 1.25, "min_prob": 0.85},
     {"name": "Bezpieczny", "code": "U5.5+HT_U4.5+2H_U4.5+HU4.5+AU4.5", "base_odd": 1.35, "min_prob": 0.80},
@@ -655,7 +652,6 @@ for idx, row in fixtures_clean.iterrows():
 
         prob_decimal = float(szansa) / 100.0
         
-        # AKTUALIZACJA PROGÓW RYZYKA ZGODNIE Z WYTYCZNYMI
         if prob_decimal >= 0.95 and kurs_docelowy >= 1.20: risk_tag = "👑 GOLDEN PICK"
         elif prob_decimal >= 0.95 and 1.10 <= kurs_docelowy < 1.20: risk_tag = "🥈 SILVER PICK"
         elif prob_decimal >= 0.95: risk_tag = "SAFE (95%+)"
@@ -699,7 +695,6 @@ for idx, row in fixtures_clean.iterrows():
         prob_1x = p1_g + px_g
         prob_x2 = px_g + p2_g
         
-        # Wybór optymalnego typu
         najlepszy_typ = "1X"
         najlepsze_prob = prob_1x
         if prob_x2 > najlepsze_prob:
@@ -715,7 +710,6 @@ for idx, row in fixtures_clean.iterrows():
         if najlepsze_prob >= 0.70:
             fair_odd = round(1 / najlepsze_prob, 2)
             
-            # Wyczerpująca analityka w Argumentacji - Wszystkie rozegrane mecze (Koszyki i Wygrane/Przegrane)
             h_wins = h_dom[h_dom['FTHG'] > h_dom['FTAG']]
             h_losses = h_dom[h_dom['FTHG'] < h_dom['FTAG']]
             a_wins = a_wyj[a_wyj['FTAG'] > a_wyj['FTHG']]
@@ -734,7 +728,7 @@ for idx, row in fixtures_clean.iterrows():
                 
             add_pred_local("1X Pro", najlepszy_typ, round(najlepsze_prob*100, 1), fair_odd, arg)
 
-    # --- 6b. GOAL LINE PRO (Generuje tylko pożyteczne linie) ---
+    # --- 6b. GOAL LINE PRO ---
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
         for line in [2.5, 3.5, 4.5]: 
             prob_h_u, h_th, h_tl, h_sm = get_weighted_stats(h_dom, 'Total_Goals', lambda x: pd.notna(x) and x < line, prior_prob=0.75)
@@ -754,7 +748,7 @@ for idx, row in fixtures_clean.iterrows():
                 if h_sm or a_sm: arg += " | ⚠️ Bayes"
                 add_pred_local("Goal Line Pro", f"O{line}", round(avg_prob_o*100, 1), KOTWICE_KURSOWE.get(f"O{line}", 1.10), arg)
 
-    # --- 6c. BETBUILDER PRO (Tylko najmocniejsze układy z Backtestingu) ---
+    # --- 6c. BETBUILDER PRO ---
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
         h_dom['HT_Total'] = pd.to_numeric(h_dom['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(h_dom['HTAG'], errors='coerce').fillna(0)
         a_wyj['HT_Total'] = pd.to_numeric(a_wyj['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(a_wyj['HTAG'], errors='coerce').fillna(0)
@@ -883,15 +877,12 @@ for idx, row in fixtures_clean.iterrows():
             if opp_tier in ['Koszyk 4', 'Koszyk 5', 'Koszyk 6']:
                 add_pred_local("Cold Shower", "1", 85.0, 1.15, f"Gospodarz ({h_tier}) szuka rewanżu po stracie pkt z ({opp_tier}).")
 
-    # --- POST-PROCESSING: CZYSZCZENIE ŚMIECI (GARBAGE COLLECTOR) ---
+    # --- POST-PROCESSING ---
     czy_jest_dobry_bb = any("BetBuilder Pro" in p['Engine'] for p in match_preds)
     
     for p in match_preds:
-        # Usuwamy kategorycznie zakazane typy solowe!
         if p['Typ'] in ZAKAZANE_TYPY_SOLO and p['Engine'] != "BetBuilder Pro":
             continue
-            
-        # Usuwamy słabe kursy pojedyncze jeśli w meczu wygenerował się soczysty BetBuilder
         if czy_jest_dobry_bb and p['Engine'] in ['Goal Line Pro', 'Multigol']:
             try:
                 if float(p['Kurs_Szac']) < 1.35: continue 
@@ -910,7 +901,6 @@ creds = Credentials.from_service_account_file("credentials.json", scopes=scope) 
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
-# CAŁKOWITE USUNIĘCIE "KURS_RYNEK" Z BAZY ORAZ LOGIKI
 cols_all_pred = ["Match_ID", "Zagrane", "Wyslij_AKO", "Kupon_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 cols_historia = ["Match_ID", "Zagrane", "Kupon_ID", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 
@@ -1123,16 +1113,26 @@ if not df_historia.empty:
     df_ako = pd.DataFrame(nowe_ako_list, columns=cols_ako)
     df_ako = df_ako.sort_values(by="Data_Zawarcia", ascending=False)
 
+# --- NAPRAWA SORTOWANIA W HISTORIA TYPÓW ---
 if not df_historia.empty:
-    df_historia['Data_Sort'] = pd.to_datetime(df_historia['Data'].astype(str) + ' ' + df_historia['Godzina'].astype(str).replace('', '00:00').replace('-', '00:00'), errors='coerce')
+    # 1. Zabezpieczenie przed parsowaniem pustych dat jako "dzisiaj"
+    mask_puste_daty_h = df_historia['Data'].astype(str).str.strip().isin(['', 'nan', 'None', 'Nieznany'])
+    df_historia['Data_Sort'] = pd.to_datetime(df_historia['Data'].astype(str) + ' ' + df_historia['Godzina'].astype(str).replace(['', '-', 'nan', 'None'], '00:00'), errors='coerce')
+    df_historia.loc[mask_puste_daty_h, 'Data_Sort'] = pd.NaT # Zamiana "udających" dzisiaj na faktyczny błąd daty (NaT)
+    
     mask_oczek = df_historia['Status'] == 'W OCZEKIWANIU'
-    df_oczek = df_historia[mask_oczek].sort_values(by=['Data_Sort'], ascending=[True])
-    df_rozst = df_historia[~mask_oczek].sort_values(by=['Data_Sort'], ascending=[False])
+    # 2. Parametr na_position='last' wymusza zrzucenie wszystkich wartości NaT (pustych dat) na sam dół listy
+    df_oczek = df_historia[mask_oczek].sort_values(by=['Data_Sort'], ascending=[True], na_position='last')
+    df_rozst = df_historia[~mask_oczek].sort_values(by=['Data_Sort'], ascending=[False], na_position='last')
     df_historia = pd.concat([df_oczek, df_rozst]).drop(columns=['Data_Sort', 'Unikalny_Klucz'], errors='ignore')
 
+# --- NAPRAWA SORTOWANIA W ALL PREDICTIONS ---
 if not df_all_predictions.empty: 
-    df_all_predictions['Data_Sort'] = pd.to_datetime(df_all_predictions['Data'].astype(str) + ' ' + df_all_predictions['Godzina'].astype(str).replace('', '00:00').replace('-', '00:00'), errors='coerce')
-    df_all_predictions = df_all_predictions.sort_values(by=["Data_Sort", "Szansa"], ascending=[True, False]).drop(columns=['Data_Sort', 'Unikalny_Klucz'], errors='ignore')
+    mask_puste_daty_p = df_all_predictions['Data'].astype(str).str.strip().isin(['', 'nan', 'None', 'Nieznany'])
+    df_all_predictions['Data_Sort'] = pd.to_datetime(df_all_predictions['Data'].astype(str) + ' ' + df_all_predictions['Godzina'].astype(str).replace(['', '-', 'nan', 'None'], '00:00'), errors='coerce')
+    df_all_predictions.loc[mask_puste_daty_p, 'Data_Sort'] = pd.NaT
+    
+    df_all_predictions = df_all_predictions.sort_values(by=["Data_Sort", "Szansa"], ascending=[True, False], na_position='last').drop(columns=['Data_Sort', 'Unikalny_Klucz'], errors='ignore')
 
 # ==========================================
 # 8. WYSYŁKA GOOGLE SHEETS
@@ -1172,28 +1172,19 @@ time.sleep(1.5)
 spreadsheet.worksheet("All_Predictions").clear()
 if not df_all_predictions.empty: spreadsheet.worksheet("All_Predictions").update(prepare_for_gsheets(df_all_predictions))
 
-# --- POPRAWKA: PRAWIDŁOWE GENEROWANIE ZAKŁADKI SUMMARY Z LOGAMI ---
 summary_data = [
     ["==== PODSUMOWANIE OGÓLNE ====", "", ""],
     ["Ostatnia aktualizacja", datetime.now().strftime("%Y-%m-%d %H:%M:%S"), ""],
-    ["Fixtures Czyste", str(len(fixtures_clean)), ""],
-    ["Results Zintegrowane", str(len(results_clean)), ""],
-    ["Przetworzone Typy w Historii", str(len(df_historia)), ""],
-    ["Wygenerowane Predykcje (Suma)", str(len(df_all_predictions)), ""],
-    ["", "", ""],
-    ["==== STATUS POBIERANIA DANYCH (LOGI) ====", "", ""],
-    ["Źródło", "Adres URL", "Status / Wynik"]
+    ["Fixtures Czyste", len(fixtures_clean), ""],
+    ["Results Zintegrowane", len(results_clean), ""],
+    ["Przetworzone Typy w Historii", len(df_historia), ""],
+    ["Wygenerowane Predykcje (Suma)", len(df_all_predictions), ""]
 ]
-
-# Doklejenie pełnych logów (scrape_report) pod głównym podsumowaniem
-for log in scrape_report:
-    summary_data.append([str(item) for item in log])
-
 time.sleep(1.5)
 spreadsheet.worksheet("Summary").clear()
 spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Wdrożono całkowite usuwanie śmieciowych typów, precyzyjne H2H oraz naprawiono logi w Summary.")
+print("Wdrożono całkowite usuwanie śmieciowych typów, precyzyjne H2H oraz naprawiono system sortowania.")
 print("=" * 60)
