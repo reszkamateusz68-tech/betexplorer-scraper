@@ -177,7 +177,11 @@ def get_poisson_match_prob(lam_h, lam_a, max_val=35):
             else: p_2 += prob_ij
     return p_1, p_x, p_2
 
-def calc_betbuilder_copula(odds_list, rho=0.35):
+def calc_betbuilder_copula(odds_list, rho=0.85):
+    """
+    Kalkulator kursu dla zakładów akumulowanych w obrębie jednego meczu.
+    Domyślne rho=0.85 symuluje wysoką korelację między zdarzeniami underowymi.
+    """
     if not odds_list: return 1.0
     q_list = [1.0 / o for o in odds_list if o > 0]
     if not q_list: return 1.0
@@ -189,7 +193,7 @@ def calc_betbuilder_copula(odds_list, rho=0.35):
         q_joint = q_joint * (q_next ** gamma)
         
     final_odd = 1.0 / q_joint if q_joint > 0 else 99.0
-    return max(1.015, round(final_odd, 2))
+    return max(1.01, round(final_odd, 2))
 
 # ==========================================================
 # FUNKCJE ANALITYCZNE I KONTROLA RYZYKA (TIME DECAY & BAYES)
@@ -598,24 +602,32 @@ all_generated_predictions = []
 
 ZAKAZANE_TYPY_SOLO = ["O0.5", "U5.5", "U6.5", "HT_U1.5", "HT_U2.5", "2H_U3.5", "HU3.5", "AU2.5", "HU4.5", "AU4.5"]
 
+# KOMPLETNA BAZA KOTWIC Z MATEMATYCZNEGO MODELU KALIBRACJI
 KOTWICE_KURSOWE = {
-    'U3.5': 1.40, 'U4.5': 1.18, 'U5.5': 1.05, 'U6.5': 1.02,
-    'HT_U1.5': 1.50, 'HT_U2.5': 1.15, 'HT_U3.5': 1.04, 'HT_U4.5': 1.02,
-    '2H_U3.5': 1.08, '2H_U4.5': 1.03, '2H_U2.5': 1.20,
-    'C_U8.5': 2.78, 'C_U9.5': 2.02, 'C_U10.5': 1.59, 'C_U11.5': 1.33,
-    'C_U12.5': 1.17, 'C_U13.5': 1.09, 'C_U14.5': 1.04, 
-    'HC_U4.5': 2.59, 'HC_U5.5': 1.75, 'HC_U6.5': 1.35, 'HC_U7.5': 1.14, 'HC_U8.5': 1.03,
-    'AC_U4.5': 1.74, 'AC_U5.5': 1.32, 'AC_U6.5': 1.11, 'AC_U7.5': 1.01, 'AC_U8.5': 1.01, 
-    'HC_O4.5': 1.44, 'AC_O4.5': 1.98, 
-    'HU2.5': 1.20, 'HU3.5': 1.06, 'HU4.5': 1.02,
-    'AU2.5': 1.20, 'AU3.5': 1.06, 'AU4.5': 1.02,
+    # BRAMKI 
+    'U2.5': 1.85, 'U3.5': 1.31, 'U4.5': 1.10, 'U5.5': 1.015, 'U6.5': 1.01,
+    'O0.5': 1.03, 'O1.5': 1.25, 'O2.5': 1.85,
+    'HT_U1.5': 1.42, 'HT_U2.5': 1.138, 'HT_U3.5': 1.053, 'HT_U4.5': 1.01,
+    '2H_U1.5': 1.512, '2H_U2.5': 1.20, '2H_U3.5': 1.08, '2H_U4.5': 1.02,
+    'HU2.5': 1.20, 'HU3.5': 1.06, 'HU4.5': 1.01,
+    'AU2.5': 1.15, 'AU3.5': 1.04, 'AU4.5': 1.01,
+    'MG_1-5': 1.09,
+    
+    # ROŻNE
+    'C_U8.5': 3.00, 'C_U9.5': 2.18, 'C_U10.5': 1.71, 'C_U11.5': 1.43,
+    'C_U12.5': 1.26, 'C_U13.5': 1.15, 'C_U14.5': 1.09,
+    'HC_U4.5': 2.79, 'HC_U5.5': 1.89, 'HC_U6.5': 1.45, 'HC_U7.5': 1.23, 'HC_U8.5': 1.11,
+    'AC_U4.5': 1.87, 'AC_U5.5': 1.42, 'AC_U6.5': 1.20, 'AC_U7.5': 1.09, 'AC_U8.5': 1.04,
+    
+    # STRZAŁY
     'S_1': 1.34, 'ST_1': 1.64
 }
 
+# SZABLONY POZBAWIONE SZTUCZNEGO ZAWYŻANIA KURSU (base_odd USUNIĘTE)
 BB_TEMPLATES = [
-    {"name": "Optymalny", "code": "U6.5+HT_U4.5+2H_U4.5+HU4.5+AU4.5", "base_odd": 1.25, "min_prob": 0.85},
-    {"name": "Bezpieczny", "code": "U5.5+HT_U4.5+2H_U4.5+HU4.5+AU4.5", "base_odd": 1.35, "min_prob": 0.80},
-    {"name": "Standard", "code": "U4.5+HT_U3.5+2H_U4.5+HU3.5+AU3.5", "base_odd": 1.60, "min_prob": 0.65}
+    {"name": "Optymalny", "code": "U6.5+HT_U4.5+2H_U4.5+HU4.5+AU4.5", "min_prob": 0.85},
+    {"name": "Bezpieczny", "code": "U5.5+HT_U4.5+2H_U4.5+HU4.5+AU4.5", "min_prob": 0.80},
+    {"name": "Standard", "code": "U4.5+HT_U3.5+2H_U4.5+HU3.5+AU3.5", "min_prob": 0.65}
 ]
 
 print("Uruchamiam Modele Predykcyjne...")
@@ -645,10 +657,10 @@ for idx, row in fixtures_clean.iterrows():
     def add_pred_local(engine, typ, szansa, kurs_szac, arg):
         typ_k = str(typ).strip()
         try: kurs_docelowy = float(str(kurs_szac).replace(',', '.'))
-        except: kurs_docelowy = 1.05
+        except: kurs_docelowy = 1.02
 
-        if kurs_docelowy < 1.015: 
-            kurs_docelowy = 1.02
+        if kurs_docelowy < 1.01: 
+            kurs_docelowy = 1.01
 
         prob_decimal = float(szansa) / 100.0
         
@@ -748,7 +760,7 @@ for idx, row in fixtures_clean.iterrows():
                 if h_sm or a_sm: arg += " | ⚠️ Bayes"
                 add_pred_local("Goal Line Pro", f"O{line}", round(avg_prob_o*100, 1), KOTWICE_KURSOWE.get(f"O{line}", 1.10), arg)
 
-    # --- 6c. BETBUILDER PRO ---
+    # --- 6c. BETBUILDER PRO (Model z wysoką korelacją - naprawiony) ---
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
         h_dom['HT_Total'] = pd.to_numeric(h_dom['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(h_dom['HTAG'], errors='coerce').fillna(0)
         a_wyj['HT_Total'] = pd.to_numeric(a_wyj['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(a_wyj['HTAG'], errors='coerce').fillna(0)
@@ -763,8 +775,8 @@ for idx, row in fixtures_clean.iterrows():
             if p_combined >= tpl['min_prob']:
                 skladniki = tpl['code'].split("+")
                 k_skladowe = [KOTWICE_KURSOWE.get(sk.strip(), 1.05) for sk in skladniki]
-                est_odd = calc_betbuilder_copula(k_skladowe, rho=0.35) 
-                final_odd = max(tpl['base_odd'], est_odd)
+                # Używamy wysokiej korelacji (0.85) zamiast 0.35, bo U6.5 pociąga za sobą HT_U4.5
+                final_odd = calc_betbuilder_copula(k_skladowe, rho=0.85) 
                 
                 arg = f"BetBuilder {tpl['name']} | Prawd. bazowe układu: {round(p_combined*100)}%. Weryfikacja D/W: {h_h}/{h_l}, {a_h}/{a_l}."
                 if h_sm or a_sm: arg += " | ⚠️ Bayes"
@@ -777,7 +789,7 @@ for idx, row in fixtures_clean.iterrows():
         prob_1_5 = (prob_h_15 + prob_a_15) / 2
         
         if prob_1_5 >= 0.90:
-            est_odd = round(1.0 + (((1/prob_1_5) - 1.0) / 1.5), 2)
+            est_odd = KOTWICE_KURSOWE.get("MG_1-5", 1.09)
             arg = f"Szeroki przedział bramkowy. Prawdopodobieństwo: {round(prob_1_5*100)}%. D/W: {h_th}/{h_tl}, {a_th}/{a_tl}."
             if h_sm or a_sm: arg += " | ⚠️ Bayes"
             add_pred_local("Multigol", "MG_1-5", round(prob_1_5*100, 1), est_odd, arg)
@@ -801,7 +813,9 @@ for idx, row in fixtures_clean.iterrows():
                 prob_a_c, a_th, a_tl, c_a_sm = get_weighted_stats(a_wyj_c, 'Total_Corners', lambda x: pd.notna(x) and x < line, prior_prob=0.70)
                 avg_p = (prob_h_c + prob_a_c) / 2
                 if avg_p >= 0.90:
-                    c_blocks_code.append(f"C_U{line}"); c_probs.append(avg_p); c_odds.append(round(1/(avg_p*0.90), 2))
+                    c_blocks_code.append(f"C_U{line}")
+                    c_probs.append(avg_p)
+                    c_odds.append(KOTWICE_KURSOWE.get(f"C_U{line}", round(1/(avg_p*0.90), 2)))
                     arg_c.append(f"C_U{line} ({h_th}/{h_tl}, {a_th}/{a_tl})")
                     break
 
@@ -809,7 +823,9 @@ for idx, row in fixtures_clean.iterrows():
             if line > max_h - 1:
                 prob_hc, h_th, h_tl, _ = get_weighted_stats(h_dom_c, 'Corners_H', lambda x: pd.notna(x) and x < line, prior_prob=0.70)
                 if prob_hc >= 0.92:
-                    c_blocks_code.append(f"HC_U{line}"); c_probs.append(prob_hc); c_odds.append(round(1/(prob_hc*0.90), 2))
+                    c_blocks_code.append(f"HC_U{line}")
+                    c_probs.append(prob_hc)
+                    c_odds.append(KOTWICE_KURSOWE.get(f"HC_U{line}", round(1/(prob_hc*0.90), 2)))
                     arg_c.append(f"HC_U{line} ({h_th}/{h_tl})")
                     break
 
@@ -817,13 +833,15 @@ for idx, row in fixtures_clean.iterrows():
             if line > max_a - 1:
                 prob_ac, a_th, a_tl, _ = get_weighted_stats(a_wyj_c, 'Corners_A', lambda x: pd.notna(x) and x < line, prior_prob=0.70)
                 if prob_ac >= 0.92:
-                    c_blocks_code.append(f"AC_U{line}"); c_probs.append(prob_ac); c_odds.append(round(1/(prob_ac*0.90), 2))
+                    c_blocks_code.append(f"AC_U{line}")
+                    c_probs.append(prob_ac)
+                    c_odds.append(KOTWICE_KURSOWE.get(f"AC_U{line}", round(1/(prob_ac*0.90), 2)))
                     arg_c.append(f"AC_U{line} ({a_th}/{a_tl})")
                     break
 
         if len(c_blocks_code) >= 1:
-            est_odd = round((1.0 + sum([(o - 1.0) * 0.60 for o in c_odds])) * 0.95, 2) if len(c_blocks_code) > 1 else c_odds[0]
-            if est_odd < 1.05: est_odd = 1.05
+            est_odd = calc_betbuilder_copula(c_odds, rho=0.60) if len(c_blocks_code) > 1 else c_odds[0]
+            if est_odd < 1.02: est_odd = 1.02
             add_pred_local("Corners Pro", "+".join(c_blocks_code), round(np.mean(c_probs)*100, 1), round(est_odd, 2), " | ".join(arg_c))
 
     # --- 6f. SHOTS PRO ---
@@ -858,13 +876,13 @@ for idx, row in fixtures_clean.iterrows():
             any_sm = h_len < 12 or a_len < 12
 
             if prob_h_s > 0.80:
-                est_odd_s = round(1.0 + (((1/prob_h_s) - 1.0) / 1.5), 2) if prob_h_s < 1.0 else 1.01
+                est_odd_s = KOTWICE_KURSOWE.get("S_1", 1.34)
                 arg = f"Strzały Ogółem: Gosp win u siebie {h_s_win}/{h_len}. Gość lose wyjazd {a_s_lose}/{a_len}."
                 if any_sm: arg += " | ⚠️ Bayes"
                 add_pred_local("Shots Pro", "S_1", round(prob_h_s*100, 1), round(est_odd_s, 2), arg)
             
             if prob_h_st > 0.80:
-                est_odd_st = round(1.0 + (((1/prob_h_st) - 1.0) / 1.5), 2) if prob_h_st < 1.0 else 1.01
+                est_odd_st = KOTWICE_KURSOWE.get("ST_1", 1.64)
                 arg = f"Strzały Celne: Gosp win u siebie {h_st_win}/{h_len}. Gość lose wyjazd {a_st_lose}/{a_len}."
                 if any_sm: arg += " | ⚠️ Bayes"
                 add_pred_local("Shots Pro", "ST_1", round(prob_h_st*100, 1), round(est_odd_st, 2), arg)
@@ -877,12 +895,15 @@ for idx, row in fixtures_clean.iterrows():
             if opp_tier in ['Koszyk 4', 'Koszyk 5', 'Koszyk 6']:
                 add_pred_local("Cold Shower", "1", 85.0, 1.15, f"Gospodarz ({h_tier}) szuka rewanżu po stracie pkt z ({opp_tier}).")
 
-    # --- POST-PROCESSING ---
+    # --- POST-PROCESSING: CZYSZCZENIE ŚMIECI (GARBAGE COLLECTOR) ---
     czy_jest_dobry_bb = any("BetBuilder Pro" in p['Engine'] for p in match_preds)
     
     for p in match_preds:
+        # Usuwamy kategorycznie zakazane typy solowe!
         if p['Typ'] in ZAKAZANE_TYPY_SOLO and p['Engine'] != "BetBuilder Pro":
             continue
+            
+        # Usuwamy słabe kursy pojedyncze jeśli w meczu wygenerował się soczysty BetBuilder
         if czy_jest_dobry_bb and p['Engine'] in ['Goal Line Pro', 'Multigol']:
             try:
                 if float(p['Kurs_Szac']) < 1.35: continue 
@@ -901,6 +922,7 @@ creds = Credentials.from_service_account_file("credentials.json", scopes=scope) 
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
+# CAŁKOWITE USUNIĘCIE "KURS_RYNEK" Z BAZY ORAZ LOGIKI
 cols_all_pred = ["Match_ID", "Zagrane", "Wyslij_AKO", "Kupon_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 cols_historia = ["Match_ID", "Zagrane", "Kupon_ID", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 
@@ -1113,26 +1135,16 @@ if not df_historia.empty:
     df_ako = pd.DataFrame(nowe_ako_list, columns=cols_ako)
     df_ako = df_ako.sort_values(by="Data_Zawarcia", ascending=False)
 
-# --- NAPRAWA SORTOWANIA W HISTORIA TYPÓW ---
 if not df_historia.empty:
-    # 1. Zabezpieczenie przed parsowaniem pustych dat jako "dzisiaj"
-    mask_puste_daty_h = df_historia['Data'].astype(str).str.strip().isin(['', 'nan', 'None', 'Nieznany'])
-    df_historia['Data_Sort'] = pd.to_datetime(df_historia['Data'].astype(str) + ' ' + df_historia['Godzina'].astype(str).replace(['', '-', 'nan', 'None'], '00:00'), errors='coerce')
-    df_historia.loc[mask_puste_daty_h, 'Data_Sort'] = pd.NaT # Zamiana "udających" dzisiaj na faktyczny błąd daty (NaT)
-    
+    df_historia['Data_Sort'] = pd.to_datetime(df_historia['Data'].astype(str) + ' ' + df_historia['Godzina'].astype(str).replace('', '00:00').replace('-', '00:00'), errors='coerce')
     mask_oczek = df_historia['Status'] == 'W OCZEKIWANIU'
-    # 2. Parametr na_position='last' wymusza zrzucenie wszystkich wartości NaT (pustych dat) na sam dół listy
-    df_oczek = df_historia[mask_oczek].sort_values(by=['Data_Sort'], ascending=[True], na_position='last')
-    df_rozst = df_historia[~mask_oczek].sort_values(by=['Data_Sort'], ascending=[False], na_position='last')
+    df_oczek = df_historia[mask_oczek].sort_values(by=['Data_Sort'], ascending=[True])
+    df_rozst = df_historia[~mask_oczek].sort_values(by=['Data_Sort'], ascending=[False])
     df_historia = pd.concat([df_oczek, df_rozst]).drop(columns=['Data_Sort', 'Unikalny_Klucz'], errors='ignore')
 
-# --- NAPRAWA SORTOWANIA W ALL PREDICTIONS ---
 if not df_all_predictions.empty: 
-    mask_puste_daty_p = df_all_predictions['Data'].astype(str).str.strip().isin(['', 'nan', 'None', 'Nieznany'])
-    df_all_predictions['Data_Sort'] = pd.to_datetime(df_all_predictions['Data'].astype(str) + ' ' + df_all_predictions['Godzina'].astype(str).replace(['', '-', 'nan', 'None'], '00:00'), errors='coerce')
-    df_all_predictions.loc[mask_puste_daty_p, 'Data_Sort'] = pd.NaT
-    
-    df_all_predictions = df_all_predictions.sort_values(by=["Data_Sort", "Szansa"], ascending=[True, False], na_position='last').drop(columns=['Data_Sort', 'Unikalny_Klucz'], errors='ignore')
+    df_all_predictions['Data_Sort'] = pd.to_datetime(df_all_predictions['Data'].astype(str) + ' ' + df_all_predictions['Godzina'].astype(str).replace('', '00:00').replace('-', '00:00'), errors='coerce')
+    df_all_predictions = df_all_predictions.sort_values(by=["Data_Sort", "Szansa"], ascending=[True, False]).drop(columns=['Data_Sort', 'Unikalny_Klucz'], errors='ignore')
 
 # ==========================================
 # 8. WYSYŁKA GOOGLE SHEETS
@@ -1186,5 +1198,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Wdrożono całkowite usuwanie śmieciowych typów, precyzyjne H2H oraz naprawiono system sortowania.")
+print("Wdrożono analityczną kalibrację kursów, skorygowaną korelację i poprawiono zawyżanie kursów BetBuilder.")
 print("=" * 60)
