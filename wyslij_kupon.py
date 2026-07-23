@@ -13,7 +13,7 @@ WARTOSC_JEDNOSTKI_PLN = 100.0
 PODATEK_BUKMACHERSKI = 0.88    
 
 # ==========================================
-# SZABLONY WIADOMOŚCI TELEGRAM
+# SZABLONY WIADOMOŚCI
 # ==========================================
 SZABLON_NOWY = """
 🔥 <b>PROPOZYCJA AKO</b> 🔥
@@ -24,7 +24,7 @@ SZABLON_NOWY = """
 📊 <b>Podsumowanie Kuponu:</b>
 📈 Łączny kurs: {kurs}
 💰 Stawka: {stawka_j}j ({stawka_pln} PLN przy 1j={wartosc_j}zł)
-💸 Do wygrania: +{zysk_j}j (+{zysk_pln} PLN po odliczeniu podatku)
+💸 Ewentualna wygrana: {wygrana_j}j ({wygrana_pln} PLN po odliczeniu podatku)
 """
 
 SZABLON_WYGRANA = """
@@ -34,7 +34,7 @@ SZABLON_WYGRANA = """
 ───────────────
 {mecze}───────────────
 📈 Łączny kurs: {kurs}
-💰 Wygrana na czysto: +{zysk_j}j (+{zysk_pln} PLN po odliczeniu podatku)
+💰 Wypłata: {wygrana_j}j ({wygrana_pln} PLN po odliczeniu podatku)
 """
 
 SZABLON_PRZEGRANA = """
@@ -56,7 +56,7 @@ SZABLON_OCZEKUJE = """
 📊 <b>Status Kuponu:</b>
 📈 Łączny kurs: {kurs}
 💰 Stawka: {stawka_j}j ({stawka_pln} PLN)
-💸 Potencjalna wygrana: +{zysk_j}j (+{zysk_pln} PLN po odliczeniu podatku)
+💸 Potencjalna wygrana: {wygrana_j}j ({wygrana_pln} PLN po odliczeniu podatku)
 """
 
 # ==========================================
@@ -101,7 +101,7 @@ def send_telegram(text):
     return True
 
 # ==========================================
-# FUNKCJA GENERUJĄCA STATYSTYKI I POWODY PORAŻKI
+# FUNKCJA GENERUJĄCA STATYSTYKI I POWODY PORAŻKI (KULOODPORNA)
 # ==========================================
 def format_match_details(m_row, df_results):
     match_id = str(m_row.get('Match_ID', '')).strip()
@@ -310,13 +310,14 @@ if 'Wyslij_AKO' in df_pred.columns:
             else: stawka_pln = 100.0
             
             stawka_j = round(stawka_pln / WARTOSC_JEDNOSTKI_PLN, 2)
-            zysk_pln = round((stawka_pln * PODATEK_BUKMACHERSKI * kurs_ako) - stawka_pln, 2)
-            zysk_j = round(zysk_pln / WARTOSC_JEDNOSTKI_PLN, 2)
+            # Zmiana: wyliczanie wygranej całkowitej brutto (ale wciąż po odjęciu podatku 12%)
+            wygrana_pln = round(stawka_pln * kurs_ako * PODATEK_BUKMACHERSKI, 2)
+            wygrana_j = round(wygrana_pln / WARTOSC_JEDNOSTKI_PLN, 2)
             
             wiadomosc = SZABLON_NOWY.format(
                 id_kuponu=kupon_id, mecze=lista_meczow_txt, kurs=f"{kurs_ako:.2f}",
                 stawka_j=stawka_j, stawka_pln=stawka_pln, wartosc_j=int(WARTOSC_JEDNOSTKI_PLN),
-                zysk_j=zysk_j, zysk_pln=zysk_pln
+                wygrana_j=wygrana_j, wygrana_pln=wygrana_pln
             )
             
             if send_telegram(wiadomosc): wyslane_id.append(kupon_id)
@@ -334,7 +335,7 @@ if 'Wyslij_AKO' in df_pred.columns:
             if komorki_do_odznaczenia: ws_pred.update_cells(komorki_do_odznaczenia)
 
 # ==========================================
-# 2. WYSYŁKA PODSUMOWAŃ (KULOODPORNA)
+# 2. WYSYŁKA PODSUMOWAŃ
 # ==========================================
 if 'Telegram_Status' not in df_ako.columns:
     df_ako['Telegram_Status'] = ""
@@ -387,7 +388,6 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
                     
                 lista_meczow_txt += f"{emoji} {m['Gospodarz']} - {m['Gość']} | Typ: <b>{m['Typ']}</b> | 📈 {k_val:.2f}\n"
                 
-                # DOKLEJENIE STATYSTYK LUB POWODU PORAŻKI (TERAZ DEFINICJA JEST NA PEWNO)
                 detale_txt = format_match_details(m, df_res)
                 if detale_txt:
                     lista_meczow_txt += detale_txt
@@ -397,7 +397,6 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
                 try: kurs_ako = float(str(rekord.get('Kurs_AKO', '1.0')).replace(',', '.'))
                 except: kurs_ako = 1.0
             
-            # WŁASNY MECHANIZM OCENY STATUSU KUPONU
             if "PRZEGRANA" in statusy_zdarzen:
                 real_status_ako = "PRZEGRANA"
             elif "W OCZEKIWANIU" in statusy_zdarzen or "DO RĘCZNEJ KONTROLI" in statusy_zdarzen:
@@ -416,12 +415,12 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
             stawka_j = round(stawka_pln / WARTOSC_JEDNOSTKI_PLN, 2)
             
             if real_status_ako == 'WYGRANA':
-                wygrana_brutto = round(kurs_ako * stawka_pln * PODATEK_BUKMACHERSKI, 2)
-                zysk_pln = round(wygrana_brutto - stawka_pln, 2)
-                zysk_j = round(zysk_pln / WARTOSC_JEDNOSTKI_PLN, 2)
+                # Zmiana: wyliczanie całkowitej wypłaty
+                wygrana_pln = round(kurs_ako * stawka_pln * PODATEK_BUKMACHERSKI, 2)
+                wygrana_j = round(wygrana_pln / WARTOSC_JEDNOSTKI_PLN, 2)
                 wiadomosc = SZABLON_WYGRANA.format(
                     id_kuponu=kupon_id, mecze=lista_meczow_txt, 
-                    kurs=f"{kurs_ako:.2f}", zysk_j=zysk_j, zysk_pln=zysk_pln
+                    kurs=f"{kurs_ako:.2f}", wygrana_j=wygrana_j, wygrana_pln=wygrana_pln
                 )
             elif real_status_ako == 'PRZEGRANA':
                 wiadomosc = SZABLON_PRZEGRANA.format(
@@ -429,13 +428,13 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
                     kurs=f"{kurs_ako:.2f}", stawka_j=f"-{stawka_j}", stawka_pln=f"-{stawka_pln}"
                 )
             else:
-                wygrana_brutto = round(kurs_ako * stawka_pln * PODATEK_BUKMACHERSKI, 2)
-                zysk_pln = round(wygrana_brutto - stawka_pln, 2)
-                zysk_j = round(zysk_pln / WARTOSC_JEDNOSTKI_PLN, 2)
+                # Zmiana dla kuponów OCZEKUJĄCYCH wymuszonych ręcznie
+                wygrana_pln = round(kurs_ako * stawka_pln * PODATEK_BUKMACHERSKI, 2)
+                wygrana_j = round(wygrana_pln / WARTOSC_JEDNOSTKI_PLN, 2)
                 wiadomosc = SZABLON_OCZEKUJE.format(
                     id_kuponu=kupon_id, mecze=lista_meczow_txt, 
                     kurs=f"{kurs_ako:.2f}", stawka_j=stawka_j, stawka_pln=stawka_pln, 
-                    zysk_j=zysk_j, zysk_pln=zysk_pln
+                    wygrana_j=wygrana_j, wygrana_pln=wygrana_pln
                 )
                 
             if send_telegram(wiadomosc):
