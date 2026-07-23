@@ -24,7 +24,7 @@ SZABLON_NOWY = """
 📊 <b>Podsumowanie Kuponu:</b>
 📈 Łączny kurs: {kurs}
 💰 Stawka: {stawka_j}j ({stawka_pln} PLN przy 1j={wartosc_j}zł)
-💸 Ewentualna wygrana: {wygrana_j}j ({wygrana_pln} PLN po odliczeniu podatku)
+💸 Do wygrania: {wygrana_j}j ({wygrana_pln} PLN po odliczeniu podatku)
 """
 
 SZABLON_WYGRANA = """
@@ -75,12 +75,6 @@ ws_pred = spreadsheet.worksheet("All_Predictions")
 ws_ako = spreadsheet.worksheet("Kupony_AKO")
 ws_hist = spreadsheet.worksheet("Historia_Typow")
 
-try:
-    ws_res = spreadsheet.worksheet("Results")
-    df_res = pd.DataFrame(ws_res.get_all_records())
-except Exception:
-    df_res = pd.DataFrame()
-
 df_pred = pd.DataFrame(ws_pred.get_all_records())
 df_ako = pd.DataFrame(ws_ako.get_all_records())
 df_hist = pd.DataFrame(ws_hist.get_all_records())
@@ -99,139 +93,6 @@ def send_telegram(text):
         print(f"Błąd wysyłki Telegram: {response.text}")
         return False
     return True
-
-# ==========================================
-# FUNKCJA GENERUJĄCA STATYSTYKI I POWODY PORAŻKI (KULOODPORNA)
-# ==========================================
-def format_match_details(m_row, df_results):
-    match_id = str(m_row.get('Match_ID', '')).strip()
-    status = str(m_row.get('Status', 'W OCZEKIWANIU')).upper()
-    typ = str(m_row.get('Typ', '')).strip()
-    
-    if df_results.empty or 'Match_ID' not in df_results.columns:
-        return ""
-        
-    res_match = df_results[df_results['Match_ID'] == match_id]
-    if res_match.empty:
-        return ""
-        
-    r = res_match.iloc[0]
-    
-    hg = pd.to_numeric(r.get('FTHG', None), errors='coerce')
-    ag = pd.to_numeric(r.get('FTAG', None), errors='coerce')
-    tg = pd.to_numeric(r.get('Total_Goals', None), errors='coerce')
-    ht_h = pd.to_numeric(r.get('HTHG', None), errors='coerce')
-    ht_a = pd.to_numeric(r.get('HTAG', None), errors='coerce')
-    hc = pd.to_numeric(r.get('Corners_H', None), errors='coerce')
-    ac = pd.to_numeric(r.get('Corners_A', None), errors='coerce')
-    tc = pd.to_numeric(r.get('Total_Corners', None), errors='coerce')
-    sh = pd.to_numeric(r.get('Shots_H', None), errors='coerce')
-    sa = pd.to_numeric(r.get('Shots_A', None), errors='coerce')
-    sth = pd.to_numeric(r.get('ShotsTarget_H', None), errors='coerce')
-    sta = pd.to_numeric(r.get('ShotsTarget_A', None), errors='coerce')
-    
-    stats_str = ""
-    sub_bets = [b.strip() for b in typ.split("+") if b.strip()]
-    
-    if status == "PRZEGRANA":
-        reasons = []
-        for sub_bet in sub_bets:
-            # 1X2 / 1X / X2
-            if sub_bet in ["1", "1X"] and pd.notna(hg) and pd.notna(ag) and hg < ag:
-                reasons.append(f"Porażka gospodarzy ({int(hg)}:{int(ag)})")
-            elif sub_bet == "1" and pd.notna(hg) and pd.notna(ag) and hg == ag:
-                reasons.append(f"Remis w meczu ({int(hg)}:{int(ag)})")
-            elif sub_bet in ["2", "X2"] and pd.notna(hg) and pd.notna(ag) and hg > ag:
-                reasons.append(f"Porażka gości ({int(hg)}:{int(ag)})")
-                
-            # Gole ogółem
-            elif sub_bet.startswith("U") and not sub_bet.startswith(("HT_U", "2H_U", "HU", "AU", "C_U", "HC_U", "AC_U")) and pd.notna(tg):
-                try:
-                    line = float(sub_bet[1:])
-                    if tg > line: reasons.append(f"Łącznie goli: {int(tg)} (linia: {line})")
-                except: pass
-            elif sub_bet.startswith("O") and not sub_bet.startswith(("HC_O", "AC_O")) and pd.notna(tg):
-                try:
-                    line = float(sub_bet[1:])
-                    if tg < line: reasons.append(f"Łącznie goli: {int(tg)} (wymagano: ponad {line})")
-                except: pass
-                
-            # Gole 1H i 2H
-            elif sub_bet.startswith("HT_U") and pd.notna(ht_h) and pd.notna(ht_a):
-                try:
-                    line = float(sub_bet.replace("HT_U", ""))
-                    ht_tg = ht_h + ht_a
-                    if ht_tg > line: reasons.append(f"Gole w 1. połowie: {int(ht_tg)} (linia: {line})")
-                except: pass
-            elif sub_bet.startswith("2H_U") and pd.notna(tg) and pd.notna(ht_h) and pd.notna(ht_a):
-                try:
-                    line = float(sub_bet.replace("2H_U", ""))
-                    h2_tg = tg - (ht_h + ht_a)
-                    if h2_tg > line: reasons.append(f"Gole w 2. połowie: {int(h2_tg)} (linia: {line})")
-                except: pass
-                
-            # Gole drużyn
-            elif sub_bet.startswith("HU") and pd.notna(hg):
-                try:
-                    line = float(sub_bet.replace("HU", ""))
-                    if hg > line: reasons.append(f"Gole gospodarzy: {int(hg)} (linia: {line})")
-                except: pass
-            elif sub_bet.startswith("AU") and pd.notna(ag):
-                try:
-                    line = float(sub_bet.replace("AU", ""))
-                    if ag > line: reasons.append(f"Gole gości: {int(ag)} (linia: {line})")
-                except: pass
-                
-            # Rożne
-            elif sub_bet.startswith("C_U") and pd.notna(tc):
-                try:
-                    line = float(sub_bet.replace("C_U", ""))
-                    if tc > line: reasons.append(f"Suma rzutów rożnych: {int(tc)} (linia: {line})")
-                except: pass
-            elif sub_bet.startswith("HC_U") and pd.notna(hc):
-                try:
-                    line = float(sub_bet.replace("HC_U", ""))
-                    if hc > line: reasons.append(f"Rożne gospodarzy: {int(hc)} (linia: {line})")
-                except: pass
-            elif sub_bet.startswith("AC_U") and pd.notna(ac):
-                try:
-                    line = float(sub_bet.replace("AC_U", ""))
-                    if ac > line: reasons.append(f"Rożne gości: {int(ac)} (linia: {line})")
-                except: pass
-                
-            # Strzały
-            elif sub_bet == "S_1" and pd.notna(sh) and pd.notna(sa) and sh <= sa:
-                reasons.append(f"Strzały ogółem: {int(sh)}:{int(sa)} (brak wygranej gospodarzy)")
-            elif sub_bet == "ST_1" and pd.notna(sth) and pd.notna(sta) and sth <= sta:
-                reasons.append(f"Strzały celne: {int(sth)}:{int(sta)} (brak wygranej gospodarzy)")
-
-        reasons = list(dict.fromkeys(reasons))
-
-        if reasons:
-            stats_str = f"   └ 💡 <i>Powód porażki: {', '.join(reasons)}</i>\n"
-        elif pd.notna(hg) and pd.notna(ag):
-            stats_str = f"   └ 💡 <i>Wynik końcowy: {int(hg)}:{int(ag)}</i>\n"
-
-    elif status == "WYGRANA":
-        parts = []
-        if pd.notna(hg) and pd.notna(ag):
-            score_txt = f"Wynik {int(hg)}:{int(ag)}"
-            if pd.notna(ht_h) and pd.notna(ht_a):
-                score_txt += f" (1H {int(ht_h)}:{int(ht_a)})"
-            parts.append(score_txt)
-            
-        if pd.notna(hc) and pd.notna(ac) and any(k in typ for k in ["C_", "HC_", "AC_"]):
-            parts.append(f"Rożne {int(hc)}:{int(ac)}")
-            
-        if pd.notna(sth) and pd.notna(sta) and "ST_" in typ:
-            parts.append(f"Strzały celne {int(sth)}:{int(sta)}")
-        elif pd.notna(sh) and pd.notna(sa) and "S_" in typ:
-            parts.append(f"Strzały {int(sh)}:{int(sa)}")
-
-        if parts:
-            stats_str = f"   └ 📊 <i>Statystyki: {' | '.join(parts)}</i>\n"
-
-    return stats_str
 
 # ==========================================
 # 1. WYSYŁKA NOWYCH KUPONÓW
@@ -310,7 +171,7 @@ if 'Wyslij_AKO' in df_pred.columns:
             else: stawka_pln = 100.0
             
             stawka_j = round(stawka_pln / WARTOSC_JEDNOSTKI_PLN, 2)
-            # Zmiana: wyliczanie wygranej całkowitej brutto (ale wciąż po odjęciu podatku 12%)
+            # CAŁKOWITA WYGRANA BRUTTO PO ODLICZENIU 12% PODATKU
             wygrana_pln = round(stawka_pln * kurs_ako * PODATEK_BUKMACHERSKI, 2)
             wygrana_j = round(wygrana_pln / WARTOSC_JEDNOSTKI_PLN, 2)
             
@@ -385,12 +246,11 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
                 try: k_val = float(k_str)
                 except: k_val = 1.0
                 if k_val > 1.0: dynamic_kurs *= k_val
-                    
-                lista_meczow_txt += f"{emoji} {m['Gospodarz']} - {m['Gość']} | Typ: <b>{m['Typ']}</b> | 📈 {k_val:.2f}\n"
                 
-                detale_txt = format_match_details(m, df_res)
-                if detale_txt:
-                    lista_meczow_txt += detale_txt
+                data_m = str(m.get('Data', ''))
+                godz_m = str(m.get('Godzina', ''))
+                    
+                lista_meczow_txt += f"{emoji} {m['Gospodarz']} vs {m['Gość']}\n📅 {data_m} ⏰ {godz_m} | 🎯 Typ: <b>{m['Typ']}</b> | 📈 {k_val:.2f}\n\n"
             
             kurs_ako = round(dynamic_kurs, 2)
             if kurs_ako == 1.0:
@@ -414,10 +274,11 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
             
             stawka_j = round(stawka_pln / WARTOSC_JEDNOSTKI_PLN, 2)
             
+            # CAŁKOWITA WYGRANA BRUTTO PO ODLICZENIU 12% PODATKU
+            wygrana_pln = round(kurs_ako * stawka_pln * PODATEK_BUKMACHERSKI, 2)
+            wygrana_j = round(wygrana_pln / WARTOSC_JEDNOSTKI_PLN, 2)
+            
             if real_status_ako == 'WYGRANA':
-                # Zmiana: wyliczanie całkowitej wypłaty
-                wygrana_pln = round(kurs_ako * stawka_pln * PODATEK_BUKMACHERSKI, 2)
-                wygrana_j = round(wygrana_pln / WARTOSC_JEDNOSTKI_PLN, 2)
                 wiadomosc = SZABLON_WYGRANA.format(
                     id_kuponu=kupon_id, mecze=lista_meczow_txt, 
                     kurs=f"{kurs_ako:.2f}", wygrana_j=wygrana_j, wygrana_pln=wygrana_pln
@@ -428,9 +289,6 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
                     kurs=f"{kurs_ako:.2f}", stawka_j=f"-{stawka_j}", stawka_pln=f"-{stawka_pln}"
                 )
             else:
-                # Zmiana dla kuponów OCZEKUJĄCYCH wymuszonych ręcznie
-                wygrana_pln = round(kurs_ako * stawka_pln * PODATEK_BUKMACHERSKI, 2)
-                wygrana_j = round(wygrana_pln / WARTOSC_JEDNOSTKI_PLN, 2)
                 wiadomosc = SZABLON_OCZEKUJE.format(
                     id_kuponu=kupon_id, mecze=lista_meczow_txt, 
                     kurs=f"{kurs_ako:.2f}", stawka_j=stawka_j, stawka_pln=stawka_pln, 
