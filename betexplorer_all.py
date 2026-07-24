@@ -694,10 +694,14 @@ def add_pred(match_id, termin, date, time, league, home, away, engine, typ, szan
     if engine != "BetBuilder Pro" and "+" not in typ_k and kurs_docelowy < 1.05:
         return
 
-    # --- Centralny Silnik Wyceny Ryzyka ---
+    # --- Centralny Silnik Wyceny Ryzyka (Modyfikacja Medali) ---
     prob_decimal = float(szansa) / 100.0
     if prob_decimal >= 0.95 and kurs_docelowy >= 1.20:
-        risk_tag = "👑 GOLDEN PICK"
+        risk_tag = "🥇 1. ZŁOTY TYP"
+    elif prob_decimal >= 0.95 and kurs_docelowy >= 1.15:
+        risk_tag = "🥈 2. SREBRNY TYP"
+    elif prob_decimal >= 0.95 and kurs_docelowy >= 1.10:
+        risk_tag = "🥉 3. BRĄZOWY TYP"
     elif prob_decimal >= 0.95:
         risk_tag = "SAFE (95%+)"
     elif prob_decimal >= 0.85:
@@ -1394,5 +1398,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Wdrożono rygorystyczny Garbage Collector, inteligentne sortowanie oraz Szablony Premium BetBuilder.")
+print("Wdrożono rygorystyczny Garbage Collector, inteligentne sortowanie, Szablony Premium BetBuilder oraz Medale w wycenie ryzyka.")
 print("=" * 60)
