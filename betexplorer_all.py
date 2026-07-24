@@ -178,6 +178,10 @@ def get_poisson_match_prob(lam_h, lam_a, max_val=35):
     return p_1, p_x, p_2
 
 def calc_betbuilder_copula(odds_list, rho=0.85):
+    """
+    Kalkulator kursu dla zakładów akumulowanych w obrębie jednego meczu.
+    Domyślne rho=0.85 symuluje wysoką korelację między zdarzeniami underowymi.
+    """
     if not odds_list: return 1.0
     q_list = [1.0 / o for o in odds_list if o > 0]
     if not q_list: return 1.0
@@ -629,6 +633,7 @@ KOTWICE_KURSOWE = {
     'S_1': 1.34, 'ST_1': 1.64
 }
 
+# SZABLONY BEZ SZTUCZNEGO ZAWYŻANIA KURSU
 BB_TEMPLATES = [
     {"name": "Optymalny", "code": "U6.5+HT_U4.5+2H_U4.5+HU4.5+AU4.5", "min_prob": 0.85},
     {"name": "Bezpieczny", "code": "U5.5+HT_U4.5+2H_U4.5+HU4.5+AU4.5", "min_prob": 0.80},
@@ -769,7 +774,7 @@ for idx, row in fixtures_clean.iterrows():
                 if h_sm or a_sm: arg += " | ⚠️ Bayes"
                 add_pred_local("Goal Line Pro", f"O{line}", round(avg_prob_o*100, 1), KOTWICE_KURSOWE.get(f"O{line}", 1.10), arg)
 
-    # --- 6c. BETBUILDER PRO (Model z wysoką korelacją) ---
+    # --- 6c. BETBUILDER PRO (Model z wysoką korelacją - naprawiony) ---
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
         h_dom['HT_Total'] = pd.to_numeric(h_dom['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(h_dom['HTAG'], errors='coerce').fillna(0)
         a_wyj['HT_Total'] = pd.to_numeric(a_wyj['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(a_wyj['HTAG'], errors='coerce').fillna(0)
@@ -919,9 +924,11 @@ for idx, row in fixtures_clean.iterrows():
     czy_jest_dobry_bb = any("BetBuilder Pro" in p['Engine'] for p in match_preds)
     
     for p in match_preds:
+        # Usuwamy kategorycznie zakazane typy solowe!
         if p['Typ'] in ZAKAZANE_TYPY_SOLO and p['Engine'] != "BetBuilder Pro":
             continue
             
+        # Usuwamy słabe kursy pojedyncze jeśli w meczu wygenerował się soczysty BetBuilder
         if czy_jest_dobry_bb and p['Engine'] in ['Goal Line Pro', 'Multigol']:
             try:
                 if float(p['Kurs_Szac']) < 1.35: continue 
@@ -1152,7 +1159,7 @@ if not df_historia.empty:
     df_ako = pd.DataFrame(nowe_ako_list, columns=cols_ako)
     df_ako = df_ako.sort_values(by="Data_Zawarcia", ascending=False)
 
-# --- NAPRAWA SORTOWANIA W HISTORIA TYPÓW ---
+# --- NAPRAWA SORTOWANIA W HISTORIA TYPÓW (zabezpieczenie pd.NaT) ---
 if not df_historia.empty:
     mask_puste_daty_h = df_historia['Data'].astype(str).str.strip().isin(['', 'nan', 'None', 'Nieznany'])
     df_historia['Data_Sort'] = pd.to_datetime(df_historia['Data'].astype(str) + ' ' + df_historia['Godzina'].astype(str).replace(['', '-', 'nan', 'None'], '00:00'), errors='coerce')
@@ -1163,7 +1170,7 @@ if not df_historia.empty:
     df_rozst = df_historia[~mask_oczek].sort_values(by=['Data_Sort'], ascending=[False], na_position='last')
     df_historia = pd.concat([df_oczek, df_rozst]).drop(columns=['Data_Sort', 'Unikalny_Klucz'], errors='ignore')
 
-# --- NAPRAWA SORTOWANIA W ALL PREDICTIONS ---
+# --- NAPRAWA SORTOWANIA W ALL PREDICTIONS (zabezpieczenie pd.NaT) ---
 if not df_all_predictions.empty: 
     mask_puste_daty_p = df_all_predictions['Data'].astype(str).str.strip().isin(['', 'nan', 'None', 'Nieznany'])
     df_all_predictions['Data_Sort'] = pd.to_datetime(df_all_predictions['Data'].astype(str) + ' ' + df_all_predictions['Godzina'].astype(str).replace(['', '-', 'nan', 'None'], '00:00'), errors='coerce')
