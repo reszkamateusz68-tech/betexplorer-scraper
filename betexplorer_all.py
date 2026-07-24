@@ -235,7 +235,6 @@ def get_weighted_stats(df, target_col, condition_lambda, prior_prob=0.5, alpha=2
         
     return prob, total_hits, total_len, is_smoothed
 
-# Potężna funkcja statystyk i koszyków (Przywrócona w 100%)
 def get_tier_stats(df, is_home, league, team_tiers, target_col, condition):
     if df.empty: return "0/0 [Brak]"
     try:
@@ -629,18 +628,6 @@ KOTWICE_KURSOWE = {
     'S_1': 1.34, 'ST_1': 1.64
 }
 
-# SZABLONY WODOSPADOWE (KASKADOWE) - Od najbardziej ryzykownych/dochodowych do ubezpieczeniowych
-# Silnik zatrzyma się na PIERWSZYM, który osiągnie historyczną sprawdzalność na poziomie "min_prob"
-BB_TEMPLATES = [
-    {"name": "Ultra Value", "code": "U3.5+HT_U1.5+HU1.5+AU1.5", "min_prob": 0.82},
-    {"name": "Value Pro", "code": "U3.5+HT_U1.5+HU2.5+AU2.5", "min_prob": 0.82},
-    {"name": "Aggressive", "code": "U4.5+HT_U1.5+HU2.5+AU2.5", "min_prob": 0.82},
-    {"name": "Optimal Plus", "code": "U4.5+HT_U2.5+HU2.5+AU2.5", "min_prob": 0.85},
-    {"name": "Optimal", "code": "U5.5+HT_U2.5+HU3.5+AU3.5", "min_prob": 0.85},
-    {"name": "Safe", "code": "U5.5+HT_U3.5+HU4.5+AU4.5", "min_prob": 0.85},
-    {"name": "Ultra Safe", "code": "U6.5+HT_U4.5+2H_U4.5+HU4.5+AU4.5", "min_prob": 0.88}
-]
-
 print("Uruchamiam Modele Predykcyjne...")
 
 for idx, row in fixtures_clean.iterrows():
@@ -775,34 +762,48 @@ for idx, row in fixtures_clean.iterrows():
                 if h_sm or a_sm: arg += " | ⚠️ Bayes"
                 add_pred_local("Goal Line Pro", f"O{line}", round(avg_prob_o*100, 1), KOTWICE_KURSOWE.get(f"O{line}", 1.10), arg)
 
-    # --- 6c. DYNAMICZNY BETBUILDER PRO (Maksymalizacja Value) ---
+    # --- 6c. DYNAMICZNY BETBUILDER PRO (Kaskada opłacalności bez duplikatów) ---
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
         h_dom['HT_Total'] = pd.to_numeric(h_dom['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(h_dom['HTAG'], errors='coerce').fillna(0)
         a_wyj['HT_Total'] = pd.to_numeric(a_wyj['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(a_wyj['HTAG'], errors='coerce').fillna(0)
-        h_dom['2H_Total'] = pd.to_numeric(h_dom['Total_Goals'], errors='coerce').fillna(0) - h_dom['HT_Total']
-        a_wyj['2H_Total'] = pd.to_numeric(a_wyj['Total_Goals'], errors='coerce').fillna(0) - a_wyj['HT_Total']
         
-        # Pętla kaskadowa: od najbardziej agresywnych linii do najbezpieczniejszych
-        for tpl in BB_TEMPLATES:
-            p_h, h_h, h_l, h_sm = get_weighted_stats(h_dom, None, lambda r, code=tpl['code']: evaluate_bet(code, r) == "WYGRANA", prior_prob=tpl['min_prob'])
-            p_a, a_h, a_l, a_sm = get_weighted_stats(a_wyj, None, lambda r, code=tpl['code']: evaluate_bet(code, r) == "WYGRANA", prior_prob=tpl['min_prob'])
+        # Testujemy kaskadowo propozycje od najbardziej wartościowych (wysoki kurs) do ubezpieczeniowych
+        bb_proposers = [
+            {'code_parts': ['U3.5', 'HT_U1.5', 'HU1.5', 'AU1.5'], 'min_p': 0.75, 'name': 'Ultra Value'},
+            {'code_parts': ['U3.5', 'HT_U1.5', 'HU2.5', 'AU2.5'], 'min_p': 0.78, 'name': 'Value Pro'},
+            {'code_parts': ['U4.5', 'HT_U1.5', 'HU2.5', 'AU2.5'], 'min_p': 0.80, 'name': 'Aggressive'},
+            {'code_parts': ['U4.5', 'HT_U2.5', 'HU2.5', 'AU2.5'], 'min_p': 0.82, 'name': 'Optimal Plus'},
+            {'code_parts': ['U5.5', 'HT_U2.5', 'HU3.5', 'AU3.5'], 'min_p': 0.85, 'name': 'Optimal'},
+            {'code_parts': ['U5.5', 'HT_U3.5', 'HU3.5', 'AU3.5'], 'min_p': 0.88, 'name': 'Safe'},
+            {'code_parts': ['U6.5', 'HT_U4.5', '2H_U4.5', 'HU4.5', 'AU4.5'], 'min_p': 0.90, 'name': 'Ultra Safe'}
+        ]
+        
+        best_code = None
+        best_prob = 0.0
+        best_odd = 1.0
+        best_name = ""
+        
+        for prop in bb_proposers:
+            c_code = "+".join(prop['code_parts'])
+            p_h, _, _, _ = get_weighted_stats(h_dom, None, lambda r, code=c_code: evaluate_bet(code, r) == "WYGRANA", prior_prob=prop['min_p'])
+            p_a, _, _, _ = get_weighted_stats(a_wyj, None, lambda r, code=c_code: evaluate_bet(code, r) == "WYGRANA", prior_prob=prop['min_p'])
+            p_comb = (p_h + p_a) / 2.0
             
-            p_combined = (p_h + p_a) / 2
-            
-            # Wychwytujemy pierwszy układ, który dowozi matematycznie wymaganą szansę (np. >82%)
-            if p_combined >= tpl['min_prob']:
-                skladniki = tpl['code'].split("+")
-                k_skladowe = [KOTWICE_KURSOWE.get(sk.strip(), 1.05) for sk in skladniki]
-                # Korelacja 0.85 łączy kursy precyzyjnie bez ich rozdmuchiwania
-                final_odd = calc_betbuilder_copula(k_skladowe, rho=0.85) 
+            if p_comb >= prop['min_p']:
+                odds_legs = [KOTWICE_KURSOWE.get(leg, 1.02) for leg in prop['code_parts']]
+                final_odd = calc_betbuilder_copula(odds_legs, rho=0.85)
                 
-                h_stat = get_tier_stats(h_dom, True, league, team_tiers, None, lambda r, code=tpl['code']: evaluate_bet(code, r) == "WYGRANA")
-                a_stat = get_tier_stats(a_wyj, False, league, team_tiers, None, lambda r, code=tpl['code']: evaluate_bet(code, r) == "WYGRANA")
-                arg = f"BB {tpl['name']} | Gosp ({h_tier}): {h_stat} | Gość ({a_tier}): {a_stat}"
-                if h_sm or a_sm: arg += " | ⚠️ Bayes"
-                
-                add_pred_local(f"BetBuilder Pro", tpl['code'], round(p_combined*100, 1), final_odd, arg)
-                break # ZNALEZIONO OPTYMALNY TYP - ZATRZYMUJEMY GENERATOR DLA TEGO MECZU!
+                best_code = c_code
+                best_prob = p_comb
+                best_odd = final_odd
+                best_name = prop['name']
+                break # Przerwanie pętli gwarantuje wybór PIERWSZEJ (najbardziej wartościowej) opcji i brak duplikatów!
+
+        if best_code:
+            h_stat = get_tier_stats(h_dom, True, league, team_tiers, None, lambda r, c=best_code: evaluate_bet(c, r) == "WYGRANA")
+            a_stat = get_tier_stats(a_wyj, False, league, team_tiers, None, lambda r, c=best_code: evaluate_bet(c, r) == "WYGRANA")
+            arg = f"BB {best_name} | Gosp ({h_tier}): {h_stat} | Gość ({a_tier}): {a_stat}"
+            add_pred_local("BetBuilder Pro", best_code, round(best_prob*100, 1), best_odd, arg)
 
     # --- 6d. MULTIGOL ---
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
@@ -1164,7 +1165,7 @@ if not df_historia.empty:
     df_ako = pd.DataFrame(nowe_ako_list, columns=cols_ako)
     df_ako = df_ako.sort_values(by="Data_Zawarcia", ascending=False)
 
-# --- NAPRAWA SORTOWANIA W HISTORIA TYPÓW (zabezpieczenie pd.NaT) ---
+# --- CHRONOLOGICZNE SORTOWANIE: NAJBLIŻSZE MECZE NA GÓRZE, PUSTE/NIEZNANE NA SAMYM DOLE ---
 if not df_historia.empty:
     mask_puste_daty_h = df_historia['Data'].astype(str).str.strip().isin(['', 'nan', 'None', 'Nieznany'])
     df_historia['Data_Sort'] = pd.to_datetime(df_historia['Data'].astype(str) + ' ' + df_historia['Godzina'].astype(str).replace(['', '-', 'nan', 'None'], '00:00'), errors='coerce')
@@ -1175,7 +1176,6 @@ if not df_historia.empty:
     df_rozst = df_historia[~mask_oczek].sort_values(by=['Data_Sort'], ascending=[False], na_position='last')
     df_historia = pd.concat([df_oczek, df_rozst]).drop(columns=['Data_Sort', 'Unikalny_Klucz'], errors='ignore')
 
-# --- NAPRAWA SORTOWANIA W ALL PREDICTIONS (zabezpieczenie pd.NaT) ---
 if not df_all_predictions.empty: 
     mask_puste_daty_p = df_all_predictions['Data'].astype(str).str.strip().isin(['', 'nan', 'None', 'Nieznany'])
     df_all_predictions['Data_Sort'] = pd.to_datetime(df_all_predictions['Data'].astype(str) + ' ' + df_all_predictions['Godzina'].astype(str).replace(['', '-', 'nan', 'None'], '00:00'), errors='coerce')
@@ -1227,13 +1227,20 @@ summary_data = [
     ["Fixtures Czyste", len(fixtures_clean), ""],
     ["Results Zintegrowane", len(results_clean), ""],
     ["Przetworzone Typy w Historii", len(df_historia), ""],
-    ["Wygenerowane Predykcje (Suma)", len(df_all_predictions), ""]
+    ["Wygenerowane Predykcje (Suma)", len(df_all_predictions), ""],
+    ["", "", ""],
+    ["==== STATUS POBIERANIA DANYCH (LOGI) ====", "", ""],
+    ["Źródło", "Adres URL", "Status / Wynik"]
 ]
+
+for log in scrape_report:
+    summary_data.append([str(item) for item in log])
+
 time.sleep(1.5)
 spreadsheet.worksheet("Summary").clear()
 spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Wdrożono analityczną kalibrację kursów, szczegółową argumentację i zaktualizowano sortowanie.")
+print("Wdrożono dynamiczny wybór wartościowych linii BetBuilder, poprawiono wyceny oraz przywrócono sortowanie i koszyki.")
 print("=" * 60)
