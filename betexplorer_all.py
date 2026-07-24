@@ -178,10 +178,6 @@ def get_poisson_match_prob(lam_h, lam_a, max_val=35):
     return p_1, p_x, p_2
 
 def calc_betbuilder_copula(odds_list, rho=0.85):
-    """
-    Kalkulator kursu dla zakładów akumulowanych w obrębie jednego meczu.
-    Domyślne rho=0.85 symuluje wysoką korelację między zdarzeniami underowymi.
-    """
     if not odds_list: return 1.0
     q_list = [1.0 / o for o in odds_list if o > 0]
     if not q_list: return 1.0
@@ -239,7 +235,7 @@ def get_weighted_stats(df, target_col, condition_lambda, prior_prob=0.5, alpha=2
         
     return prob, total_hits, total_len, is_smoothed
 
-# Funkcja wyciągająca detale o koszykach rozegranych meczów do argumentacji
+# Potężna funkcja statystyk i koszyków (Przywrócona w 100%)
 def get_tier_stats(df, is_home, league, team_tiers, target_col, condition):
     if df.empty: return "0/0 [Brak]"
     try:
@@ -617,14 +613,14 @@ all_generated_predictions = []
 
 ZAKAZANE_TYPY_SOLO = ["O0.5", "U5.5", "U6.5", "HT_U1.5", "HT_U2.5", "2H_U3.5", "HU3.5", "AU2.5", "HU4.5", "AU4.5"]
 
-# KOMPLETNA BAZA KOTWIC Z MATEMATYCZNEGO MODELU KALIBRACJI
+# KOMPLETNA BAZA KOTWIC (Rzeczywiste wyceny matematyczne z modelu)
 KOTWICE_KURSOWE = {
     'U2.5': 1.85, 'U3.5': 1.31, 'U4.5': 1.10, 'U5.5': 1.015, 'U6.5': 1.01,
     'O0.5': 1.03, 'O1.5': 1.25, 'O2.5': 1.85,
     'HT_U1.5': 1.42, 'HT_U2.5': 1.138, 'HT_U3.5': 1.053, 'HT_U4.5': 1.01,
     '2H_U1.5': 1.512, '2H_U2.5': 1.20, '2H_U3.5': 1.08, '2H_U4.5': 1.02,
-    'HU2.5': 1.20, 'HU3.5': 1.06, 'HU4.5': 1.01,
-    'AU2.5': 1.15, 'AU3.5': 1.04, 'AU4.5': 1.01,
+    'HU1.5': 1.55, 'HU2.5': 1.20, 'HU3.5': 1.06, 'HU4.5': 1.01,
+    'AU1.5': 1.45, 'AU2.5': 1.15, 'AU3.5': 1.04, 'AU4.5': 1.01,
     'MG_1-5': 1.09,
     'C_U8.5': 3.00, 'C_U9.5': 2.18, 'C_U10.5': 1.71, 'C_U11.5': 1.43,
     'C_U12.5': 1.26, 'C_U13.5': 1.15, 'C_U14.5': 1.09,
@@ -633,11 +629,16 @@ KOTWICE_KURSOWE = {
     'S_1': 1.34, 'ST_1': 1.64
 }
 
-# SZABLONY BEZ SZTUCZNEGO ZAWYŻANIA KURSU
+# SZABLONY WODOSPADOWE (KASKADOWE) - Od najbardziej ryzykownych/dochodowych do ubezpieczeniowych
+# Silnik zatrzyma się na PIERWSZYM, który osiągnie historyczną sprawdzalność na poziomie "min_prob"
 BB_TEMPLATES = [
-    {"name": "Optymalny", "code": "U6.5+HT_U4.5+2H_U4.5+HU4.5+AU4.5", "min_prob": 0.85},
-    {"name": "Bezpieczny", "code": "U5.5+HT_U4.5+2H_U4.5+HU4.5+AU4.5", "min_prob": 0.80},
-    {"name": "Standard", "code": "U4.5+HT_U3.5+2H_U4.5+HU3.5+AU3.5", "min_prob": 0.65}
+    {"name": "Ultra Value", "code": "U3.5+HT_U1.5+HU1.5+AU1.5", "min_prob": 0.82},
+    {"name": "Value Pro", "code": "U3.5+HT_U1.5+HU2.5+AU2.5", "min_prob": 0.82},
+    {"name": "Aggressive", "code": "U4.5+HT_U1.5+HU2.5+AU2.5", "min_prob": 0.82},
+    {"name": "Optimal Plus", "code": "U4.5+HT_U2.5+HU2.5+AU2.5", "min_prob": 0.85},
+    {"name": "Optimal", "code": "U5.5+HT_U2.5+HU3.5+AU3.5", "min_prob": 0.85},
+    {"name": "Safe", "code": "U5.5+HT_U3.5+HU4.5+AU4.5", "min_prob": 0.85},
+    {"name": "Ultra Safe", "code": "U6.5+HT_U4.5+2H_U4.5+HU4.5+AU4.5", "min_prob": 0.88}
 ]
 
 print("Uruchamiam Modele Predykcyjne...")
@@ -774,28 +775,34 @@ for idx, row in fixtures_clean.iterrows():
                 if h_sm or a_sm: arg += " | ⚠️ Bayes"
                 add_pred_local("Goal Line Pro", f"O{line}", round(avg_prob_o*100, 1), KOTWICE_KURSOWE.get(f"O{line}", 1.10), arg)
 
-    # --- 6c. BETBUILDER PRO (Model z wysoką korelacją - naprawiony) ---
+    # --- 6c. DYNAMICZNY BETBUILDER PRO (Maksymalizacja Value) ---
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
         h_dom['HT_Total'] = pd.to_numeric(h_dom['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(h_dom['HTAG'], errors='coerce').fillna(0)
         a_wyj['HT_Total'] = pd.to_numeric(a_wyj['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(a_wyj['HTAG'], errors='coerce').fillna(0)
         h_dom['2H_Total'] = pd.to_numeric(h_dom['Total_Goals'], errors='coerce').fillna(0) - h_dom['HT_Total']
         a_wyj['2H_Total'] = pd.to_numeric(a_wyj['Total_Goals'], errors='coerce').fillna(0) - a_wyj['HT_Total']
         
+        # Pętla kaskadowa: od najbardziej agresywnych linii do najbezpieczniejszych
         for tpl in BB_TEMPLATES:
             p_h, h_h, h_l, h_sm = get_weighted_stats(h_dom, None, lambda r, code=tpl['code']: evaluate_bet(code, r) == "WYGRANA", prior_prob=tpl['min_prob'])
             p_a, a_h, a_l, a_sm = get_weighted_stats(a_wyj, None, lambda r, code=tpl['code']: evaluate_bet(code, r) == "WYGRANA", prior_prob=tpl['min_prob'])
             
             p_combined = (p_h + p_a) / 2
+            
+            # Wychwytujemy pierwszy układ, który dowozi matematycznie wymaganą szansę (np. >82%)
             if p_combined >= tpl['min_prob']:
                 skladniki = tpl['code'].split("+")
                 k_skladowe = [KOTWICE_KURSOWE.get(sk.strip(), 1.05) for sk in skladniki]
+                # Korelacja 0.85 łączy kursy precyzyjnie bez ich rozdmuchiwania
                 final_odd = calc_betbuilder_copula(k_skladowe, rho=0.85) 
                 
                 h_stat = get_tier_stats(h_dom, True, league, team_tiers, None, lambda r, code=tpl['code']: evaluate_bet(code, r) == "WYGRANA")
                 a_stat = get_tier_stats(a_wyj, False, league, team_tiers, None, lambda r, code=tpl['code']: evaluate_bet(code, r) == "WYGRANA")
                 arg = f"BB {tpl['name']} | Gosp ({h_tier}): {h_stat} | Gość ({a_tier}): {a_stat}"
                 if h_sm or a_sm: arg += " | ⚠️ Bayes"
+                
                 add_pred_local(f"BetBuilder Pro", tpl['code'], round(p_combined*100, 1), final_odd, arg)
+                break # ZNALEZIONO OPTYMALNY TYP - ZATRZYMUJEMY GENERATOR DLA TEGO MECZU!
 
     # --- 6d. MULTIGOL ---
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
@@ -924,11 +931,9 @@ for idx, row in fixtures_clean.iterrows():
     czy_jest_dobry_bb = any("BetBuilder Pro" in p['Engine'] for p in match_preds)
     
     for p in match_preds:
-        # Usuwamy kategorycznie zakazane typy solowe!
         if p['Typ'] in ZAKAZANE_TYPY_SOLO and p['Engine'] != "BetBuilder Pro":
             continue
             
-        # Usuwamy słabe kursy pojedyncze jeśli w meczu wygenerował się soczysty BetBuilder
         if czy_jest_dobry_bb and p['Engine'] in ['Goal Line Pro', 'Multigol']:
             try:
                 if float(p['Kurs_Szac']) < 1.35: continue 
