@@ -136,6 +136,7 @@ def format_match_details(m_row, df_results):
     if status == "PRZEGRANA":
         reasons = []
         for sub_bet in sub_bets:
+            # 1X2 / 1X / X2
             if sub_bet in ["1", "1X"] and pd.notna(hg) and pd.notna(ag) and hg < ag:
                 reasons.append(f"Porażka gospodarzy ({int(hg)}:{int(ag)})")
             elif sub_bet == "1" and pd.notna(hg) and pd.notna(ag) and hg == ag:
@@ -143,6 +144,7 @@ def format_match_details(m_row, df_results):
             elif sub_bet in ["2", "X2"] and pd.notna(hg) and pd.notna(ag) and hg > ag:
                 reasons.append(f"Porażka gości ({int(hg)}:{int(ag)})")
                 
+            # Gole ogółem
             elif sub_bet.startswith("U") and not sub_bet.startswith(("HT_U", "2H_U", "HU", "AU", "C_U", "HC_U", "AC_U")) and pd.notna(tg):
                 try:
                     line = float(sub_bet[1:])
@@ -154,6 +156,7 @@ def format_match_details(m_row, df_results):
                     if tg < line: reasons.append(f"Łącznie goli: {int(tg)} (wymagano: ponad {line})")
                 except: pass
                 
+            # Gole 1H i 2H
             elif sub_bet.startswith("HT_U") and pd.notna(ht_h) and pd.notna(ht_a):
                 try:
                     line = float(sub_bet.replace("HT_U", ""))
@@ -167,6 +170,7 @@ def format_match_details(m_row, df_results):
                     if h2_tg > line: reasons.append(f"Gole w 2. połowie: {int(h2_tg)} (linia: {line})")
                 except: pass
                 
+            # Gole drużyn
             elif sub_bet.startswith("HU") and pd.notna(hg):
                 try:
                     line = float(sub_bet.replace("HU", ""))
@@ -178,6 +182,7 @@ def format_match_details(m_row, df_results):
                     if ag > line: reasons.append(f"Gole gości: {int(ag)} (linia: {line})")
                 except: pass
                 
+            # Rożne
             elif sub_bet.startswith("C_U") and pd.notna(tc):
                 try:
                     line = float(sub_bet.replace("C_U", ""))
@@ -194,6 +199,7 @@ def format_match_details(m_row, df_results):
                     if ac > line: reasons.append(f"Rożne gości: {int(ac)} (linia: {line})")
                 except: pass
                 
+            # Strzały
             elif sub_bet == "S_1" and pd.notna(sh) and pd.notna(sa) and sh <= sa:
                 reasons.append(f"Strzały ogółem: {int(sh)}:{int(sa)} (brak wygranej gospodarzy)")
             elif sub_bet == "ST_1" and pd.notna(sth) and pd.notna(sta) and sth <= sta:
@@ -202,7 +208,7 @@ def format_match_details(m_row, df_results):
         reasons = list(dict.fromkeys(reasons))
 
         if reasons:
-            wynik_txt = f"Wynik: {int(hg)}:{int(ag)}" if pd.notna(hg) and pd.notna(ag) else "Wynik nieznany"
+            wynik_txt = f"Wynik końcowy: {int(hg)}:{int(ag)}" if pd.notna(hg) and pd.notna(ag) else "Wynik nieznany"
             stats_str = f"   └ 💡 <i>{wynik_txt} | Powód porażki: {', '.join(reasons)}</i>\n\n"
         elif pd.notna(hg) and pd.notna(ag):
             stats_str = f"   └ 💡 <i>Wynik końcowy: {int(hg)}:{int(ag)}</i>\n\n"
@@ -307,6 +313,7 @@ if 'Wyslij_AKO' in df_pred.columns:
             else: stawka_pln = 100.0
             
             stawka_j = round(stawka_pln / WARTOSC_JEDNOSTKI_PLN, 2)
+            # CAŁKOWITA WYGRANA BRUTTO PO ODLICZENIU 12% PODATKU
             wygrana_pln = round(stawka_pln * kurs_ako * PODATEK_BUKMACHERSKI, 2)
             wygrana_j = round(wygrana_pln / WARTOSC_JEDNOSTKI_PLN, 2)
             
@@ -415,6 +422,7 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
             
             stawka_j = round(stawka_pln / WARTOSC_JEDNOSTKI_PLN, 2)
             
+            # CAŁKOWITA WYGRANA BRUTTO PO ODLICZENIU 12% PODATKU
             wygrana_pln = round(kurs_ako * stawka_pln * PODATEK_BUKMACHERSKI, 2)
             wygrana_j = round(wygrana_pln / WARTOSC_JEDNOSTKI_PLN, 2)
             
