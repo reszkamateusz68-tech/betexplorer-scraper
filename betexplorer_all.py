@@ -1165,6 +1165,7 @@ if not df_all_predictions.empty:
     if 'Termin' in nowe_typy_df.columns: nowe_typy_df = nowe_typy_df.drop(columns=['Termin'])
     if 'Wyslij_AKO' in nowe_typy_df.columns: nowe_typy_df = nowe_typy_df.drop(columns=['Wyslij_AKO'])
     
+    # Dodajemy Profit i Yield na sztywno do DF przed włączeniem w Historię
     nowe_typy_df['Profit'] = ""
     nowe_typy_df['Yield_Wplyw'] = ""
         
@@ -1178,7 +1179,7 @@ if not df_all_predictions.empty:
         
         nowe_typy_df['Unikalny_Klucz'] = nowe_typy_df['Match_ID'].astype(str) + "_" + nowe_typy_df['Engine'].astype(str) + "_" + nowe_typy_df['Typ'].astype(str)
         
-        # --- ZABEZPIECZENIE: Aktualizacja WSZYSTKICH wpisów wg manualnych korekt All_Predictions
+        # --- ZABEZPIECZENIE: Globalny, sztywny update tagów do Historii ze wszystkich wpisów All_Predictions
         for idx in df_historia.index:
             klucz = df_historia.at[idx, 'Unikalny_Klucz']
             if klucz in map_kupon and str(map_kupon[klucz]).strip() != "":
@@ -1346,9 +1347,12 @@ if not df_historia.empty:
     df_historia = pd.concat([df_oczek, df_rozst]).drop(columns=['Data_Sort', 'Unikalny_Klucz'], errors='ignore')
 
 if not df_all_predictions.empty: 
+    # TWORZYMY DATĘ DO SORTOWANIA I OGRANICZAMY DO NAJBLIŻSZYCH MECZÓW
     df_all_predictions['Data_Sort'] = pd.to_datetime(df_all_predictions['Data'].astype(str) + ' ' + df_all_predictions['Godzina'].astype(str).replace('', '00:00').replace('-', '00:00'), errors='coerce')
+    # Odfiltruj stare mecze (zostawiamy te od -3 godzin wstecz)
     now = datetime.now()
     df_all_predictions = df_all_predictions[df_all_predictions['Data_Sort'] >= now - timedelta(hours=3)]
+    # Sortowanie: ascending=True dla daty daje najbliższe daty na górze
     df_all_predictions = df_all_predictions.sort_values(by=["Data_Sort", "Szansa"], ascending=[True, False]).drop(columns=['Data_Sort', 'Unikalny_Klucz'], errors='ignore')
 
 # ==========================================
@@ -1403,6 +1407,13 @@ summary_data = [
     ["Przetworzone Typy w Historii", len(df_historia), ""],
     ["Wygenerowane Predykcje (Suma)", len(df_all_predictions), ""]
 ]
+# Dodanie logów z powrotem do podsumowania
+summary_data.append(["", "", ""])
+summary_data.append(["==== RAPORT POBIERANIA (LOGI) ====", "", ""])
+summary_data.append(["Źródło", "URL / Plik", "Status"])
+for rep in scrape_report:
+    summary_data.append(rep)
+
 time.sleep(1.5)
 spreadsheet.worksheet("Summary").clear()
 spreadsheet.worksheet("Summary").update(summary_data)
@@ -1410,5 +1421,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
 print("Wdrożono rygorystyczny Garbage Collector, inteligentne sortowanie, Szablony Premium BetBuilder oraz Medale w wycenie ryzyka.")
-print("Załatano problem zagubionych ID, koszyków historycznych oraz powiadomień Telegram.")
+print("Zaktualizowano dopasowywanie do starych koszyków, naprawiono gubienie ID kuponów oraz przywrócono logi do Summary.")
 print("=" * 60)
