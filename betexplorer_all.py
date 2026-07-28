@@ -798,11 +798,11 @@ for idx, row in fixtures_clean.iterrows():
                 a_win_tot = sum(a_tot_all['Team_GF'] > a_tot_all['Team_GA'])
                 
                 h_losses = h_dom[h_dom['FTHG'] < h_dom['FTAG']]
-                h_ls_tiers = [team_tiers.get((league, x), 'Koszyk 3') for x in h_losses['Away']]
+                h_ls_tiers = [team_tiers.get((r['League'], r['Away']), 'Koszyk 3') for _, r in h_losses.iterrows()]
                 h_ls_txt = ", ".join([f"{k.replace('Koszyk ', 'K')}:{v}x" for k, v in dict(Counter(h_ls_tiers)).items()]) if h_ls_tiers else "Brak"
 
                 a_wins = a_wyj[a_wyj['FTAG'] > a_wyj['FTHG']]
-                a_ws_tiers = [team_tiers.get((league, x), 'Koszyk 3') for x in a_wins['Home']]
+                a_ws_tiers = [team_tiers.get((r['League'], r['Home']), 'Koszyk 3') for _, r in a_wins.iterrows()]
                 a_ws_txt = ", ".join([f"{k.replace('Koszyk ', 'K')}:{v}x" for k, v in dict(Counter(a_ws_tiers)).items()]) if a_ws_tiers else "Brak"
 
                 arg = f"Gosp ({h_tier}) dom bez porażki {h_1x_c}/{len(h_dom)} (Ogółem: {h_1x_tot}/{len(h_tot_all)}). Gosp przegrywał z: [{h_ls_txt}]. Gość ({a_tier}) wyjazd wygrał {a_win_c}/{len(a_wyj)} (Ogółem: {a_win_tot}/{len(a_tot_all)}). Gość wygrywał z: [{a_ws_txt}]."
@@ -813,11 +813,11 @@ for idx, row in fixtures_clean.iterrows():
                 h_win_tot = sum(h_tot_all['Team_GF'] > h_tot_all['Team_GA'])
 
                 a_losses = a_wyj[a_wyj['FTAG'] < a_wyj['FTHG']]
-                a_ls_tiers = [team_tiers.get((league, x), 'Koszyk 3') for x in a_losses['Home']]
+                a_ls_tiers = [team_tiers.get((r['League'], r['Home']), 'Koszyk 3') for _, r in a_losses.iterrows()]
                 a_ls_txt = ", ".join([f"{k.replace('Koszyk ', 'K')}:{v}x" for k, v in dict(Counter(a_ls_tiers)).items()]) if a_ls_tiers else "Brak"
 
                 h_wins = h_dom[h_dom['FTHG'] > h_dom['FTAG']]
-                h_ws_tiers = [team_tiers.get((league, x), 'Koszyk 3') for x in h_wins['Away']]
+                h_ws_tiers = [team_tiers.get((r['League'], r['Away']), 'Koszyk 3') for _, r in h_wins.iterrows()]
                 h_ws_txt = ", ".join([f"{k.replace('Koszyk ', 'K')}:{v}x" for k, v in dict(Counter(h_ws_tiers)).items()]) if h_ws_tiers else "Brak"
 
                 arg = f"Gość ({a_tier}) wyjazd bez porażki {a_x2_c}/{len(a_wyj)} (Ogółem: {a_x2_tot}/{len(a_tot_all)}). Gość przegrywał z: [{a_ls_txt}]. Gosp ({h_tier}) dom wygrał {h_win_c}/{len(h_dom)} (Ogółem: {h_win_tot}/{len(h_tot_all)}). Gosp wygrywał z: [{h_ws_txt}]."
@@ -1165,7 +1165,6 @@ if not df_all_predictions.empty:
     if 'Termin' in nowe_typy_df.columns: nowe_typy_df = nowe_typy_df.drop(columns=['Termin'])
     if 'Wyslij_AKO' in nowe_typy_df.columns: nowe_typy_df = nowe_typy_df.drop(columns=['Wyslij_AKO'])
     
-    # Dodajemy Profit i Yield na sztywno do DF przed włączeniem w Historię
     nowe_typy_df['Profit'] = ""
     nowe_typy_df['Yield_Wplyw'] = ""
         
@@ -1179,6 +1178,15 @@ if not df_all_predictions.empty:
         
         nowe_typy_df['Unikalny_Klucz'] = nowe_typy_df['Match_ID'].astype(str) + "_" + nowe_typy_df['Engine'].astype(str) + "_" + nowe_typy_df['Typ'].astype(str)
         
+        # --- ZABEZPIECZENIE: Aktualizacja WSZYSTKICH wpisów wg manualnych korekt All_Predictions
+        for idx in df_historia.index:
+            klucz = df_historia.at[idx, 'Unikalny_Klucz']
+            if klucz in map_kupon and str(map_kupon[klucz]).strip() != "":
+                if str(df_historia.at[idx, 'Kupon_ID']).strip() == "":
+                    df_historia.at[idx, 'Kupon_ID'] = str(map_kupon[klucz])
+            if klucz in map_zagrane and str(map_zagrane[klucz]).strip() != "":
+                df_historia.at[idx, 'Zagrane'] = str(map_zagrane[klucz])
+        
         w_oczek_mask = df_historia['Status'] == "W OCZEKIWANIU"
         if w_oczek_mask.any():
             map_szansa = nowe_typy_df.set_index('Unikalny_Klucz')['Szansa'].to_dict()
@@ -1186,8 +1194,6 @@ if not df_all_predictions.empty:
             map_arg = nowe_typy_df.set_index('Unikalny_Klucz')['Argumentacja'].to_dict()
             map_przedzial = nowe_typy_df.set_index('Unikalny_Klucz')['Przedzial_Kursowy'].to_dict()
             map_consensus = nowe_typy_df.set_index('Unikalny_Klucz')['Consensus_Score'].to_dict()
-            map_kupon_upd = nowe_typy_df.set_index('Unikalny_Klucz')['Kupon_ID'].to_dict()
-            map_zagrane_upd = nowe_typy_df.set_index('Unikalny_Klucz')['Zagrane'].to_dict()
             
             for idx in df_historia[w_oczek_mask].index:
                 klucz = df_historia.at[idx, 'Unikalny_Klucz']
@@ -1197,20 +1203,13 @@ if not df_all_predictions.empty:
                     df_historia.at[idx, 'Argumentacja'] = str(map_arg[klucz])
                     df_historia.at[idx, 'Przedzial_Kursowy'] = str(map_przedzial.get(klucz, ""))
                     df_historia.at[idx, 'Consensus_Score'] = str(map_consensus.get(klucz, ""))
-                        
-                    k_id_val = map_kupon_upd.get(klucz, "")
-                    if k_id_val and str(df_historia.at[idx, 'Kupon_ID']).strip() == "":
-                        df_historia.at[idx, 'Kupon_ID'] = str(k_id_val)
-                        
-                    zag_val = map_zagrane_upd.get(klucz, "")
-                    if zag_val:
-                        df_historia.at[idx, 'Zagrane'] = str(zag_val)
 
         do_dodania = nowe_typy_df[~nowe_typy_df['Unikalny_Klucz'].isin(df_historia['Unikalny_Klucz'])].copy()
         do_dodania = do_dodania.drop(columns=['Unikalny_Klucz'])
         df_historia = df_historia.drop(columns=['Unikalny_Klucz'])
     else:
         do_dodania = nowe_typy_df.copy()
+        if 'Unikalny_Klucz' in do_dodania.columns: do_dodania = do_dodania.drop(columns=['Unikalny_Klucz'])
         
     df_historia = pd.concat([df_historia, do_dodania], ignore_index=True)
 
@@ -1218,6 +1217,21 @@ if not df_historia.empty and not results_clean.empty:
     for idx, row in df_historia.iterrows():
         if row["Status"] == "W OCZEKIWANIU":
             match_data = results_clean[results_clean['Match_ID'] == row["Match_ID"]]
+            
+            # --- ZABEZPIECZENIE: Przesunięcia czasowe (Fuzzy Match) ---
+            if match_data.empty:
+                fuzzy = results_clean[(results_clean['Home'] == row['Gospodarz']) & (results_clean['Away'] == row['Gość'])].copy()
+                if not fuzzy.empty:
+                    try:
+                        dt_hist = pd.to_datetime(row['Data'], errors='coerce')
+                        if pd.notna(dt_hist):
+                            fuzzy['Diff'] = (pd.to_datetime(fuzzy['Date'], errors='coerce') - dt_hist).dt.days.abs()
+                            fuzzy = fuzzy[fuzzy['Diff'] <= 2]
+                            if not fuzzy.empty:
+                                match_data = fuzzy.sort_values('Diff').head(1)
+                    except: pass
+            # -----------------------------------------------------------
+            
             if not match_data.empty:
                 match_row = match_data.iloc[0]
                 if pd.notna(match_row.get('FTHG')):
@@ -1332,12 +1346,9 @@ if not df_historia.empty:
     df_historia = pd.concat([df_oczek, df_rozst]).drop(columns=['Data_Sort', 'Unikalny_Klucz'], errors='ignore')
 
 if not df_all_predictions.empty: 
-    # TWORZYMY DATĘ DO SORTOWANIA I OGRANICZAMY DO NAJBLIŻSZYCH MECZÓW
     df_all_predictions['Data_Sort'] = pd.to_datetime(df_all_predictions['Data'].astype(str) + ' ' + df_all_predictions['Godzina'].astype(str).replace('', '00:00').replace('-', '00:00'), errors='coerce')
-    # Odfiltruj stare mecze (zostawiamy te od -3 godzin wstecz)
     now = datetime.now()
     df_all_predictions = df_all_predictions[df_all_predictions['Data_Sort'] >= now - timedelta(hours=3)]
-    # Sortowanie: ascending=True dla daty daje najbliższe daty na górze
     df_all_predictions = df_all_predictions.sort_values(by=["Data_Sort", "Szansa"], ascending=[True, False]).drop(columns=['Data_Sort', 'Unikalny_Klucz'], errors='ignore')
 
 # ==========================================
@@ -1399,4 +1410,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
 print("Wdrożono rygorystyczny Garbage Collector, inteligentne sortowanie, Szablony Premium BetBuilder oraz Medale w wycenie ryzyka.")
+print("Załatano problem zagubionych ID, koszyków historycznych oraz powiadomień Telegram.")
 print("=" * 60)
