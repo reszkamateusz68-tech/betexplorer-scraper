@@ -1321,7 +1321,7 @@ if not df_all_predictions.empty:
     df_all_predictions = df_all_predictions.sort_values(by=["Data_Sort", "Szansa"], ascending=[True, False]).drop(columns=['Data_Sort', 'Unikalny_Klucz'], errors='ignore')
 
 # ==========================================
-# 8. WYSYŁKA GOOGLE SHEETS
+# 8. WYSYŁKA GOOGLE SHEETS (Z ARCHIWIZACJĄ/LIMITYM IMBALANSU)
 # ==========================================
 all_sheets = ["Summary", "Fixtures", "Results", "League_Tables", "H2H_Mecze", "Historia_Typow", "All_Predictions", "Kupony_AKO"]
 
@@ -1329,59 +1329,66 @@ for sheet_name in all_sheets:
     try: spreadsheet.worksheet(sheet_name)
     except: spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=30)
 
+# OPTYMALIZACJA WAGI ARKUSZA (Max 3000-5000 wierszy na zakładkę):
+fixtures_export = fixtures_clean.head(3000) if not fixtures_clean.empty else fixtures_clean
+results_export = results_clean.head(4000) if not results_clean.empty else results_clean
+
+# Historia_Typow: Zostawiamy WSZYSTKIE oczekujące + maks 3000 ostatnich rozstrzygniętych
+if not df_historia.empty:
+    df_oczekujace = df_historia[df_historia['Status'] == 'W OCZEKIWANIU']
+    df_rozstrzygniete = df_historia[df_historia['Status'] != 'W OCZEKIWANIU'].head(3000)
+    historia_export = pd.concat([df_oczekujace, df_rozstrzygniete]).drop_duplicates()
+else:
+    historia_export = df_historia
+
 print("Wysyłam Czysty Terminarz do Google Sheets...")
-time.sleep(1.5)
+time.sleep(1.0)
 spreadsheet.worksheet("Fixtures").clear()
-if not fixtures_clean.empty: spreadsheet.worksheet("Fixtures").update(prepare_for_gsheets(fixtures_clean))
+if not fixtures_export.empty: spreadsheet.worksheet("Fixtures").update(prepare_for_gsheets(fixtures_export))
 
 print("Wysyłam Historię ze statystykami do Google Sheets...")
-time.sleep(1.5)
+time.sleep(1.0)
 spreadsheet.worksheet("Results").clear()
-if not results_clean.empty: spreadsheet.worksheet("Results").update(prepare_for_gsheets(results_clean))
+if not results_export.empty: spreadsheet.worksheet("Results").update(prepare_for_gsheets(results_export))
 
 print("Wysyłam Tabele Ligowe...")
-time.sleep(1.5)
+time.sleep(1.0)
 spreadsheet.worksheet("League_Tables").clear()
 if not league_tables.empty: spreadsheet.worksheet("League_Tables").update(prepare_for_gsheets(league_tables))
 
 print("Wysyłam Analizę H2H do Google Sheets...")
-time.sleep(1.5)
+time.sleep(1.0)
 spreadsheet.worksheet("H2H_Mecze").clear()
 if not df_h2h.empty: spreadsheet.worksheet("H2H_Mecze").update(prepare_for_gsheets(df_h2h))
 
 print("Wysyłam Logi Systemu Backtestingu (Historia_Typow)...")
-time.sleep(1.5)
+time.sleep(1.0)
 ws_historia.clear()
-if not df_historia.empty: ws_historia.update(prepare_for_gsheets(df_historia))
+if not historia_export.empty: ws_historia.update(prepare_for_gsheets(historia_export))
 
 print("Wysyłam Moduł Portfela AKO (Kupony_AKO)...")
-time.sleep(1.5)
+time.sleep(1.0)
 ws_ako.clear()
 if not df_ako.empty: ws_ako.update(prepare_for_gsheets(df_ako))
 
 print("Wysyłam Ujednoliconą Listę Wszystkich Predykcji (All_Predictions)...")
-time.sleep(1.5)
+time.sleep(1.0)
 spreadsheet.worksheet("All_Predictions").clear()
-if not df_all_predictions.empty: spreadsheet.worksheet("All_Predictions").update(prepare_for_gsheets(df_all_predictions))
+if not df_all_predictions.empty: spreadsheet.worksheet("All_Predictions").update(prepare_for_gsheets(df_all_predictions.head(2000)))
 
 summary_data = [
     ["==== PODSUMOWANIE OGÓLNE ====", "", ""],
     ["Ostatnia aktualizacja", datetime.now().strftime("%Y-%m-%d %H:%M:%S"), ""],
-    ["Fixtures Czyste", len(fixtures_clean), ""],
-    ["Results Zintegrowane", len(results_clean), ""],
-    ["Przetworzone Typy w Historii", len(df_historia), ""],
+    ["Fixtures Czyste (Wszystkie/Wysłane)", f"{len(fixtures_clean)} / {len(fixtures_export)}", ""],
+    ["Results Zintegrowane (Wszystkie/Wysłane)", f"{len(results_clean)} / {len(results_export)}", ""],
+    ["Przetworzone Typy w Historii (Suma/Wysłane)", f"{len(df_historia)} / {len(historia_export)}", ""],
     ["Wygenerowane Predykcje (Suma)", len(df_all_predictions), ""]
 ]
 summary_data.append(["", "", ""])
 summary_data.append(["==== RAPORT POBIERANIA (LOGI) ====", "", ""])
 summary_data.append(["Źródło", "URL / Plik", "Status"])
-for rep in scrape_report:
-    summary_data.append(rep)
+for rep in scrape_report: summary_data.append(rep)
 
-time.sleep(1.5)
+time.sleep(1.0)
 spreadsheet.worksheet("Summary").clear()
 spreadsheet.worksheet("Summary").update(summary_data)
-
-print("\n" + "=" * 60)
-print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("=" * 60)
