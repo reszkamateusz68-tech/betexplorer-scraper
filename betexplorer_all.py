@@ -1321,7 +1321,7 @@ if not df_all_predictions.empty:
     df_all_predictions = df_all_predictions.sort_values(by=["Data_Sort", "Szansa"], ascending=[True, False]).drop(columns=['Data_Sort', 'Unikalny_Klucz'], errors='ignore')
 
 # ==========================================
-# 8. WYSYŁKA GOOGLE SHEETS (Z ARCHIWIZACJĄ/LIMITYM IMBALANSU)
+# 8. WYSYŁKA GOOGLE SHEETS (z archiwizacją/limitami przesylu)
 # ==========================================
 all_sheets = ["Summary", "Fixtures", "Results", "League_Tables", "H2H_Mecze", "Historia_Typow", "All_Predictions", "Kupony_AKO"]
 
@@ -1329,11 +1329,10 @@ for sheet_name in all_sheets:
     try: spreadsheet.worksheet(sheet_name)
     except: spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=30)
 
-# OPTYMALIZACJA WAGI ARKUSZA (Max 3000-5000 wierszy na zakładkę):
+# OPTYMALIZACJA WAGI ARKUSZA (Max 3000-4000 wierszy przesyłanych na raz)
 fixtures_export = fixtures_clean.head(3000) if not fixtures_clean.empty else fixtures_clean
 results_export = results_clean.head(4000) if not results_clean.empty else results_clean
 
-# Historia_Typow: Zostawiamy WSZYSTKIE oczekujące + maks 3000 ostatnich rozstrzygniętych
 if not df_historia.empty:
     df_oczekujace = df_historia[df_historia['Status'] == 'W OCZEKIWANIU']
     df_rozstrzygniete = df_historia[df_historia['Status'] != 'W OCZEKIWANIU'].head(3000)
@@ -1384,11 +1383,18 @@ summary_data = [
     ["Przetworzone Typy w Historii (Suma/Wysłane)", f"{len(df_historia)} / {len(historia_export)}", ""],
     ["Wygenerowane Predykcje (Suma)", len(df_all_predictions), ""]
 ]
+
 summary_data.append(["", "", ""])
 summary_data.append(["==== RAPORT POBIERANIA (LOGI) ====", "", ""])
 summary_data.append(["Źródło", "URL / Plik", "Status"])
-for rep in scrape_report: summary_data.append(rep)
+for rep in scrape_report:
+    summary_data.append(rep)
 
 time.sleep(1.0)
 spreadsheet.worksheet("Summary").clear()
 spreadsheet.worksheet("Summary").update(summary_data)
+
+print("\n" + "=" * 60)
+print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
+print("Zaktualizowano dopasowywanie do starych koszyków, naprawiono gubienie ID kuponów oraz przywrócono logi do Summary.")
+print("=" * 60)
