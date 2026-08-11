@@ -81,16 +81,16 @@ def categorize_date(d_str):
         today_date = datetime.now().date()
         delta = (d_date - today_date).days
         
-        if delta < 0: return "Przeszłość"
-        if delta == 0: return "Dziś"
-        if delta == 1: return "Jutro"
-        if delta == 2: return "Za 2 dni"
-        if delta == 3: return "Za 3 dni"
-        if delta == 4: return "Za 4 dni"
-        if delta == 5: return "Za 5 dni"
-        if delta == 6: return "Za 6 dni"
-        if delta == 7: return "Za 7 dni"
-        if delta > 7: return "Za ponad tydzień"
+        if delta < 0: return "przeszłość"
+        if delta == 0: return "dziś"
+        if delta == 1: return "jutro"
+        if delta == 2: return "za 2 dni"
+        if delta == 3: return "za 3 dni"
+        if delta == 4: return "za 4 dni"
+        if delta == 5: return "za 5 dni"
+        if delta == 6: return "za 6 dni"
+        if delta == 7: return "za 7 dni"
+        if delta > 7: return "za ponad tydzień"
     except Exception: return "Nieznany"
 
 def get_base_league(l):
@@ -546,10 +546,9 @@ if not fixtures_df.empty:
 results_clean = results_df[list(golden_cols.keys()) + ['HT_Total', 'Total_Corners', 'Marża']].rename(columns=golden_cols) if not results_df.empty else pd.DataFrame(columns=list(golden_cols.values()) + ['HT_Total', 'Total_Corners', 'Marża'])
 fixtures_clean = fixtures_df[['Match_ID', 'Termin', 'Status_Kursów', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd1', 'OddX', 'Odd2', 'Marża']].rename(columns={'Odd1': 'Odd_1', 'OddX': 'Odd_X', 'Odd2': 'Odd_2'}) if not fixtures_df.empty else pd.DataFrame(columns=['Match_ID', 'Termin', 'Status_Kursów', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd_1', 'Odd_X', 'Odd_2', 'Marża'])
 
-# --- ZABEZPIECZENIE: OGRANICZENIE DO 7 DNI W PRZYSZŁOŚĆ ---
+# --- ZABEZPIECZENIE: OGRANICZENIE DO 7 DNI W PRZYSZŁOŚĆ DLA FIXTURES ---
 if not fixtures_clean.empty:
     fixtures_clean['Data_Parsed'] = pd.to_datetime(fixtures_clean['Date'], errors='coerce')
-    # Odejmujemy z użyciem natywnego dla Pandas obiektu pd.Timestamp by uniknąć błędu '.dt accessor'
     delta_days = (fixtures_clean['Data_Parsed'] - pd.to_datetime(datetime.now().date())).dt.days
     fixtures_clean = fixtures_clean[(delta_days <= 7) | (fixtures_clean['Data_Parsed'].isna())]
     fixtures_clean = fixtures_clean.drop(columns=['Data_Parsed'])
@@ -1095,31 +1094,28 @@ creds = Credentials.from_service_account_file("credentials.json", scopes=scope) 
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
-# CZYSZCZENIE ZBĘDNYCH KOLUMN 
 cols_all_pred = ["Match_ID", "Zagrane", "Wyslij_AKO", "Kupon_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status"]
 cols_historia = ["Match_ID", "Zagrane", "Kupon_ID", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 
 df_all_predictions = pd.DataFrame(all_generated_predictions)
 
 if not df_all_predictions.empty:
-    # --- NOWY BLOK FILTROWANIA I LIMITÓW (Garbage Collector) ---
-    # 1. Filtrowanie minimum 80% szans
+    # --- GARBAGE COLLECTOR: Wymóg >= 80% szans ---
     df_all_predictions['Szansa_num'] = pd.to_numeric(df_all_predictions['Szansa'], errors='coerce').fillna(0)
     df_all_predictions = df_all_predictions[df_all_predictions['Szansa_num'] >= 80.0]
     
-    # 2. Filtr czasowy (max 7 dni w przód)
+    # --- FILTR: Usunięcie meczów powyżej 7 dni w przód ---
     df_all_predictions['Data_Parsed'] = pd.to_datetime(df_all_predictions['Data'], errors='coerce')
     delta_pred = (df_all_predictions['Data_Parsed'] - pd.to_datetime(datetime.now().date())).dt.days
     df_all_predictions = df_all_predictions[(delta_pred <= 7) | (df_all_predictions['Data_Parsed'].isna())]
     
-    # 3. Limit do MAX 5 najlepszych typów na jeden mecz
+    # --- LIMIT: MAX 8 typów na jeden mecz (od najlepszych) ---
     df_all_predictions['Kurs_num'] = pd.to_numeric(df_all_predictions['Kurs_Szac'].astype(str).str.replace(',', '.'), errors='coerce').fillna(0)
     df_all_predictions = df_all_predictions.sort_values(by=['Match_ID', 'Szansa_num', 'Kurs_num'], ascending=[True, False, False])
-    df_all_predictions = df_all_predictions.groupby('Match_ID').head(5).reset_index(drop=True)
+    df_all_predictions = df_all_predictions.groupby('Match_ID').head(8).reset_index(drop=True)
     
     df_all_predictions = df_all_predictions.drop(columns=['Szansa_num', 'Kurs_num', 'Data_Parsed'])
-    # -----------------------------------------------------------
-
+    
     df_all_predictions['Przedzial_Kursowy'] = df_all_predictions.apply(global_recalc_przedzial, axis=1)
     consensus_counts = df_all_predictions.groupby('Match_ID').size().to_dict()
     df_all_predictions['Consensus_Score'] = df_all_predictions['Match_ID'].map(consensus_counts)
@@ -1178,7 +1174,6 @@ if not df_all_predictions.empty:
     if not df_historia.empty:
         df_historia['Unikalny_Klucz'] = df_historia['Match_ID'].astype(str) + "_" + df_historia['Engine'].astype(str) + "_" + df_historia['Typ'].astype(str)
         df_historia = df_historia.drop_duplicates(subset=['Unikalny_Klucz'], keep='last')
-        
         nowe_typy_df['Unikalny_Klucz'] = nowe_typy_df['Match_ID'].astype(str) + "_" + nowe_typy_df['Engine'].astype(str) + "_" + nowe_typy_df['Typ'].astype(str)
         
         for idx in df_historia.index:
@@ -1301,7 +1296,7 @@ if not df_historia.empty:
     for k_id, group in grupy_ako:
         data_zawarcia = group['Data'].min()
         liczba_zdarzen = len(group)
-        # Zmiana: używamy Match_ID zamiast skrótu tekstowego w kolumnie Mecze_Skrot
+        # REQ: Zmiana w Kolumnie Mecze_Skrot na Match_ID pobrane z zakładki All_Predictions/Historia
         mecze_skrot = " | ".join(group['Match_ID'].astype(str))
         
         kurs_ako = 1.0
@@ -1341,6 +1336,12 @@ if not df_historia.empty:
 
 if not df_historia.empty:
     df_historia['Data_Sort'] = pd.to_datetime(df_historia['Data'].astype(str) + ' ' + df_historia['Godzina'].astype(str).replace('', '00:00').replace('-', '00:00'), errors='coerce')
+    
+    # --- FILTR HISTORII: Zachowaj TYLKO mecze zakończone LUB te z datą w przeszłości ---
+    mask_resolved = df_historia['Status'] != 'W OCZEKIWANIU'
+    mask_past = df_historia['Data_Sort'] < datetime.now()
+    df_historia = df_historia[mask_resolved | mask_past]
+    
     mask_oczek = df_historia['Status'] == 'W OCZEKIWANIU'
     df_oczek = df_historia[mask_oczek].sort_values(by=['Data_Sort'], ascending=[True])
     df_rozst = df_historia[~mask_oczek].sort_values(by=['Data_Sort'], ascending=[False])
@@ -1355,7 +1356,7 @@ if not df_all_predictions.empty:
 # ==========================================
 # 8. WYSYŁKA GOOGLE SHEETS
 # ==========================================
-# Usunięto H2H z listy docelowych arkuszy
+# Trwale usunięto zakładkę H2H
 all_sheets = ["Summary", "Fixtures", "Results", "League_Tables", "Historia_Typow", "All_Predictions", "Kupony_AKO"]
 
 for sheet_name in all_sheets:
@@ -1412,5 +1413,12 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Wdrożono poprawnie Garbage Collector, filtry dat (max 7 dni), wymóg Szansa >= 80%, oraz modyfikacje Terminów i Match_ID.")
+print("Wdrożono wszystkie 10 punktów:")
+print("- Filtry czasowe <= 7 dni dla Fixtures oraz All_Predictions.")
+print("- Limit max 8 typów na mecz oraz minimum 80% szans w predykcjach.")
+print("- Terminy zapisano słownie (dziś, jutro, za X dni).")
+print("- Historia_Typow przechowuje od teraz wyłącznie zakończone i minione spotkania.")
+print("- Usunięto arkusz i kod odpowiedzialny za H2H.")
+print("- Arkusz Kupony_AKO generuje poprawne identyfikatory Match_ID.")
+print("- Wyeliminowano tysiące niepotrzebnych wierszy w 'Oczekiwaniu'.")
 print("=" * 60)
