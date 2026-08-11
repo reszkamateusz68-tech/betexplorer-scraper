@@ -549,7 +549,8 @@ fixtures_clean = fixtures_df[['Match_ID', 'Termin', 'Status_Kursów', 'League', 
 # --- ZABEZPIECZENIE: OGRANICZENIE DO 7 DNI W PRZYSZŁOŚĆ ---
 if not fixtures_clean.empty:
     fixtures_clean['Data_Parsed'] = pd.to_datetime(fixtures_clean['Date'], errors='coerce')
-    delta_days = (fixtures_clean['Data_Parsed'].dt.date - datetime.now().date()).dt.days
+    # Odejmujemy z użyciem natywnego dla Pandas obiektu pd.Timestamp by uniknąć błędu '.dt accessor'
+    delta_days = (fixtures_clean['Data_Parsed'] - pd.to_datetime(datetime.now().date())).dt.days
     fixtures_clean = fixtures_clean[(delta_days <= 7) | (fixtures_clean['Data_Parsed'].isna())]
     fixtures_clean = fixtures_clean.drop(columns=['Data_Parsed'])
 
@@ -1101,19 +1102,23 @@ cols_historia = ["Match_ID", "Zagrane", "Kupon_ID", "Data", "Godzina", "Liga", "
 df_all_predictions = pd.DataFrame(all_generated_predictions)
 
 if not df_all_predictions.empty:
-    # SELEKCJA I FILTROWANIE TYPÓW ORAZ DAT (Odrzucamy mecze powyżej 7 dni i szansę poniżej 80%)
+    # --- NOWY BLOK FILTROWANIA I LIMITÓW (Garbage Collector) ---
+    # 1. Filtrowanie minimum 80% szans
     df_all_predictions['Szansa_num'] = pd.to_numeric(df_all_predictions['Szansa'], errors='coerce').fillna(0)
     df_all_predictions = df_all_predictions[df_all_predictions['Szansa_num'] >= 80.0]
     
+    # 2. Filtr czasowy (max 7 dni w przód)
     df_all_predictions['Data_Parsed'] = pd.to_datetime(df_all_predictions['Data'], errors='coerce')
-    delta_pred = (df_all_predictions['Data_Parsed'].dt.date - datetime.now().date()).dt.days
+    delta_pred = (df_all_predictions['Data_Parsed'] - pd.to_datetime(datetime.now().date())).dt.days
     df_all_predictions = df_all_predictions[(delta_pred <= 7) | (df_all_predictions['Data_Parsed'].isna())]
     
-    # OGRANICZENIE DO MAX 5 TYPÓW NA MECZ
+    # 3. Limit do MAX 5 najlepszych typów na jeden mecz
     df_all_predictions['Kurs_num'] = pd.to_numeric(df_all_predictions['Kurs_Szac'].astype(str).str.replace(',', '.'), errors='coerce').fillna(0)
     df_all_predictions = df_all_predictions.sort_values(by=['Match_ID', 'Szansa_num', 'Kurs_num'], ascending=[True, False, False])
     df_all_predictions = df_all_predictions.groupby('Match_ID').head(5).reset_index(drop=True)
+    
     df_all_predictions = df_all_predictions.drop(columns=['Szansa_num', 'Kurs_num', 'Data_Parsed'])
+    # -----------------------------------------------------------
 
     df_all_predictions['Przedzial_Kursowy'] = df_all_predictions.apply(global_recalc_przedzial, axis=1)
     consensus_counts = df_all_predictions.groupby('Match_ID').size().to_dict()
@@ -1296,6 +1301,7 @@ if not df_historia.empty:
     for k_id, group in grupy_ako:
         data_zawarcia = group['Data'].min()
         liczba_zdarzen = len(group)
+        # Zmiana: używamy Match_ID zamiast skrótu tekstowego w kolumnie Mecze_Skrot
         mecze_skrot = " | ".join(group['Match_ID'].astype(str))
         
         kurs_ako = 1.0
@@ -1349,6 +1355,7 @@ if not df_all_predictions.empty:
 # ==========================================
 # 8. WYSYŁKA GOOGLE SHEETS
 # ==========================================
+# Usunięto H2H z listy docelowych arkuszy
 all_sheets = ["Summary", "Fixtures", "Results", "League_Tables", "Historia_Typow", "All_Predictions", "Kupony_AKO"]
 
 for sheet_name in all_sheets:
@@ -1405,5 +1412,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Wdrożono rygorystyczny Garbage Collector, filtry czasowe max 7 dni, próg skuteczności Szansy 80% oraz nowy wariant zapisu Match_ID w Kuponach.")
+print("Wdrożono poprawnie Garbage Collector, filtry dat (max 7 dni), wymóg Szansa >= 80%, oraz modyfikacje Terminów i Match_ID.")
 print("=" * 60)
