@@ -83,9 +83,13 @@ def categorize_date(d_str):
         
         if delta < 0: return "Przeszłość"
         if delta == 0: return "Dziś"
-        if delta in [1, 2]: return "Następne 2 dni"
-        if delta == 3: return "Następne 3 dni"
-        if 4 <= delta <= 7: return "Następny tydzień"
+        if delta == 1: return "Jutro"
+        if delta == 2: return "Za 2 dni"
+        if delta == 3: return "Za 3 dni"
+        if delta == 4: return "Za 4 dni"
+        if delta == 5: return "Za 5 dni"
+        if delta == 6: return "Za 6 dni"
+        if delta == 7: return "Za 7 dni"
         if delta > 7: return "Za ponad tydzień"
     except Exception: return "Nieznany"
 
@@ -542,10 +546,17 @@ if not fixtures_df.empty:
 results_clean = results_df[list(golden_cols.keys()) + ['HT_Total', 'Total_Corners', 'Marża']].rename(columns=golden_cols) if not results_df.empty else pd.DataFrame(columns=list(golden_cols.values()) + ['HT_Total', 'Total_Corners', 'Marża'])
 fixtures_clean = fixtures_df[['Match_ID', 'Termin', 'Status_Kursów', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd1', 'OddX', 'Odd2', 'Marża']].rename(columns={'Odd1': 'Odd_1', 'OddX': 'Odd_X', 'Odd2': 'Odd_2'}) if not fixtures_df.empty else pd.DataFrame(columns=['Match_ID', 'Termin', 'Status_Kursów', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd_1', 'Odd_X', 'Odd_2', 'Marża'])
 
+# --- ZABEZPIECZENIE: OGRANICZENIE DO 7 DNI W PRZYSZŁOŚĆ ---
+if not fixtures_clean.empty:
+    fixtures_clean['Data_Parsed'] = pd.to_datetime(fixtures_clean['Date'], errors='coerce')
+    delta_days = (fixtures_clean['Data_Parsed'].dt.date - datetime.now().date()).dt.days
+    fixtures_clean = fixtures_clean[(delta_days <= 7) | (fixtures_clean['Data_Parsed'].isna())]
+    fixtures_clean = fixtures_clean.drop(columns=['Data_Parsed'])
+
 # ==========================================
-# 5. GENEROWANIE TABEL LIGOWYCH I H2H
+# 5. GENEROWANIE TABEL LIGOWYCH
 # ==========================================
-print("Generowanie inteligentnych tabel ligowych (6 Koszyków) oraz zestawień H2H...")
+print("Generowanie inteligentnych tabel ligowych (6 Koszyków)...")
 valid_matches = pd.DataFrame()
 
 if not results_clean.empty:
@@ -608,26 +619,6 @@ team_tiers = {}
 if not league_tables.empty:
     for _, r in league_tables.iterrows():
         team_tiers[(r['League'], r['Team'])] = r['Koszyk']
-
-# --- GENERATOR H2H DLA ZAKŁADKI "H2H_Mecze" ---
-h2h_list = []
-h2h_cols = ["Match_ID", "Nadchodzący Mecz", "Data Meczu", "Liga", "Data H2H", "Gospodarz H2H", "Gość H2H", "Wynik H2H", "Gole HT", "Rożne H2H"]
-df_h2h = pd.DataFrame(columns=h2h_cols)
-
-if not fixtures_clean.empty and not valid_matches.empty:
-    upcoming = fixtures_clean[fixtures_clean['Status_Kursów'] == 'Są Kursy']
-    for _, f in upcoming.iterrows():
-        f_match_id, f_home, f_away, f_date, f_league = f['Match_ID'], f['Home'], f['Away'], f['Date'], f['League']
-        base_lg = get_base_league(f_league)
-        h2h_m = valid_matches[(valid_matches['Base_League'] == base_lg) & (((valid_matches['Home'] == f_home) & (valid_matches['Away'] == f_away)) | ((valid_matches['Home'] == f_away) & (valid_matches['Away'] == f_home)))].head(5)
-        for _, h in h2h_m.iterrows():
-            h2h_list.append([
-                f_match_id, f"{f_home} - {f_away}", f_date, f_league,
-                h['Date'], h['Home'], h['Away'], f"{int(h['FTHG'])}:{int(h['FTAG'])}",
-                str(h['HT_Total']).replace('.0', ''), str(h['Total_Corners']).replace('.0', '')
-            ])
-    if h2h_list:
-        df_h2h = pd.DataFrame(h2h_list, columns=h2h_cols)
 
 # ==========================================================
 # 6. SILNIKI PREDYKCYJNE (Z centralnym Generatorem Ryzyka)
@@ -750,7 +741,9 @@ for idx, row in fixtures_clean.iterrows():
         a_tot_all['Team_GF'] = np.where(a_tot_all['Home'] == away, a_tot_all['FTHG'], a_tot_all['FTAG'])
         a_tot_all['Team_GA'] = np.where(a_tot_all['Home'] == away, a_tot_all['FTAG'], a_tot_all['FTHG'])
 
+    # ----------------------------------------------------
     # 6a. 1X PRO
+    # ----------------------------------------------------
     lg_matches = valid_matches[valid_matches['Base_League'] == fixture_base]
     if len(lg_matches) >= 20 and len(h_tot_all) >= 5 and len(a_tot_all) >= 5 and len(h_dom) > 0 and len(a_wyj) > 0:
         lg_home_goals, lg_away_goals = lg_matches['FTHG'].mean(), lg_matches['FTAG'].mean()
@@ -816,7 +809,9 @@ for idx, row in fixtures_clean.iterrows():
                 
             add_pred(match_id, d_termin, d_date, d_time, league, home, away, "1X Pro", typ_kod, round(final_prob*100, 1), round(fair_odd, 2), arg)
 
+    # ----------------------------------------------------
     # 6b. GOAL LINE PRO
+    # ----------------------------------------------------
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
         for line in [2.5, 3.5, 4.5, 5.5, 6.5]:
             prob_h_u, h_th, h_tl, h_sm = get_weighted_stats(h_dom, 'Total_Goals', lambda x: pd.notna(x) and x < line, prior_prob=0.75)
@@ -842,7 +837,9 @@ for idx, row in fixtures_clean.iterrows():
                 if h_sm or a_sm: arg += " | ⚠️ Wygładzenie Bayesowskie (Mała próba)"
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Line Pro", f"O{line}", round(avg_prob_o*100, 1), KOTWICE_KURSOWE.get(f"O{line}", 1.10), arg)
 
+    # ----------------------------------------------------
     # 6c. BETBUILDER PRO Z SZABLONAMI PREMIUM
+    # ----------------------------------------------------
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
         for tpl in SZABLONY_PREMIUM:
             p_h, h_th, h_tl, h_sm = get_weighted_stats(h_dom, None, lambda r, code=tpl: evaluate_bet(code, r) == "WYGRANA", prior_prob=0.85)
@@ -851,14 +848,16 @@ for idx, row in fixtures_clean.iterrows():
             
             if avg_p >= 0.85:
                 kursy_skl = [KOTWICE_KURSOWE.get(sk.strip(), 1.05) for sk in tpl.split("+")]
-                est_odd = calc_betbuilder_copula(kursy_skl, rho=0.45)
+                est_odd = calc_betbuilder_copula(kursy_skl, rho=0.45) 
                 if est_odd < 1.15: est_odd = 1.15
                 
                 arg = f"Szablon Premium | Szansa bazowa układu: {round(avg_p*100)}% | Trafienia D/W: Gosp {h_th}/{h_tl}, Gość {a_th}/{a_tl}"
                 if h_sm or a_sm: arg += " | ⚠️ Bayes"
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "BetBuilder Pro", tpl, round(avg_p*100, 1), round(est_odd, 2), arg)
 
+    # ----------------------------------------------------
     # 6d. MULTIGOL
+    # ----------------------------------------------------
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
         h_last_goals = get_last_match_goals(fixture_base, home)
         a_last_goals = get_last_match_goals(fixture_base, away)
@@ -887,7 +886,9 @@ for idx, row in fixtures_clean.iterrows():
                 if was_sm: arg += " | ⚠️ Wygładzenie Bayesowskie (Mała próba)"
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Multigol", typ_kod, round(pewnosc*100, 1), round(est_odd, 2), arg)
 
+    # ----------------------------------------------------
     # 6e. CORNERS PRO
+    # ----------------------------------------------------
     valid_corners = valid_matches.dropna(subset=['Corners_H', 'Corners_A']).copy()
     h_tot_all_c = valid_corners[(valid_corners['Base_League'] == fixture_base) & ((valid_corners['Home'] == home) | (valid_corners['Away'] == home))].copy()
     a_tot_all_c = valid_corners[(valid_corners['Base_League'] == fixture_base) & ((valid_corners['Home'] == away) | (valid_corners['Away'] == away))].copy()
@@ -948,7 +949,9 @@ for idx, row in fixtures_clean.iterrows():
             if any_smoothed: uzasadnienie += " | ⚠️ Wygładzenie Bayesowskie (Mała próba)"
             add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Corners Pro", "+".join(c_blocks_code), round(np.mean(c_probs)*100, 1), round(est_odd, 2), uzasadnienie)
 
+    # ----------------------------------------------------
     # 6f. SHOTS PRO
+    # ----------------------------------------------------
     valid_shots = valid_matches.dropna(subset=['Shots_H', 'Shots_A', 'ShotsTarget_H', 'ShotsTarget_A']).copy()
     if not valid_shots.empty:
         valid_shots['Shots_H'] = pd.to_numeric(valid_shots['Shots_H'], errors='coerce')
@@ -1010,7 +1013,9 @@ for idx, row in fixtures_clean.iterrows():
                 if any_sm: arg += " | ⚠️ Wygładzenie Bayesowskie (Mała próba)"
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Shots Pro", "ST_1", round(prob_h_st*100, 1), round(est_odd_st, 2), arg)
 
+    # ----------------------------------------------------
     # 6g. ZIMNY PRYSZNIC
+    # ----------------------------------------------------
     if h_tier in ['Koszyk 1', 'Koszyk 2'] and len(h_tot_all) > 0:
         last_m = h_tot_all.iloc[0] 
         if last_m['Away'] == home and last_m['FTHG'] >= last_m['FTAG']:
@@ -1020,7 +1025,9 @@ for idx, row in fixtures_clean.iterrows():
                 arg = f"Gospodarz ({h_tier}) szuka rewanżu u siebie po stracie punktów na wyjeździe z dużo słabszym rywalem ({opp_tier})."
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Cold Shower", "1", 85.0, round(est_odd, 2), arg)
 
+    # ----------------------------------------------------
     # 6h. UKRYTA FORMA (Proxy xG)
+    # ----------------------------------------------------
     for team, is_home in [(home, True), (away, False)]:
         t_past = valid_shots[(valid_shots['Base_League'] == fixture_base) & ((valid_shots['Home'] == team) | (valid_shots['Away'] == team))]
         if len(t_past) >= 3:
@@ -1043,7 +1050,9 @@ for idx, row in fixtures_clean.iterrows():
                     arg = f"Wysokie xG. W 3 ost. meczach zespół oddał {int(st_for)} celnych strzałów, ale zdobył tylko {int(g_for)} goli."
                     add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Hidden Form", typ_kod, 80.0, round(est_odd, 2), arg)
 
+    # ----------------------------------------------------
     # 6i. ANOMALIE ROŻNYCH
+    # ----------------------------------------------------
     valid_corners_all = valid_matches.dropna(subset=['Corners_H', 'Corners_A']).copy()
     for team, is_home in [(home, True), (away, False)]:
         t_past = valid_corners_all[(valid_corners_all['Base_League'] == fixture_base) & ((valid_corners_all['Home'] == team) | (valid_corners_all['Away'] == team))].copy()
@@ -1058,7 +1067,9 @@ for idx, row in fixtures_clean.iterrows():
                 arg = f"Pęknięta seria. Średnia sezonu zespołu: {round(season_avg, 2)}. Średnia 2 ost. meczów: tylko {round(last_2_avg, 2)}."
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Corner Anomalies", typ_kod, 82.0, round(est_odd, 2), arg)
 
+    # ----------------------------------------------------
     # 6j. ANOMALIE BRAMKOWE
+    # ----------------------------------------------------
     t_past = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == home) | (valid_matches['Away'] == away))]
     if len(t_past) >= 10:
         season_avg = t_past['Total_Goals'].mean()
@@ -1083,12 +1094,27 @@ creds = Credentials.from_service_account_file("credentials.json", scopes=scope) 
 client = gspread.authorize(creds)
 spreadsheet = client.open("BetExplorer")
 
+# CZYSZCZENIE ZBĘDNYCH KOLUMN 
 cols_all_pred = ["Match_ID", "Zagrane", "Wyslij_AKO", "Kupon_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status"]
 cols_historia = ["Match_ID", "Zagrane", "Kupon_ID", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 
 df_all_predictions = pd.DataFrame(all_generated_predictions)
 
 if not df_all_predictions.empty:
+    # SELEKCJA I FILTROWANIE TYPÓW ORAZ DAT (Odrzucamy mecze powyżej 7 dni i szansę poniżej 80%)
+    df_all_predictions['Szansa_num'] = pd.to_numeric(df_all_predictions['Szansa'], errors='coerce').fillna(0)
+    df_all_predictions = df_all_predictions[df_all_predictions['Szansa_num'] >= 80.0]
+    
+    df_all_predictions['Data_Parsed'] = pd.to_datetime(df_all_predictions['Data'], errors='coerce')
+    delta_pred = (df_all_predictions['Data_Parsed'].dt.date - datetime.now().date()).dt.days
+    df_all_predictions = df_all_predictions[(delta_pred <= 7) | (df_all_predictions['Data_Parsed'].isna())]
+    
+    # OGRANICZENIE DO MAX 5 TYPÓW NA MECZ
+    df_all_predictions['Kurs_num'] = pd.to_numeric(df_all_predictions['Kurs_Szac'].astype(str).str.replace(',', '.'), errors='coerce').fillna(0)
+    df_all_predictions = df_all_predictions.sort_values(by=['Match_ID', 'Szansa_num', 'Kurs_num'], ascending=[True, False, False])
+    df_all_predictions = df_all_predictions.groupby('Match_ID').head(5).reset_index(drop=True)
+    df_all_predictions = df_all_predictions.drop(columns=['Szansa_num', 'Kurs_num', 'Data_Parsed'])
+
     df_all_predictions['Przedzial_Kursowy'] = df_all_predictions.apply(global_recalc_przedzial, axis=1)
     consensus_counts = df_all_predictions.groupby('Match_ID').size().to_dict()
     df_all_predictions['Consensus_Score'] = df_all_predictions['Match_ID'].map(consensus_counts)
@@ -1270,7 +1296,7 @@ if not df_historia.empty:
     for k_id, group in grupy_ako:
         data_zawarcia = group['Data'].min()
         liczba_zdarzen = len(group)
-        mecze_skrot = " | ".join(group['Gospodarz'].str[:3] + "-" + group['Gość'].str[:3])
+        mecze_skrot = " | ".join(group['Match_ID'].astype(str))
         
         kurs_ako = 1.0
         for _, r in group.iterrows():
@@ -1321,80 +1347,63 @@ if not df_all_predictions.empty:
     df_all_predictions = df_all_predictions.sort_values(by=["Data_Sort", "Szansa"], ascending=[True, False]).drop(columns=['Data_Sort', 'Unikalny_Klucz'], errors='ignore')
 
 # ==========================================
-# 8. WYSYŁKA GOOGLE SHEETS (z archiwizacją/limitami przesylu)
+# 8. WYSYŁKA GOOGLE SHEETS
 # ==========================================
-all_sheets = ["Summary", "Fixtures", "Results", "League_Tables", "H2H_Mecze", "Historia_Typow", "All_Predictions", "Kupony_AKO"]
+all_sheets = ["Summary", "Fixtures", "Results", "League_Tables", "Historia_Typow", "All_Predictions", "Kupony_AKO"]
 
 for sheet_name in all_sheets:
     try: spreadsheet.worksheet(sheet_name)
     except: spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=30)
 
-# OPTYMALIZACJA WAGI ARKUSZA (Max 3000-4000 wierszy przesyłanych na raz)
-fixtures_export = fixtures_clean.head(3000) if not fixtures_clean.empty else fixtures_clean
-results_export = results_clean.head(4000) if not results_clean.empty else results_clean
-
-if not df_historia.empty:
-    df_oczekujace = df_historia[df_historia['Status'] == 'W OCZEKIWANIU']
-    df_rozstrzygniete = df_historia[df_historia['Status'] != 'W OCZEKIWANIU'].head(3000)
-    historia_export = pd.concat([df_oczekujace, df_rozstrzygniete]).drop_duplicates()
-else:
-    historia_export = df_historia
-
 print("Wysyłam Czysty Terminarz do Google Sheets...")
-time.sleep(1.0)
+time.sleep(1.5)
 spreadsheet.worksheet("Fixtures").clear()
-if not fixtures_export.empty: spreadsheet.worksheet("Fixtures").update(prepare_for_gsheets(fixtures_export))
+if not fixtures_clean.empty: spreadsheet.worksheet("Fixtures").update(prepare_for_gsheets(fixtures_clean))
 
 print("Wysyłam Historię ze statystykami do Google Sheets...")
-time.sleep(1.0)
+time.sleep(1.5)
 spreadsheet.worksheet("Results").clear()
-if not results_export.empty: spreadsheet.worksheet("Results").update(prepare_for_gsheets(results_export))
+if not results_clean.empty: spreadsheet.worksheet("Results").update(prepare_for_gsheets(results_clean))
 
 print("Wysyłam Tabele Ligowe...")
-time.sleep(1.0)
+time.sleep(1.5)
 spreadsheet.worksheet("League_Tables").clear()
 if not league_tables.empty: spreadsheet.worksheet("League_Tables").update(prepare_for_gsheets(league_tables))
 
-print("Wysyłam Analizę H2H do Google Sheets...")
-time.sleep(1.0)
-spreadsheet.worksheet("H2H_Mecze").clear()
-if not df_h2h.empty: spreadsheet.worksheet("H2H_Mecze").update(prepare_for_gsheets(df_h2h))
-
 print("Wysyłam Logi Systemu Backtestingu (Historia_Typow)...")
-time.sleep(1.0)
+time.sleep(1.5)
 ws_historia.clear()
-if not historia_export.empty: ws_historia.update(prepare_for_gsheets(historia_export))
+if not df_historia.empty: ws_historia.update(prepare_for_gsheets(df_historia))
 
 print("Wysyłam Moduł Portfela AKO (Kupony_AKO)...")
-time.sleep(1.0)
+time.sleep(1.5)
 ws_ako.clear()
 if not df_ako.empty: ws_ako.update(prepare_for_gsheets(df_ako))
 
 print("Wysyłam Ujednoliconą Listę Wszystkich Predykcji (All_Predictions)...")
-time.sleep(1.0)
+time.sleep(1.5)
 spreadsheet.worksheet("All_Predictions").clear()
-if not df_all_predictions.empty: spreadsheet.worksheet("All_Predictions").update(prepare_for_gsheets(df_all_predictions.head(2000)))
+if not df_all_predictions.empty: spreadsheet.worksheet("All_Predictions").update(prepare_for_gsheets(df_all_predictions))
 
 summary_data = [
     ["==== PODSUMOWANIE OGÓLNE ====", "", ""],
     ["Ostatnia aktualizacja", datetime.now().strftime("%Y-%m-%d %H:%M:%S"), ""],
-    ["Fixtures Czyste (Wszystkie/Wysłane)", f"{len(fixtures_clean)} / {len(fixtures_export)}", ""],
-    ["Results Zintegrowane (Wszystkie/Wysłane)", f"{len(results_clean)} / {len(results_export)}", ""],
-    ["Przetworzone Typy w Historii (Suma/Wysłane)", f"{len(df_historia)} / {len(historia_export)}", ""],
+    ["Fixtures Czyste", len(fixtures_clean), ""],
+    ["Results Zintegrowane", len(results_clean), ""],
+    ["Przetworzone Typy w Historii", len(df_historia), ""],
     ["Wygenerowane Predykcje (Suma)", len(df_all_predictions), ""]
 ]
-
 summary_data.append(["", "", ""])
 summary_data.append(["==== RAPORT POBIERANIA (LOGI) ====", "", ""])
 summary_data.append(["Źródło", "URL / Plik", "Status"])
 for rep in scrape_report:
     summary_data.append(rep)
 
-time.sleep(1.0)
+time.sleep(1.5)
 spreadsheet.worksheet("Summary").clear()
 spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Zaktualizowano dopasowywanie do starych koszyków, naprawiono gubienie ID kuponów oraz przywrócono logi do Summary.")
+print("Wdrożono rygorystyczny Garbage Collector, filtry czasowe max 7 dni, próg skuteczności Szansy 80% oraz nowy wariant zapisu Match_ID w Kuponach.")
 print("=" * 60)
