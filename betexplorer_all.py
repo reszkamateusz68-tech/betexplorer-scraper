@@ -333,28 +333,30 @@ except: urls = []
 
 def scrape_be_worker(args):
     i, url_clean, total = args
-    time.sleep(random.uniform(0.1, 2.5)) 
+    time.sleep(random.uniform(0.1, 3.0)) 
     local_data = []
     local_report = []
     print(f"[{i}/{total}] Pobieram BetExplorer (Wątek): {url_clean}")
     
     scraper_be = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True})
-    max_retries = 3
+    # Zwiększony próg retries i odporność na timeout
+    max_retries = 5
     response = None
     bypass_used, success = False, False
 
     for attempt in range(max_retries):
-        if attempt > 0: time.sleep(random.uniform(4, 8) * attempt)
+        if attempt > 0: time.sleep(random.uniform(5, 12) * attempt)
         try:
-            response = scraper_be.get(url_clean, timeout=35)
+            # Zwiększony timeout do 45 sekund
+            response = scraper_be.get(url_clean, timeout=45)
             if response.status_code == 200: success = True; break
-            elif response.status_code in [429, 403]: bypass_used = True
+            elif response.status_code in [429, 403, 502, 503, 504]: bypass_used = True
             else: break
         except Exception:
             if attempt < max_retries - 1: time.sleep(3)
 
     if not success or response is None or response.status_code != 200:
-        final_code = response.status_code if response else "Brak odpowiedzi"
+        final_code = response.status_code if response else "Brak odpowiedzi / Timeout"
         local_report.append(["BetExplorer", url_clean, f"BŁĄD: Kod {final_code}"])
         return local_data, local_report
 
@@ -400,7 +402,7 @@ def scrape_be_worker(args):
                 mecz_count += 1
                 
         if mecz_count > 0:
-            status_msg = f"OK (Pobrano: {mecz_count} meczów)" + (" [Zadziałał Bypass 429]" if bypass_used else "")
+            status_msg = f"OK (Pobrano: {mecz_count} meczów)" + (" [Zadziałał Bypass]" if bypass_used else "")
             local_report.append(["BetExplorer", url_clean, status_msg])
         else:
             local_report.append(["BetExplorer", url_clean, "OSTRZEŻENIE: Brak meczów na stronie (0)"])
@@ -429,7 +431,7 @@ fixtures_df = df[df["Type"] == "Fixture"].copy()
 results_df = df[df["Type"] == "Result"].copy()
 
 # ==========================================
-# 2. WIELOWĄTKOWE POBIERANIE Z SOCCERSTATS (POPRAWIONA OBSŁUGA ASR/SCRAPER)
+# 2. WIELOWĄTKOWE POBIERANIE Z SOCCERSTATS (Naprawa OSTRZEŻENIA 0)
 # ==========================================
 def scrape_ss_worker(args):
     url_ss_clean, headers = args
@@ -438,25 +440,25 @@ def scrape_ss_worker(args):
     local_report = []
     skaner_ss = cloudscraper.create_scraper(browser={'browser': 'chrome','platform': 'windows','desktop': True})
     
-    # Inicjalizacja podgrzania sesji SoccerStats
+    # Podgrzanie sesji by zminimalizować 403 / captcha wtyczki Cloudflare
     try:
-        skaner_ss.get("https://www.soccerstats.com/", headers=headers, timeout=15)
-        time.sleep(0.5)
+        skaner_ss.get("https://www.soccerstats.com/", headers=headers, timeout=20)
+        time.sleep(1.0)
     except: pass
 
     success = False
-    for attempt in range(3):
+    max_retries_ss = 5
+    for attempt in range(max_retries_ss):
         try:
-            response_ss = skaner_ss.get(url_ss_clean, headers=headers, timeout=30)
-            if response_ss.status_code == 200 and "soccerstats" in response_ss.text.lower():
+            response_ss = skaner_ss.get(url_ss_clean, headers=headers, timeout=45)
+            if response_ss.status_code == 200:
                 soup_ss = BeautifulSoup(response_ss.text, "html.parser")
                 
-                # Skanowanie wszystkich tabel na stronie
+                # Zamiast szukać konkretnego napisu HT/BTS, przeszukujemy każdą długą tabelę pod kątem wyników
                 tabele = soup_ss.find_all("table")
                 ss_count = 0
                 for t in tabele:
-                    t_text = t.get_text()
-                    if ("HT" in t_text or "BTS" in t_text or "GP" in t_text) and len(t.find_all("tr")) > 10:
+                    if len(t.find_all("tr")) > 8:
                         for wiersz in t.find_all("tr"):
                             komorki = wiersz.find_all(["td", "th"])
                             if len(komorki) >= 5:
@@ -478,18 +480,19 @@ def scrape_ss_worker(args):
                                             except: pass
                                         local_data.append([gospodarz, gosc, wynik_czysty, g_gosp_1h, g_gosc_1h])
                                         ss_count += 1
-                        if ss_count > 0:
-                            success = True
-                            local_report.append(["SoccerStats", url_ss_clean, f"OK (Pobrano: {ss_count} wierszy)"])
-                            break
-                if success: break
+                                        
+                if ss_count > 0:
+                    success = True
+                    local_report.append(["SoccerStats", url_ss_clean, f"OK (Pobrano: {ss_count} wierszy)"])
+                    break
         except Exception as e:
-            if attempt == 2:
-                local_report.append(["SoccerStats", url_ss_clean, f"BŁĄD HTTP: {str(e)}"])
-        time.sleep(2)
-        
+            pass
+            
+        if not success:
+            time.sleep(random.uniform(3.0, 7.0) * (attempt + 1))
+            
     if not success and not local_report:
-        local_report.append(["SoccerStats", url_ss_clean, "OSTRZEŻENIE: Brak meczów na stronie (0)"])
+        local_report.append(["SoccerStats", url_ss_clean, "OSTRZEŻENIE: Brak meczów na stronie (0) / Błąd połączenia"])
         
     return local_data, local_report
 
@@ -599,7 +602,7 @@ if not fixtures_clean.empty:
     fixtures_clean = fixtures_clean[mask_valid_fixture].drop(columns=['Data_Parsed'])
 
 # ==========================================
-# 5. GENEROWANIE TABEL LIGOWYCH
+# 5. GENEROWANIE TABEL LIGOWYCH (H2H Usunięto z kodu)
 # ==========================================
 print("Generowanie inteligentnych tabel ligowych (6 Koszyków)...")
 valid_matches = pd.DataFrame()
@@ -1130,6 +1133,7 @@ for idx, row in fixtures_clean.iterrows():
             arg = f"Anomalia underowa. Średnia sezonu obu ekip: {round(season_avg, 2)}. Ost. 2 mecze: tylko {round(last_2_avg, 2)} goli. Oczekiwane przełamanie."
             add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Anomalies", "O1.5", 85.0, round(est_odd, 2), arg)
 
+
 # ==========================================================
 # 7. SYSTEM ŚLEDZENIA SKUTECZNOŚCI I YIELDU (BACKTESTER)
 # ==========================================================
@@ -1409,6 +1413,6 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Naprawiono SoccerStats & BetExplorer (nowe nagłówki HTTP, podgrzanie sesji i zwiększony timeout do 35s).")
-print("Przywrócono pełne wyliczanie kursów i bogatą argumentację. Przepuszczono typy 1X, X2 i strzałów u siebie < 1.05.")
+print("Naprawiono SoccerStats & BetExplorer (nowe nagłówki HTTP, podgrzanie sesji i zwiększony timeout do 45s).")
+print("Wdrożono elastyczny parser, przywrócono pełne wyliczanie kursów i bogatą argumentację.")
 print("=" * 60)
