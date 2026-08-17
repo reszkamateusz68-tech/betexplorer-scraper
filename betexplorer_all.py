@@ -342,125 +342,125 @@ fixtures_df = df[df["Type"] == "Fixture"].copy()
 results_df = df[df["Type"] == "Result"].copy()
 
 # ==========================================
-# 2. WIELOWĄTKOWE POBIERANIE Z SOCCERSTATS 
+# 2. BEZPIECZNE POBIERANIE Z SOCCERSTATS (GOOGLE IMPORTHTML / DIRECT HYBRID)
 # ==========================================
-def scrape_ss_worker(args):
-    url_ss_raw = args[0] if isinstance(args, (list, tuple)) else args
-    url_ss_clean = str(url_ss_raw).strip()
-    
-    # 1. Neutralizacja paywalla & ujednolicenie struktury linków
-    url_ss_clean = url_ss_clean.replace("&pmtype=bydate", "").replace("?pmtype=bydate", "")
-    if "results.asp" in url_ss_clean and "latest.asp" not in url_ss_clean:
-        url_ss_clean = url_ss_clean.replace("results.asp", "latest.asp")
+def parse_ss_rows_data(rows_data):
+    """Pomocnicza funkcja parsująca wiersze tabeli z SoccerStats."""
+    parsed = []
+    for row in rows_data:
+        if not isinstance(row, list) or len(row) < 4:
+            continue
+        teksty = [str(k).strip() for k in row if str(k).strip()]
+        wynik_index = next((idx for idx, val in enumerate(teksty) 
+                            if re.search(r'^\d+\s*[-:]\s*\d+$', val.replace("*", "").strip()) and 1 <= idx <= 5), -1)
+        
+        if wynik_index != -1:
+            gospodarz = teksty[wynik_index - 1].strip()
+            wynik_raw = teksty[wynik_index].strip()
+            gosc = teksty[wynik_index + 1].strip() if wynik_index + 1 < len(teksty) else ""
 
-    time.sleep(random.uniform(0.3, 1.2))
-    local_data = []
-    local_report = []
-
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Referer": "https://www.soccerstats.com/"
-    })
-
-    response_text = None
-    last_err = ""
-
-    for attempt in range(3):
-        try:
-            resp = session.get(url_ss_clean, timeout=20)
-            if resp.status_code == 200:
-                response_text = resp.text
-                break
-            elif resp.status_code in [403, 429]:
-                scraper_fallback = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True})
-                resp_cb = scraper_fallback.get(url_ss_clean, timeout=25)
-                if resp_cb.status_code == 200:
-                    response_text = resp_cb.text
-                    break
-                last_err = f"Kod {resp_cb.status_code}"
-            else:
-                last_err = f"Kod {resp.status_code}"
-        except Exception as e:
-            last_err = str(e)
-            time.sleep(1.5 * (attempt + 1))
-
-    if not response_text:
-        local_report.append(["SoccerStats", url_ss_clean, f"BŁĄD: {last_err}"])
-        return local_data, local_report
-
-    try:
-        soup_ss = BeautifulSoup(response_text, "html.parser")
-        rows = soup_ss.find_all("tr")
-        ss_count = 0
-
-        for row in rows:
-            komorki = row.find_all(["td", "th"])
-            if len(komorki) < 4:
+            if not gospodarz or not gosc or "HOME" in gospodarz.upper() or gospodarz == gosc:
                 continue
 
-            teksty = [k.get_text(" ", strip=True) for k in komorki]
+            wynik_czysty = wynik_raw.replace("*", "").replace(" ", "").replace("-", ":")
+            g_gosp_1h, g_gosc_1h = "", ""
+            reszta_tekstow = " ".join(teksty[wynik_index + 2:])
+            ht_match = re.search(r'\(?\s*(\d+)\s*[-:]\s*(\d+)\s*\)?', reszta_tekstow)
+            if ht_match:
+                try:
+                    g_gosp_1h = int(ht_match.group(1))
+                    g_gosc_1h = int(ht_match.group(2))
+                except ValueError:
+                    pass
+
+            parsed.append([gospodarz, gosc, wynik_czysty, g_gosp_1h, g_gosc_1h])
+    return parsed
+
+def fetch_ss_via_importhtml(spreadsheet, url_clean):
+    """Pobiera dane z SoccerStats przez Google Sheets IMPORTHTML (omija blokady IP)."""
+    ws_temp_name = "_temp_ss_scrape"
+    try:
+        try:
+            ws_temp = spreadsheet.worksheet(ws_temp_name)
+        except gspread.exceptions.WorksheetNotFound:
+            ws_temp = spreadsheet.add_worksheet(title=ws_temp_name, rows=600, cols=20)
+
+        # Sprawdzamy tabelę 11 (standard) lub 10
+        for table_idx in [11, 10]:
+            formula = f'=IMPORTHTML("{url_clean}", "table", {table_idx})'
+            ws_temp.clear()
+            ws_temp.update(values=[[formula]], range_name="A1", value_input_option="USER_ENTERED")
             
-            # Wyszukiwanie komórki z wynikiem głównym meczu
-            wynik_index = next((idx for idx, val in enumerate(teksty) 
-                                if re.search(r'^\d+\s*[-:]\s*\d+$', val.replace("*", "").strip()) and 1 <= idx <= 5), -1)
+            # Czekamy na przeliczenie formuły w chmurze Google
+            time.sleep(3.5)
+            vals = ws_temp.get_all_values()
             
-            if wynik_index != -1:
-                gospodarz = teksty[wynik_index - 1].strip()
-                wynik_raw = teksty[wynik_index].strip()
-                gosc = teksty[wynik_index + 1].strip() if wynik_index + 1 < len(teksty) else ""
-
-                if not gospodarz or not gosc or "HOME" in gospodarz.upper() or gospodarz == gosc:
-                    continue
-
-                wynik_czysty = wynik_raw.replace("*", "").replace(" ", "").replace("-", ":")
-
-                # Parsowanie bramek do przerwy (HT)
-                g_gosp_1h, g_gosc_1h = "", ""
-                reszta_tekstow = " ".join(teksty[wynik_index + 2:])
-                ht_match = re.search(r'\(?\s*(\d+)\s*[-:]\s*(\d+)\s*\)?', reszta_tekstow)
-                
-                if ht_match:
-                    try:
-                        g_gosp_1h = int(ht_match.group(1))
-                        g_gosc_1h = int(ht_match.group(2))
-                    except ValueError:
-                        pass
-
-                local_data.append([gospodarz, gosc, wynik_czysty, g_gosp_1h, g_gosc_1h])
-                ss_count += 1
-
-        if ss_count > 0:
-            local_report.append(["SoccerStats", url_ss_clean, f"OK (Pobrano: {ss_count} wierszy)"])
-        else:
-            local_report.append(["SoccerStats", url_ss_clean, "OSTRZEŻENIE: Brak meczów na stronie (0)"])
-
+            # Jeśli arkusz zwrócił błąd formuły lub puste dane, próbujemy kolejny indeks
+            if vals and not str(vals[0][0]).startswith(("#N/A", "#ERROR", "#VALUE!")):
+                parsed = parse_ss_rows_data(vals)
+                if parsed:
+                    return parsed, f"OK (IMPORTHTML: {len(parsed)} meczów)"
+                    
+        return [], "OSTRZEŻENIE: IMPORTHTML zwrócił pustą tabelę"
     except Exception as e:
-        local_report.append(["SoccerStats", url_ss_clean, f"BŁĄD PARSOWANIA: {str(e)}"])
+        return [], f"BŁĄD IMPORTHTML: {e}"
+    finally:
+        try:
+            ws_temp = spreadsheet.worksheet(ws_temp_name)
+            ws_temp.clear()
+        except:
+            pass
 
-    return local_data, local_report
+def scrape_ss_direct_fallback(url_clean):
+    """Fallback HTTP dla środowiska lokalnego z pełnymi nagłówkami."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Referer": "https://www.soccerstats.com/"
+    }
+    scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True})
+    try:
+        resp = scraper.get(url_clean, headers=headers, timeout=20)
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, "html.parser")
+            rows = soup.find_all("tr")
+            rows_data = [[c.get_text(" ", strip=True) for c in r.find_all(["td", "th"])] for r in rows]
+            parsed = parse_ss_rows_data(rows_data)
+            if parsed:
+                return parsed, f"OK (Direct: {len(parsed)} meczów)"
+        return [], f"BŁĄD HTTP: Kod {resp.status_code}"
+    except Exception as e:
+        return [], f"BŁĄD HTTP: {e}"
 
 dane_soccerstats_baza = []
-print("Rozpoczynam pobieranie z SoccerStats (Wielowątkowo)...")
+print("Rozpoczynam stabilne pobieranie z SoccerStats...")
 try:
     if os.path.exists("ligi_soccerstats.xlsx"):
         urls_ss = pd.read_excel("ligi_soccerstats.xlsx")["URL"].dropna().tolist()
-        ss_args = [(str(u).strip(), None) for u in urls_ss]
         
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            for data_chunk, report_chunk in executor.map(scrape_ss_worker, ss_args):
-                dane_soccerstats_baza.extend(data_chunk)
-                scrape_report.extend(report_chunk)
+        for u in urls_ss:
+            u_clean = str(u).strip()
+            # Najpierw próba bezpośrednia
+            matches, rep_msg = scrape_ss_direct_fallback(u_clean)
+            
+            # Jeśli dostaliśmy 403 lub błąd połączenia (np. na GitHub Actions), używamy Google IMPORTHTML
+            if not matches or "BŁĄD" in rep_msg:
+                time.sleep(1.0)
+                matches, rep_msg = fetch_ss_via_importhtml(spreadsheet, u_clean)
+            
+            scrape_report.append(["SoccerStats", u_clean, rep_msg])
+            if matches:
+                dane_soccerstats_baza.extend(matches)
 
         if dane_soccerstats_baza:
             ss_df = pd.DataFrame(dane_soccerstats_baza, columns=["Home", "Away", "Score", "Gole_Gosp_1H", "Gole_Gosc_1H"]).drop_duplicates(subset=["Home", "Away", "Score"])
         else:
             ss_df = pd.DataFrame()
-except Exception:
+except Exception as e:
+    scrape_report.append(["SoccerStats", "ligi_soccerstats.xlsx", f"BŁĄD GŁÓWNY: {e}"])
     ss_df = pd.DataFrame()
-
+    
 # ==========================================
 # 3. MAPOWANIE I SCALANIE DANYCH 
 # ==========================================
