@@ -105,10 +105,9 @@ def categorize_date(d_str):
         
         if delta < 0: return "Przeszłość"
         if delta == 0: return "Dziś"
-        if delta in [1, 2]: return "Następne 2 dni"
-        if delta == 3: return "Następne 3 dni"
-        if 4 <= delta <= 7: return "Następny tydzień"
-        if delta > 7: return "Za ponad tydzień"
+        if delta == 1: return "Jutro"
+        if 2 <= delta <= 7: return f"Za {delta} dni"
+        return "Za ponad tydzień"
     except Exception: return "Nieznany"
 
 def get_base_league(l):
@@ -214,24 +213,22 @@ def calc_betbuilder_copula(odds_list, rho=0.65):
     return max(1.015, round(final_odd, 2))
 
 # ==========================================================
-# ZOPTYMALIZOWANE FUNKCJE ANALITYCZNE I EWALUACYJNE
+# FUNKCJE ANALITYCZNE, EVALUACJA I KONTROLA RYZYKA
 # ==========================================================
-def get_weighted_stats(data, target_col, condition_lambda, prior_prob=0.5, alpha=2.0):
-    # Oczekujemy, że data to lista słowników (ekstremalnie szybkie)
-    if isinstance(data, pd.DataFrame):
-        if data.empty: return 0.0, 0, 0, False
-        if target_col is None:
-            valid_values = data.to_dict('records')
-        else:
-            if target_col not in data.columns: return 0.0, 0, 0, False
-            valid_values = [v for v in data[target_col].tolist() if pd.notna(v)]
-    else:
-        if not data: return 0.0, 0, 0, False
-        valid_values = data
-
+def get_weighted_stats(df, target_col, condition_lambda, prior_prob=0.5, alpha=2.0):
+    if df.empty: return 0.0, 0, 0, False
+        
     total_weight = 0.0
     weighted_hits = 0.0
     total_hits = 0
+    
+    if target_col is None:
+        valid_values = [row for _, row in df.iterrows()]
+    else:
+        if target_col not in df.columns: return 0.0, 0, 0, False
+        values = df[target_col].tolist()
+        valid_values = [v for v in values if pd.notna(v)]
+        
     total_len = len(valid_values)
     
     for i, val in enumerate(valid_values):
@@ -259,29 +256,30 @@ def get_weighted_stats(data, target_col, condition_lambda, prior_prob=0.5, alpha
         
     return prob, total_hits, total_len, is_smoothed
 
-def evaluate_bet(bet_type, r):
-    # Zoptymalizowana ewaluacja na czystych słownikach (brak wąskiego gardła pd.to_numeric)
+def evaluate_bet(bet_type, row_data):
     bet = str(bet_type).upper().strip()
     
+    hg = pd.to_numeric(row_data.get('FTHG', np.nan))
+    ag = pd.to_numeric(row_data.get('FTAG', np.nan))
+    tg = pd.to_numeric(row_data.get('Total_Goals', np.nan))
+    ht_hg = pd.to_numeric(row_data.get('HTHG', np.nan))
+    ht_ag = pd.to_numeric(row_data.get('HTAG', np.nan))
+    hc = pd.to_numeric(row_data.get('Corners_H', np.nan))
+    ac = pd.to_numeric(row_data.get('Corners_A', np.nan))
+    hs = pd.to_numeric(row_data.get('Shots_H', np.nan))
+    away_s = pd.to_numeric(row_data.get('Shots_A', np.nan))
+    hst = pd.to_numeric(row_data.get('ShotsTarget_H', np.nan))
+    ast = pd.to_numeric(row_data.get('ShotsTarget_A', np.nan))
+
+    if pd.isna(hg) or pd.isna(ag): return "W OCZEKIWANIU"
+
     if "+" in bet:
-        results = []
-        for p in bet.split("+"):
-            res = evaluate_bet(p.strip(), r)
-            if res == "W OCZEKIWANIU": return "W OCZEKIWANIU"
-            if res == "PRZEGRANA": return "PRZEGRANA"
-            if res == "DO RĘCZNEJ KONTROLI": return "DO RĘCZNEJ KONTROLI"
-            results.append(res)
+        parts = bet.split("+")
+        results = [evaluate_bet(p.strip(), row_data) for p in parts]
+        if "W OCZEKIWANIU" in results: return "W OCZEKIWANIU"
+        if "PRZEGRANA" in results: return "PRZEGRANA"
+        if "DO RĘCZNEJ KONTROLI" in results: return "DO RĘCZNEJ KONTROLI"
         return "WYGRANA"
-
-    def get_num(key):
-        val = r.get(key)
-        if val is None or pd.isna(val) or val == "": return None
-        try: return float(val)
-        except: return None
-
-    hg = get_num('FTHG')
-    ag = get_num('FTAG')
-    if hg is None or ag is None: return "W OCZEKIWANIU"
 
     if bet == "1": return "WYGRANA" if hg > ag else "PRZEGRANA"
     if bet == "X": return "WYGRANA" if hg == ag else "PRZEGRANA"
@@ -290,16 +288,12 @@ def evaluate_bet(bet_type, r):
     if bet == "X2": return "WYGRANA" if hg <= ag else "PRZEGRANA"
     if bet == "12": return "WYGRANA" if hg != ag else "PRZEGRANA"
     
-    tg = get_num('Total_Goals')
-    if bet.startswith("O") and tg is not None and "_" not in bet: return "WYGRANA" if tg > float(bet[1:]) else "PRZEGRANA"
-    if bet.startswith("U") and tg is not None and "_" not in bet: return "WYGRANA" if tg < float(bet[1:]) else "PRZEGRANA"
-    
-    ht_h = get_num('HTHG')
-    ht_a = get_num('HTAG')
-    if bet.startswith("HT_U") and ht_h is not None and ht_a is not None: return "WYGRANA" if (ht_h + ht_a) < float(bet[4:]) else "PRZEGRANA"
-    if bet.startswith("2H_U") and tg is not None and ht_h is not None and ht_a is not None: return "WYGRANA" if (tg - (ht_h + ht_a)) < float(bet[4:]) else "PRZEGRANA"
-    if bet.startswith("HU") and hg is not None: return "WYGRANA" if hg < float(bet[2:]) else "PRZEGRANA"
-    if bet.startswith("AU") and ag is not None: return "WYGRANA" if ag < float(bet[2:]) else "PRZEGRANA"
+    if bet.startswith("O") and pd.notna(tg) and "_" not in bet: return "WYGRANA" if tg > float(bet[1:]) else "PRZEGRANA"
+    if bet.startswith("U") and pd.notna(tg) and "_" not in bet: return "WYGRANA" if tg < float(bet[1:]) else "PRZEGRANA"
+    if bet.startswith("HT_U") and pd.notna(ht_hg) and pd.notna(ht_ag): return "WYGRANA" if (ht_hg + ht_ag) < float(bet[4:]) else "PRZEGRANA"
+    if bet.startswith("2H_U") and pd.notna(tg) and pd.notna(ht_hg) and pd.notna(ht_ag): return "WYGRANA" if (tg - (ht_hg + ht_ag)) < float(bet[4:]) else "PRZEGRANA"
+    if bet.startswith("HU") and pd.notna(hg): return "WYGRANA" if hg < float(bet[2:]) else "PRZEGRANA"
+    if bet.startswith("AU") and pd.notna(ag): return "WYGRANA" if ag < float(bet[2:]) else "PRZEGRANA"
 
     if bet.startswith("MG_"):
         try:
@@ -307,9 +301,7 @@ def evaluate_bet(bet_type, r):
             return "WYGRANA" if low <= tg <= high else "PRZEGRANA"
         except: pass
 
-    hc = get_num('Corners_H')
-    ac = get_num('Corners_A')
-    if hc is not None and ac is not None:
+    if pd.notna(hc) and pd.notna(ac):
         tc = hc + ac
         if bet.startswith("C_U"): return "WYGRANA" if tc < float(bet[3:]) else "PRZEGRANA"
         if bet.startswith("C_O"): return "WYGRANA" if tc > float(bet[3:]) else "PRZEGRANA"
@@ -318,17 +310,13 @@ def evaluate_bet(bet_type, r):
         if bet.startswith("HC_O"): return "WYGRANA" if hc > float(bet[4:]) else "PRZEGRANA"
         if bet.startswith("AC_O"): return "WYGRANA" if ac > float(bet[4:]) else "PRZEGRANA"
 
-    sh = get_num('Shots_H')
-    sa = get_num('Shots_A')
-    if sh is not None and sa is not None:
-        if bet == "S_1": return "WYGRANA" if sh > sa else "PRZEGRANA"
-        if bet == "S_2": return "WYGRANA" if sh < sa else "PRZEGRANA"
+    if pd.notna(hs) and pd.notna(away_s):
+        if bet == "S_1": return "WYGRANA" if hs > away_s else "PRZEGRANA"
+        if bet == "S_2": return "WYGRANA" if hs < away_s else "PRZEGRANA"
     
-    sth = get_num('ShotsTarget_H')
-    sta = get_num('ShotsTarget_A')
-    if sth is not None and sta is not None:
-        if bet == "ST_1": return "WYGRANA" if sth > sta else "PRZEGRANA"
-        if bet == "ST_2": return "WYGRANA" if sth < sta else "PRZEGRANA"
+    if pd.notna(hst) and pd.notna(ast):
+        if bet == "ST_1": return "WYGRANA" if hst > ast else "PRZEGRANA"
+        if bet == "ST_2": return "WYGRANA" if hst < ast else "PRZEGRANA"
 
     return "DO RĘCZNEJ KONTROLI"
 
@@ -359,14 +347,14 @@ def scrape_be_worker(args):
     bypass_used, success = False, False
 
     for attempt in range(max_retries):
-        if attempt > 0: time.sleep(random.uniform(2, 6) * attempt) # Lekko zredukowany sleep
+        if attempt > 0: time.sleep(random.uniform(5, 10) * attempt)
         try:
-            response = scraper_be.get(url_clean, timeout=(15, 30))
+            response = scraper_be.get(url_clean, timeout=30)
             if response.status_code == 200: success = True; break
             elif response.status_code in [429, 403]: bypass_used = True
             else: break
         except Exception:
-            if attempt < max_retries - 1: time.sleep(2)
+            if attempt < max_retries - 1: time.sleep(3)
 
     if not success or response is None or response.status_code != 200:
         final_code = response.status_code if response else "Brak odpowiedzi"
@@ -612,6 +600,12 @@ if not fixtures_df.empty:
     fixtures_df['Date_str'] = pd.to_datetime(fixtures_df['Date'], errors='coerce').dt.strftime('%Y%m%d').fillna('99999999')
     fixtures_df['Match_ID'] = fixtures_df['Date_str'] + "_" + fixtures_df['Home'].str[:3].str.upper() + "_" + fixtures_df['Away'].str[:3].str.upper()
     fixtures_df['Termin'] = fixtures_df['Date'].apply(categorize_date)
+    
+    # --- OGRANICZENIE DO 7 DNI (FIXTURES I ALL_PREDICTIONS) ---
+    dozwolone_terminy = ["Dziś", "Jutro", "Za 2 dni", "Za 3 dni", "Za 4 dni", "Za 5 dni", "Za 6 dni", "Za 7 dni"]
+    fixtures_df = fixtures_df[fixtures_df['Termin'].isin(dozwolone_terminy)].copy()
+    # ----------------------------------------------------------
+
     fixtures_df['Status_Kursów'] = np.where(fixtures_df['Odd1'].astype(str).str.strip().isin(["", "-", "nan"]), "Brak Kursów", "Są Kursy")
 
     def get_margin(r):
@@ -625,9 +619,9 @@ results_clean = results_df[list(golden_cols.keys()) + ['HT_Total', 'Total_Corner
 fixtures_clean = fixtures_df[['Match_ID', 'Termin', 'Status_Kursów', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd1', 'OddX', 'Odd2', 'Marża']].rename(columns={'Odd1': 'Odd_1', 'OddX': 'Odd_X', 'Odd2': 'Odd_2'}) if not fixtures_df.empty else pd.DataFrame(columns=['Match_ID', 'Termin', 'Status_Kursów', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd_1', 'Odd_X', 'Odd_2', 'Marża'])
 
 # ==========================================
-# 5. GENEROWANIE TABEL LIGOWYCH I H2H
+# 5. GENEROWANIE TABEL LIGOWYCH
 # ==========================================
-print("Generowanie inteligentnych tabel ligowych (6 Koszyków) oraz zestawień H2H...")
+print("Generowanie inteligentnych tabel ligowych (6 Koszyków)...")
 valid_matches = pd.DataFrame()
 
 if not results_clean.empty:
@@ -640,7 +634,6 @@ if not valid_matches.empty:
     valid_matches['Base_League'] = valid_matches['League'].apply(get_base_league)
     
     # ⚠️ OPTYMALIZACJA WYDAJNOŚCIOWA: GLOBALNA KONWERSJA TYPÓW ⚠️
-    # Przenosimy konwersje z pętli głównej tutaj, co eliminuje złożoność O(N^3)
     valid_matches['FTHG'] = pd.to_numeric(valid_matches['FTHG'], errors='coerce').fillna(0).astype(int)
     valid_matches['FTAG'] = pd.to_numeric(valid_matches['FTAG'], errors='coerce').fillna(0).astype(int)
     valid_matches['HTHG'] = pd.to_numeric(valid_matches['HTHG'], errors='coerce')
@@ -704,28 +697,8 @@ if not league_tables.empty:
     for _, r in league_tables.iterrows():
         team_tiers[(r['League'], r['Team'])] = r['Koszyk']
 
-# --- GENERATOR H2H DLA ZAKŁADKI "H2H_Mecze" ---
-h2h_list = []
-h2h_cols = ["Match_ID", "Nadchodzący Mecz", "Data Meczu", "Liga", "Data H2H", "Gospodarz H2H", "Gość H2H", "Wynik H2H", "Gole HT", "Rożne H2H"]
-df_h2h = pd.DataFrame(columns=h2h_cols)
-
-if not fixtures_clean.empty and not valid_matches.empty:
-    upcoming = fixtures_clean[fixtures_clean['Status_Kursów'] == 'Są Kursy']
-    for _, f in upcoming.iterrows():
-        f_match_id, f_home, f_away, f_date, f_league = f['Match_ID'], f['Home'], f['Away'], f['Date'], f['League']
-        base_lg = get_base_league(f_league)
-        h2h_m = valid_matches[(valid_matches['Base_League'] == base_lg) & (((valid_matches['Home'] == f_home) & (valid_matches['Away'] == f_away)) | ((valid_matches['Home'] == f_away) & (valid_matches['Away'] == f_home)))].head(5)
-        for _, h in h2h_m.iterrows():
-            h2h_list.append([
-                f_match_id, f"{f_home} - {f_away}", f_date, f_league,
-                h['Date'], h['Home'], h['Away'], f"{int(h['FTHG'])}:{int(h['FTAG'])}",
-                str(h['HT_Total']).replace('.0', ''), str(h['Total_Corners']).replace('.0', '')
-            ])
-    if h2h_list:
-        df_h2h = pd.DataFrame(h2h_list, columns=h2h_cols)
-
 # ==========================================================
-# 6. SILNIKI PREDYKCYJNE
+# 6. SILNIKI PREDYKCYJNE (Z centralnym Generatorem Ryzyka)
 # ==========================================================
 all_generated_predictions = []
 
@@ -744,6 +717,7 @@ KOTWICE_KURSOWE = {
     'S_1': 1.34, 'ST_1': 1.64
 }
 
+# NOWE SZABLONY PREMIUM ZGODNIE Z ZALECENIEM
 SZABLONY_PREMIUM = [
     "O0.5+U5.5+HT_U3.5+2H_U3.5+HU3.5+AU3.5",
     "O0.5+U4.5+HT_U3.5+2H_U3.5+HU3.5+AU3.5",
@@ -780,12 +754,15 @@ def add_pred(match_id, termin, date, time, league, home, away, engine, typ, szan
         if kurs_docelowy >= 1.50: kurs_docelowy = round(kurs_docelowy * 0.95, 2)
         elif 1.20 <= kurs_docelowy < 1.50: kurs_docelowy = round(kurs_docelowy * 0.975, 2)
         
+    # Absolutny próg bezpieczeństwa
     if kurs_docelowy < 1.015: 
         kurs_docelowy = 1.01
 
+    # GARBAGE COLLECTOR W LOCIE - POMIJANIE SŁABYCH TYPÓW SOLO
     if engine != "BetBuilder Pro" and "+" not in typ_k and kurs_docelowy < 1.05:
         return
 
+    # --- Centralny Silnik Wyceny Ryzyka (Modyfikacja Medali) ---
     prob_decimal = float(szansa) / 100.0
     if prob_decimal >= 0.95 and kurs_docelowy >= 1.20:
         risk_tag = "🥇 1. ZŁOTY TYP"
@@ -823,13 +800,22 @@ for idx, row in fixtures_clean.iterrows():
     
     o1_raw, ox_raw, o2_raw = row['Odd_1'], row['Odd_X'], row['Odd_2']
 
+    # --- WSPÓLNE BAZY DO ANALIZ ---
     h_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == home) | (valid_matches['Away'] == home))].copy()
     a_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == away) | (valid_matches['Away'] == away))].copy()
-    h_dom = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Home'] == home)]
-    a_wyj = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Away'] == away)]
+    h_dom = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Home'] == home)].copy()
+    a_wyj = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Away'] == away)].copy()
     
     h_tier = team_tiers.get((league, home), 'Koszyk 3')
     a_tier = team_tiers.get((league, away), 'Koszyk 3')
+
+    # PRZYGOTOWANIE BAZY POD EVALUATE_BET DLA SZABLONÓW PREMIUM
+    if len(h_dom) > 0:
+        h_dom['HT_Total'] = pd.to_numeric(h_dom['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(h_dom['HTAG'], errors='coerce').fillna(0)
+        h_dom['2H_Total'] = pd.to_numeric(h_dom['Total_Goals'], errors='coerce').fillna(0) - h_dom['HT_Total']
+    if len(a_wyj) > 0:
+        a_wyj['HT_Total'] = pd.to_numeric(a_wyj['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(a_wyj['HTAG'], errors='coerce').fillna(0)
+        a_wyj['2H_Total'] = pd.to_numeric(a_wyj['Total_Goals'], errors='coerce').fillna(0) - a_wyj['HT_Total']
 
     if len(h_tot_all) > 0:
         h_tot_all['Team_GF'] = np.where(h_tot_all['Home'] == home, h_tot_all['FTHG'], h_tot_all['FTAG'])
@@ -838,7 +824,9 @@ for idx, row in fixtures_clean.iterrows():
         a_tot_all['Team_GF'] = np.where(a_tot_all['Home'] == away, a_tot_all['FTHG'], a_tot_all['FTAG'])
         a_tot_all['Team_GA'] = np.where(a_tot_all['Home'] == away, a_tot_all['FTAG'], a_tot_all['FTHG'])
 
+    # ----------------------------------------------------
     # 6a. 1X PRO
+    # ----------------------------------------------------
     lg_matches = valid_matches[valid_matches['Base_League'] == fixture_base]
     if len(lg_matches) >= 20 and len(h_tot_all) >= 5 and len(a_tot_all) >= 5 and len(h_dom) > 0 and len(a_wyj) > 0:
         lg_home_goals, lg_away_goals = lg_matches['FTHG'].mean(), lg_matches['FTAG'].mean()
@@ -904,7 +892,9 @@ for idx, row in fixtures_clean.iterrows():
                 
             add_pred(match_id, d_termin, d_date, d_time, league, home, away, "1X Pro", typ_kod, round(final_prob*100, 1), round(fair_odd, 2), arg)
 
+    # ----------------------------------------------------
     # 6b. GOAL LINE PRO
+    # ----------------------------------------------------
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
         # Konwersja na słowniki dla szybkości
         h_dom_dict = h_dom.to_dict('records')
@@ -936,11 +926,13 @@ for idx, row in fixtures_clean.iterrows():
                 if h_sm or a_sm: arg += " | ⚠️ Wygładzenie Bayesowskie (Mała próba)"
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Line Pro", f"O{line}", round(avg_prob_o*100, 1), KOTWICE_KURSOWE.get(f"O{line}", 1.10), arg)
 
-    # 6c. BETBUILDER PRO
+    # ----------------------------------------------------
+    # 6c. BETBUILDER PRO Z SZABLONAMI PREMIUM
+    # ----------------------------------------------------
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
+        # Pętla po długich taśmach narzuconych przez użytkownika
         h_dom_dict = h_dom.to_dict('records')
         a_wyj_dict = a_wyj.to_dict('records')
-        
         for tpl in SZABLONY_PREMIUM:
             p_h, h_th, h_tl, h_sm = get_weighted_stats(h_dom_dict, None, lambda r, code=tpl: evaluate_bet(code, r) == "WYGRANA", prior_prob=0.85)
             p_a, a_th, a_tl, a_sm = get_weighted_stats(a_wyj_dict, None, lambda r, code=tpl: evaluate_bet(code, r) == "WYGRANA", prior_prob=0.85)
@@ -948,14 +940,16 @@ for idx, row in fixtures_clean.iterrows():
             
             if avg_p >= 0.85:
                 kursy_skl = [KOTWICE_KURSOWE.get(sk.strip(), 1.05) for sk in tpl.split("+")]
-                est_odd = calc_betbuilder_copula(kursy_skl, rho=0.45)
+                est_odd = calc_betbuilder_copula(kursy_skl, rho=0.45) # Lekko wyższe rho dla długich układów
                 if est_odd < 1.15: est_odd = 1.15
                 
                 arg = f"Szablon Premium | Szansa bazowa układu: {round(avg_p*100)}% | Trafienia D/W: Gosp {h_th}/{h_tl}, Gość {a_th}/{a_tl}"
                 if h_sm or a_sm: arg += " | ⚠️ Bayes"
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "BetBuilder Pro", tpl, round(avg_p*100, 1), round(est_odd, 2), arg)
 
+    # ----------------------------------------------------
     # 6d. MULTIGOL
+    # ----------------------------------------------------
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
         h_last_goals = get_last_match_goals(fixture_base, home)
         a_last_goals = get_last_match_goals(fixture_base, away)
@@ -989,7 +983,9 @@ for idx, row in fixtures_clean.iterrows():
                 if was_sm: arg += " | ⚠️ Wygładzenie Bayesowskie (Mała próba)"
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Multigol", typ_kod, round(pewnosc*100, 1), round(est_odd, 2), arg)
 
+    # ----------------------------------------------------
     # 6e. CORNERS PRO
+    # ----------------------------------------------------
     valid_corners = valid_matches.dropna(subset=['Corners_H', 'Corners_A']).copy()
     h_tot_all_c = valid_corners[(valid_corners['Base_League'] == fixture_base) & ((valid_corners['Home'] == home) | (valid_corners['Away'] == home))].copy()
     a_tot_all_c = valid_corners[(valid_corners['Base_League'] == fixture_base) & ((valid_corners['Home'] == away) | (valid_corners['Away'] == away))].copy()
@@ -1055,9 +1051,17 @@ for idx, row in fixtures_clean.iterrows():
             if any_smoothed: uzasadnienie += " | ⚠️ Wygładzenie Bayesowskie (Mała próba)"
             add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Corners Pro", "+".join(c_blocks_code), round(np.mean(c_probs)*100, 1), round(est_odd, 2), uzasadnienie)
 
+    # ----------------------------------------------------
     # 6f. SHOTS PRO
+    # ----------------------------------------------------
     valid_shots = valid_matches.dropna(subset=['Shots_H', 'Shots_A', 'ShotsTarget_H', 'ShotsTarget_A']).copy()
     if not valid_shots.empty:
+        valid_shots['Shots_H'] = pd.to_numeric(valid_shots['Shots_H'], errors='coerce')
+        valid_shots['Shots_A'] = pd.to_numeric(valid_shots['Shots_A'], errors='coerce')
+        valid_shots['ShotsTarget_H'] = pd.to_numeric(valid_shots['ShotsTarget_H'], errors='coerce')
+        valid_shots['ShotsTarget_A'] = pd.to_numeric(valid_shots['ShotsTarget_A'], errors='coerce')
+        valid_shots = valid_shots.dropna(subset=['Shots_H', 'Shots_A', 'ShotsTarget_H', 'ShotsTarget_A'])
+        
         h_tot_all_s = valid_shots[(valid_shots['Base_League'] == fixture_base) & ((valid_shots['Home'] == home) | (valid_shots['Away'] == home))].copy()
         a_tot_all_s = valid_shots[(valid_shots['Base_League'] == fixture_base) & ((valid_shots['Home'] == away) | (valid_shots['Away'] == away))].copy()
         h_dom_s = valid_shots[(valid_shots['Base_League'] == fixture_base) & (valid_shots['Home'] == home)]
@@ -1111,7 +1115,9 @@ for idx, row in fixtures_clean.iterrows():
                 if any_sm: arg += " | ⚠️ Wygładzenie Bayesowskie (Mała próba)"
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Shots Pro", "ST_1", round(prob_h_st*100, 1), round(est_odd_st, 2), arg)
 
+    # ----------------------------------------------------
     # 6g. ZIMNY PRYSZNIC
+    # ----------------------------------------------------
     if h_tier in ['Koszyk 1', 'Koszyk 2'] and len(h_tot_all) > 0:
         last_m = h_tot_all.iloc[0] 
         if last_m['Away'] == home and last_m['FTHG'] >= last_m['FTAG']:
@@ -1121,7 +1127,9 @@ for idx, row in fixtures_clean.iterrows():
                 arg = f"Gospodarz ({h_tier}) szuka rewanżu u siebie po stracie punktów na wyjeździe z dużo słabszym rywalem ({opp_tier})."
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Cold Shower", "1", 85.0, round(est_odd, 2), arg)
 
-    # 6h. UKRYTA FORMA
+    # ----------------------------------------------------
+    # 6h. UKRYTA FORMA (Proxy xG)
+    # ----------------------------------------------------
     for team, is_home in [(home, True), (away, False)]:
         t_past = valid_shots[(valid_shots['Base_League'] == fixture_base) & ((valid_shots['Home'] == team) | (valid_shots['Away'] == team))]
         if len(t_past) >= 3:
@@ -1144,7 +1152,9 @@ for idx, row in fixtures_clean.iterrows():
                     arg = f"Wysokie xG. W 3 ost. meczach zespół oddał {int(st_for)} celnych strzałów, ale zdobył tylko {int(g_for)} goli."
                     add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Hidden Form", typ_kod, 80.0, round(est_odd, 2), arg)
 
+    # ----------------------------------------------------
     # 6i. ANOMALIE ROŻNYCH
+    # ----------------------------------------------------
     valid_corners_all = valid_matches.dropna(subset=['Corners_H', 'Corners_A']).copy()
     for team, is_home in [(home, True), (away, False)]:
         t_past = valid_corners_all[(valid_corners_all['Base_League'] == fixture_base) & ((valid_corners_all['Home'] == team) | (valid_corners_all['Away'] == team))].copy()
@@ -1159,7 +1169,9 @@ for idx, row in fixtures_clean.iterrows():
                 arg = f"Pęknięta seria. Średnia sezonu zespołu: {round(season_avg, 2)}. Średnia 2 ost. meczów: tylko {round(last_2_avg, 2)}."
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Corner Anomalies", typ_kod, 82.0, round(est_odd, 2), arg)
 
+    # ----------------------------------------------------
     # 6j. ANOMALIE BRAMKOWE
+    # ----------------------------------------------------
     t_past = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == home) | (valid_matches['Away'] == away))]
     if len(t_past) >= 10:
         season_avg = t_past['Total_Goals'].mean()
@@ -1173,11 +1185,13 @@ for idx, row in fixtures_clean.iterrows():
             arg = f"Anomalia underowa. Średnia sezonu obu ekip: {round(season_avg, 2)}. Ost. 2 mecze: tylko {round(last_2_avg, 2)} goli. Oczekiwane przełamanie."
             add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Anomalies", "O1.5", 85.0, round(est_odd, 2), arg)
 
+
 # ==========================================================
 # 7. SYSTEM ŚLEDZENIA SKUTECZNOŚCI I YIELDU (BACKTESTER)
 # ==========================================================
 print("Inicjalizacja Modułu Backtestingu (Śledzenie Skuteczności)...")
 
+# CZYSZCZENIE ZBĘDNYCH KOLUMN 
 cols_all_pred = ["Match_ID", "Zagrane", "Wyslij_AKO", "Kupon_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status"]
 cols_historia = ["Match_ID", "Zagrane", "Kupon_ID", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 
@@ -1187,6 +1201,7 @@ if not df_all_predictions.empty:
     df_all_predictions['Przedzial_Kursowy'] = df_all_predictions.apply(global_recalc_przedzial, axis=1)
     consensus_counts = df_all_predictions.groupby('Match_ID').size().to_dict()
     df_all_predictions['Consensus_Score'] = df_all_predictions['Match_ID'].map(consensus_counts)
+    
     df_all_predictions['Unikalny_Klucz'] = df_all_predictions['Match_ID'].astype(str) + "_" + df_all_predictions['Engine'].astype(str) + "_" + df_all_predictions['Typ'].astype(str)
     
     map_wyslij, map_zagrane, map_kupon = {}, {}, {}
@@ -1231,6 +1246,7 @@ if not df_all_predictions.empty:
     if 'Termin' in nowe_typy_df.columns: nowe_typy_df = nowe_typy_df.drop(columns=['Termin'])
     if 'Wyslij_AKO' in nowe_typy_df.columns: nowe_typy_df = nowe_typy_df.drop(columns=['Wyslij_AKO'])
     
+    # Dodajemy Profit i Yield na sztywno do DF przed włączeniem w Historię
     nowe_typy_df['Profit'] = ""
     nowe_typy_df['Yield_Wplyw'] = ""
         
@@ -1244,6 +1260,7 @@ if not df_all_predictions.empty:
         
         nowe_typy_df['Unikalny_Klucz'] = nowe_typy_df['Match_ID'].astype(str) + "_" + nowe_typy_df['Engine'].astype(str) + "_" + nowe_typy_df['Typ'].astype(str)
         
+        # --- ZABEZPIECZENIE: Globalny, sztywny update tagów do Historii ze wszystkich wpisów All_Predictions
         for idx in df_historia.index:
             klucz = df_historia.at[idx, 'Unikalny_Klucz']
             if klucz in map_kupon and str(map_kupon[klucz]).strip() != "":
@@ -1287,6 +1304,7 @@ if not df_historia.empty and not results_clean.empty:
             match_id = str(row["Match_ID"])
             match_row = results_dict.get(match_id)
             
+            # --- ZABEZPIECZENIE: Przesunięcia czasowe (Fuzzy Match) ---
             if not match_row:
                 fuzzy = results_clean[(results_clean['Home'] == row['Gospodarz']) & (results_clean['Away'] == row['Gość'])].copy()
                 if not fuzzy.empty:
@@ -1298,6 +1316,7 @@ if not df_historia.empty and not results_clean.empty:
                             if not fuzzy.empty:
                                 match_row = fuzzy.sort_values('Diff').iloc[0].to_dict()
                     except: pass
+            # -----------------------------------------------------------
             
             if match_row and pd.notna(match_row.get('FTHG')):
                 nowy_status = evaluate_bet(row["Typ"], match_row)
@@ -1317,7 +1336,7 @@ if not df_historia.empty and not results_clean.empty:
                         df_historia.at[idx, "Yield_Wplyw"] = "-100.0"
                 except: pass
 
-# --- 7b. SYSTEM ŚLEDZENIA AKO ---
+# --- 7b. SYSTEM ŚLEDZENIA AKO (PORTFEL REALNY) ---
 cols_ako = ["Kupon_ID", "Data_Zawarcia", "Mecze_Skrot", "Liczba_Zdarzen", "Kurs_AKO", "Stawka", "Jednostki", "Status_AKO", "Wygrana_Brutto", "Profit_Netto", "Wyslij_Podsumowanie", "Telegram_Status"]
 try:
     ws_ako = spreadsheet.worksheet("Kupony_AKO")
@@ -1411,15 +1430,25 @@ if not df_historia.empty:
     df_historia = pd.concat([df_oczek, df_rozst]).drop(columns=['Data_Sort', 'Unikalny_Klucz'], errors='ignore')
 
 if not df_all_predictions.empty: 
+    # TWORZYMY DATĘ DO SORTOWANIA I OGRANICZAMY DO NAJBLIŻSZYCH MECZÓW
     df_all_predictions['Data_Sort'] = pd.to_datetime(df_all_predictions['Data'].astype(str) + ' ' + df_all_predictions['Godzina'].astype(str).replace('', '00:00').replace('-', '00:00'), errors='coerce')
+    # Odfiltruj stare mecze (zostawiamy te od -3 godzin wstecz)
     now = datetime.now()
     df_all_predictions = df_all_predictions[df_all_predictions['Data_Sort'] >= now - timedelta(hours=3)]
+    # Sortowanie: ascending=True dla daty daje najbliższe daty na górze
     df_all_predictions = df_all_predictions.sort_values(by=["Data_Sort", "Szansa"], ascending=[True, False]).drop(columns=['Data_Sort', 'Unikalny_Klucz'], errors='ignore')
 
 # ==========================================
 # 8. WYSYŁKA GOOGLE SHEETS
 # ==========================================
-all_sheets = ["Summary", "Fixtures", "Results", "League_Tables", "H2H_Mecze", "Historia_Typow", "All_Predictions", "Kupony_AKO"]
+all_sheets = ["Summary", "Fixtures", "Results", "League_Tables", "Historia_Typow", "All_Predictions", "Kupony_AKO"]
+
+# --- USUNIĘCIE ZAKŁADKI H2H_Mecze (JEŚLI ISTNIEJE) ---
+try:
+    ws_h2h = spreadsheet.worksheet("H2H_Mecze")
+    spreadsheet.del_worksheet(ws_h2h)
+except:
+    pass
 
 for sheet_name in all_sheets:
     try: spreadsheet.worksheet(sheet_name)
@@ -1439,11 +1468,6 @@ print("Wysyłam Tabele Ligowe...")
 time.sleep(1.5)
 spreadsheet.worksheet("League_Tables").clear()
 if not league_tables.empty: spreadsheet.worksheet("League_Tables").update(prepare_for_gsheets(league_tables))
-
-print("Wysyłam Analizę H2H do Google Sheets...")
-time.sleep(1.5)
-spreadsheet.worksheet("H2H_Mecze").clear()
-if not df_h2h.empty: spreadsheet.worksheet("H2H_Mecze").update(prepare_for_gsheets(df_h2h))
 
 print("Wysyłam Logi Systemu Backtestingu (Historia_Typow)...")
 time.sleep(1.5)
@@ -1468,7 +1492,7 @@ summary_data = [
     ["Przetworzone Typy w Historii", len(df_historia), ""],
     ["Wygenerowane Predykcje (Suma)", len(df_all_predictions), ""]
 ]
-
+# Dodanie logów z powrotem do podsumowania
 summary_data.append(["", "", ""])
 summary_data.append(["==== RAPORT POBIERANIA (LOGI) ====", "", ""])
 summary_data.append(["Źródło", "URL / Plik", "Status"])
@@ -1481,5 +1505,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Wyeliminowano problem O(N^3) przez natywną optymalizację do słowników oraz globalną prekomputację Pandas.")
+print("Pomyślnie zaimplementowano filtr najbliższych 7 dni oraz usunięto zakładkę H2H_Mecze.")
 print("=" * 60)
