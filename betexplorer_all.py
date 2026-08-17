@@ -438,7 +438,9 @@ def scrape_ss_worker(args):
     # Ochrona przed nadpisywaniem nagłówków między wątkami
     headers = base_headers.copy()
     if SOCCERSTATS_COOKIE:
-        headers["Cookie"] = SOCCERSTATS_COOKIE
+        # AUTOMATYCZNA SANITYZACJA: Usuwamy entery (\n, \r) i ewentualne spacje na brzegach
+        czyste_cookie = SOCCERSTATS_COOKIE.replace('\n', '').replace('\r', '').strip()
+        headers["Cookie"] = czyste_cookie
 
     # Inicjalizacja scrapera udającego pełnoprawną przeglądarkę
     skaner_ss = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True})
@@ -447,6 +449,7 @@ def scrape_ss_worker(args):
         response_ss = skaner_ss.get(url_ss_clean, headers=headers, timeout=30)
         
         if response_ss.status_code != 200:
+# ... (reszta funkcji pozostaje bez zmian) ...
             local_report.append(["SoccerStats", url_ss_clean, f"BŁĄD HTTP: Kod {response_ss.status_code}"])
             return local_data, local_report
 
