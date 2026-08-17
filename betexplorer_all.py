@@ -1434,8 +1434,9 @@ except: pass
 
 print("Wysyłam Czysty Terminarz do Google Sheets...")
 time.sleep(1.5)
-spreadsheet.worksheet("Fixtures").clear()
-if not fixtures_clean.empty: spreadsheet.worksheet("Fixtures").update(prepare_for_gsheets(fixtures_clean))
+ws_fix = spreadsheet.worksheet("Fixtures")
+ws_fix.clear()
+ws_fix.update(prepare_for_gsheets(fixtures_clean) if not fixtures_clean.empty else [fixtures_clean.columns.tolist()])
 
 print("Wysyłam Historię ze statystykami do Google Sheets...")
 time.sleep(1.5)
@@ -1444,13 +1445,15 @@ if not results_clean.empty: spreadsheet.worksheet("Results").update(prepare_for_
 
 print("Wysyłam Tabele Ligowe...")
 time.sleep(1.5)
-spreadsheet.worksheet("League_Tables").clear()
-if not league_tables.empty: spreadsheet.worksheet("League_Tables").update(prepare_for_gsheets(league_tables))
+ws_tbl = spreadsheet.worksheet("League_Tables")
+ws_tbl.clear()
+ws_tbl.update(prepare_for_gsheets(league_tables) if not league_tables.empty else [league_tables.columns.tolist()])
 
 print("Wysyłam Analizę H2H do Google Sheets...")
 time.sleep(1.5)
-spreadsheet.worksheet("H2H_Mecze").clear()
-if not df_h2h.empty: spreadsheet.worksheet("H2H_Mecze").update(prepare_for_gsheets(df_h2h))
+ws_h2h = spreadsheet.worksheet("H2H_Mecze")
+ws_h2h.clear()
+ws_h2h.update(prepare_for_gsheets(df_h2h) if not df_h2h.empty else [df_h2h.columns.tolist()])
 
 print("Wysyłam Logi Systemu Backtestingu (Historia_Typow)...")
 time.sleep(1.5)
@@ -1464,8 +1467,9 @@ if not df_ako.empty: ws_ako.update(prepare_for_gsheets(df_ako))
 
 print("Wysyłam Ujednoliconą Listę Wszystkich Predykcji (All_Predictions)...")
 time.sleep(1.5)
-spreadsheet.worksheet("All_Predictions").clear()
-if not df_all_predictions.empty: spreadsheet.worksheet("All_Predictions").update(prepare_for_gsheets(df_all_predictions))
+ws_pred = spreadsheet.worksheet("All_Predictions")
+ws_pred.clear()
+ws_pred.update(prepare_for_gsheets(df_all_predictions) if not df_all_predictions.empty else [cols_all_pred])
 
 print("Wysyłam Zaawansowane Logi Pobierania (Summary) do Google Sheets...")
 pred_breakdown = []
