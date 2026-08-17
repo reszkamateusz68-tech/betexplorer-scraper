@@ -18,9 +18,8 @@ import concurrent.futures
 today = datetime.now()
 
 # ==========================================================
-# 0. INICJALIZACJA GOOGLE SHEETS (NA SAMYM POCZĄTKU)
+# 0. INICJALIZACJA GOOGLE SHEETS
 # ==========================================================
-# Przeniesienie inicjalizacji na górę gwarantuje, że Sekcja 2 widzi zmienną `spreadsheet`
 scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 if os.path.exists("credentials.json"):
     creds = Credentials.from_service_account_file("credentials.json", scopes=scope)
@@ -422,112 +421,118 @@ else: df["Time"] = pd.Series(dtype='object')
 fixtures_df = df[df["Type"] == "Fixture"].copy()
 results_df = df[df["Type"] == "Result"].copy()
 
-# ==========================================
-# 2. SEKWENCYJNE POBIERANIE Z SOCCERSTATS (IMPORTHTML HYBRID)
-# ==========================================
-# Używamy Google Sheets IMPORTHTML by ominąć WAF na GitHub Actions
-def parse_ss_rows_data(rows_data):
-    parsed = []
-    for row in rows_data:
-        if not isinstance(row, list) or len(row) < 4: continue
-        teksty = [str(k).strip() for k in row if str(k).strip()]
-        
-        wynik_index = next((idx for idx, val in enumerate(teksty) 
-                            if re.search(r'^\d+\s*[-:]\s*\d+$', val.replace("*", "").strip()) and 1 <= idx <= 5), -1)
-        
-        if wynik_index != -1:
-            gospodarz = teksty[wynik_index - 1].strip()
-            wynik_raw = teksty[wynik_index].strip()
-            gosc = teksty[wynik_index + 1].strip() if wynik_index + 1 < len(teksty) else ""
+# ==========================================================
+# 2. POBIERANIE Z SOCCERSTATS (Z AUTORYZACJĄ COOKIE)
+# ==========================================================
 
-            if not gospodarz or not gosc or "HOME" in gospodarz.upper() or gospodarz == gosc:
+# ⚠️ TUTAJ WKLEJ SKOPIOWANE COOKIE Z PRZEGLĄDARKI ⚠️
+SOCCERSTATS_COOKIE = "vpl=1; tz=60; usprivacy=1---; _gid=GA1.2.592421716.1786952949; FCCDCF=%5Bnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2C%5B%5B32%2C%22%5B%5C%228500bd73-6ac3-43ec-9d29-8f5a5d6be8c8%5C%22%2C%5B1786952949%2C332000000%5D%5D%22%5D%5D%5D; euconsent-v2=CQpFxYAQpFxYAAKA9AENCsFgAAAAAEPgABpYAAAZgABMNDogDLIgUCBQEIIEACgrCACgQBAAAkBRAQAmDAhyBgAusIkAIAUAAQQAgABBgACAAASABCIAIACAQAgQCBQABgAQBAQAMDAAGAChEAgABAdAxSAggECwASIwoDBAhAAQCAlsqEEoGBBHCFIscAggREwUAACIABUBAIB4WAgJKCViQQBcQXQAIAAAAUYIoCKQkwBRUGQLQVgScBkaYAg-YJEkOgiAJghIyDIhJUEg8UxRAghyA2KWYA6eIKAGXayQh_qBZsAXIl2HUgAA.IMwtR_G__bXlv-bb36btkeYxf9_hr7sQxBgbIsm4FzLvW7JwG32EbJEyatiIKmRIAu3DBIQNtHBjURUChKIAVrzDsaE2U4TtKJ-BkiHMZYytQCExvm4tjeQCZ4ur_90d0mR-t6dr-2dzy27hnn3a9fuS1UJydKYetHfv-ZhOS-_IU9_x-_4v4_MbpEm0eSVv9tUtt4zc64vv6dpuxt-Tyff6f__f73fW7X__e__33_8qX3_r76-___3__v___ff_________9__-_______4.YAAAAAAAAAAA; addtl_consent=2~~dv.20.43.46.55.57.61.70.83.89.93.108.117.122.124.135.143.144.147.149.159.161.184.192.196.211.228.230.236.239.255.259.266.272.286.291.311.313.314.320.322.323.327.340.358.367.370.371.385.407.415.424.429.430.436.445.469.486.491.494.495.522.523.540.550.560.568.574.576.587.591.621.723.737.797.798.802.803.817.820.827.839.864.899.904.922.931.938.955.959.979.981.985.986.1003.1027.1031.1033.1040.1046.1047.1048.1051.1053.1067.1092.1095.1097.1099.1107.1109.1126.1135.1143.1149.1152.1162.1166.1171.1186.1188.1192.1205.1215.1220.1226.1227.1230.1252.1268.1270.1276.1284.1290.1301.1307.1312.1329.1342.1345.1356.1362.1365.1375.1403.1415.1416.1419.1421.1423.1440.1449.1455.1495.1512.1514.1516.1525.1540.1548.1555.1558.1567.1570.1577.1579.1583.1584.1598.1603.1616.1638.1651.1653.1659.1660.1661.1667.1677.1678.1682.1697.1699.1712.1716.1720.1721.1725.1732.1735.1745.1750.1753.1782.1786.1794.1800.1808.1810.1825.1827.1832.1838.1840.1843.1845.1859.1870.1878.1880.1882.1889.1898.1911.1917.1928.1929.1942.1944.1958.1962.1963.1964.1967.1968.1969.1978.1985.1987.2003.2008.2016.2027.2035.2038.2039.2044.2047.2052.2056.2064.2068.2069.2072.2074.2084.2088.2090.2103.2107.2109.2115.2124.2130.2133.2135.2137.2140.2141.2147.2156.2166.2177.2186.2205.2213.2216.2219.2220.2222.2223.2224.2225.2227.2234.2251.2253.2262.2271.2275.2278.2279.2282.2295.2299.2309.2312.2316.2322.2325.2328.2331.2335.2336.2343.2354.2358.2359.2370.2373.2376.2377.2400.2403.2405.2406.2410.2411.2414.2415.2416.2418.2425.2427.2440.2447.2453.2461.2465.2468.2472.2477.2484.2486.2488.2493.2498.2501.2506.2510.2517.2526.2527.2531.2534.2535.2542.2552.2559.2564.2567.2568.2569.2571.2572.2575.2577.2579.2583.2584.2589.2595.2596.2604.2605.2609.2610.2612.2614.2621.2624.2627.2628.2629.2633.2636.2639.2642.2643.2645.2646.2650.2651.2652.2656.2657.2658.2660.2661.2669.2670.2677.2681.2684.2687.2689.2690.2695.2698.2699.2713.2714.2729.2739.2767.2768.2770.2772.2778.2784.2787.2791.2792.2798.2801.2805.2812.2813.2814.2816.2817.2821.2822.2824.2826.2827.2830.2831.2832.2833.2834.2838.2839.2844.2846.2849.2850.2852.2854.2860.2862.2863.2865.2867.2869.2872.2874.2875.2878.2880.2881.2882.2883.2884.2886.2887.2888.2889.2891.2893.2894.2895.2897.2898.2900.2901.2908.2909.2916.2917.2918.2920.2922.2923.2927.2929.2930.2931.2940.2941.2947.2949.2950.2956.2958.2961.2963.2964.2965.2966.2968.2972.2973.2974.2975.2979.2980.2981.2983.2985.2986.2987.2994.2995.2997.2999.3000.3001.3002.3003.3005.3008.3009.3010.3012.3016.3017.3018.3019.3023.3028.3031.3034.3038.3043.3051.3052.3053.3055.3058.3059.3063.3066.3073.3074.3075.3076.3077.3089.3090.3093.3094.3095.3097.3099.3100.3106.3107.3109.3112.3117.3119.3120.3126.3127.3128.3130.3133.3135.3136.3137.3145.3149.3151.3153.3155.3165.3167.3169.3172.3173.3177.3182.3184.3185.3186.3187.3188.3189.3190.3194.3196.3200.3201.3209.3210.3213.3214.3215.3217.3218.3222.3223.3225.3226.3227.3228.3230.3231.3233.3234.3235.3236.3237.3238.3240.3244.3250.3251.3253.3254.3257.3260.3266.3270.3272.3286.3288.3289.3290.3292.3293.3296.3299.3300.3303.3306.3307.3309.3314.3315.3316.3318.3323.3324.3328.3330.3331.3531.3631.3731.3831.4131.4531.4631.4731.4831.5231.6731.6931.7131.7235.7831.7931.8931.10231.10631.10831.11031.11531.11631.13431.13632.13731.14034.14133.14237.15731.16831.16931.21233.21731.23031.25131.25931.26031.26631.27731.27831.28031.28332.28731.29631.30331.30532.30732.32531.33931.34231.34631.34731.36831.39131.39531.40632.41131.41531.43631.43731.43831.45931.47232.47531.48131.49231.49332.49431.50831.52831.54231.55631.56831.56931.57131.57231.57531.57931.58131.58631.59831.59832.60731.60831.60931.61931.63831; IABGPP_HDR_GppString=DBABMA~CQpFxYAQpFxYAAKA9AENCsFgAAAAAEPgABpYAAAZgABMNDogDLIgUCBQEIIEACgrCACgQBAAAkBRAQAmDAhyBgAusIkAIAUAAQQAgABBgACAAASABCIAIACAQAgQCBQABgAQBAQAMDAAGAChEAgABAdAxSAggECwASIwoDBAhAAQCAlsqEEoGBBHCFIscAggREwUAACIABUBAIB4WAgJKCViQQBcQXQAIAAAAUYIoCKQkwBRUGQLQVgScBkaYAg-YJEkOgiAJghIyDIhJUEg8UxRAghyA2KWYA6eIKAGXayQh_qBZsAXIl2HUgAA.IMwtR_G__bXlv-bb36btkeYxf9_hr7sQxBgbIsm4FzLvW7JwG32EbJEyatiIKmRIAu3DBIQNtHBjURUChKIAVrzDsaE2U4TtKJ-BkiHMZYytQCExvm4tjeQCZ4ur_90d0mR-t6dr-2dzy27hnn3a9fuS1UJydKYetHfv-ZhOS-_IU9_x-_4v4_MbpEm0eSVv9tUtt4zc64vv6dpuxt-Tyff6f__f73fW7X__e__33_8qX3_r76-___3__v___ff_________9__-_______4.YAAAAAAAAAAA; _sharedID=a7fbc8ed-7bb4-4cb0-94b5-6b97d8e6219a; _sharedID_cst=t%2B76YQ%3D%3D; pbjs-unifiedid=%7B%22TDID_LOOKUP%22%3A%22FALSE%22%2C%22TDID_CREATED_AT%22%3A%222026-08-17T07%3A49%3A11%22%7D; pbjs-unifiedid_cst=t%2B76YQ%3D%3D; __eoi=ID=497ac6736560df57:T=1786952951:RT=1786955902:S=AA-AfjbsB14GA3AxG9y4mfwEWxGc; mmode=1; steady-token=OHNSYlFnZXVkWjY5TURvYzdWZzU4UT09; _ga_J8LQZG5L45=GS2.1.s1786952948$o1$g1$t1786955969$j60$l0$h0; _ga=GA1.2.1208505623.1786952949; ASPSESSIONIDCGBQBQBA=CBCKIPMACGIMIAGJGCMHMFMH; cf_clearance=WEXK9SgkThAoclWDnR1MfVLmT7F8MwOoMof1oCtsZpY-1786959493-1.2.1.1-fCXIw9UKMkPSp3li1KsTrP9dpVxyHQcYJjeF9L5F0MDTRynVH8OsJEBHZnZ9aIllwpsnWUqJ_AmjRdYZk1GYMcfFcDFZipr1eDtBVYDOnpOSknqMtx56E6KQcrTy4FhPSzfi96QqZgdEqDOQY9iry5VLLMLpQ9DZSJYxuScEFL7aNvcADrfJpeOnRo151KBG5ho8TB6O9boQulI69SdzNPtQrBige_3h2Z.JCpT5XgXTdoejAtLcANDvFmAcgE0oG2uGb8Oe5NjYcA0ElhBDHXDCuFpdksqjDLjT5ePt2n9PLPHdgojLbLC.o1AUVxyhWA3lWnRG2Ty8xybSiqSPSMhvApferFETb.d6lPMVmRc; sc_is_visitor_unique=rx2749989.1786959496.A982D77FDE164D479557346F7927B684.3.3.3.3.3.3.3.3.3
+" 
+
+def scrape_ss_worker(args):
+    url_ss_clean, base_headers = args
+    time.sleep(random.uniform(1.0, 3.0))
+    local_data = []
+    local_report = []
+
+    # Ochrona przed nadpisywaniem nagłówków między wątkami
+    headers = base_headers.copy()
+    if SOCCERSTATS_COOKIE:
+        headers["Cookie"] = SOCCERSTATS_COOKIE
+
+    # Inicjalizacja scrapera udającego pełnoprawną przeglądarkę
+    skaner_ss = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True})
+    
+    try:
+        response_ss = skaner_ss.get(url_ss_clean, headers=headers, timeout=30)
+        
+        if response_ss.status_code != 200:
+            local_report.append(["SoccerStats", url_ss_clean, f"BŁĄD HTTP: Kod {response_ss.status_code}"])
+            return local_data, local_report
+
+        # Sprawdzenie, czy trafiliśmy na ekran logowania
+        if "Member Login" in response_ss.text or "Member-only content" in response_ss.text:
+            local_report.append(["SoccerStats", url_ss_clean, "BŁĄD: Strona wymaga logowania. Sprawdź i zaktualizuj SOCCERSTATS_COOKIE."])
+            return local_data, local_report
+
+        soup_ss = BeautifulSoup(response_ss.text, "html.parser")
+        rows = soup_ss.find_all("tr")
+        ss_count = 0
+
+        for row in rows:
+            komorki = row.find_all("td")
+            if len(komorki) < 4:
                 continue
 
-            wynik_czysty = wynik_raw.replace("*", "").replace(" ", "").replace("-", ":")
+            row_text = " ".join(k.get_text(" ", strip=True) for k in komorki)
             
+            # Wyszukanie wyniku 1. połowy w formacie (X-Y) lub (X:Y)
+            ht_match = re.search(r'\(\s*(\d+)\s*[-:]\s*(\d+)\s*\)', row_text)
+            
+            home_team, away_team, score_found = None, None, None
             g_gosp_1h, g_gosc_1h = "", ""
-            reszta_tekstow = " ".join(teksty[wynik_index + 2:])
-            ht_match = re.search(r'\(\s*(\d+)\s*[-:]\s*(\d+)\s*\)', reszta_tekstow)
-            if ht_match:
-                try:
-                    g_gosp_1h = int(ht_match.group(1))
-                    g_gosc_1h = int(ht_match.group(2))
-                except: pass
 
-            parsed.append([gospodarz, gosc, wynik_czysty, g_gosp_1h, g_gosc_1h])
-    return parsed
-
-def fetch_ss_via_importhtml(sheet_client, url_clean):
-    ws_temp_name = "_temp_ss_scrape"
-    try:
-        try: ws_temp = sheet_client.worksheet(ws_temp_name)
-        except: ws_temp = sheet_client.add_worksheet(title=ws_temp_name, rows=600, cols=20)
-
-        # SoccerStats na widoku bydate uzywa przewaznie indeksu 11, ale sprawdzamy 10 i 12 dla pewnosci
-        for table_idx in [11, 10, 12]:
-            formula = f'=IMPORTHTML("{url_clean}", "table", {table_idx})'
-            ws_temp.clear()
-            ws_temp.update(values=[[formula]], range_name="A1", value_input_option="USER_ENTERED")
-            
-            # Czekamy na przetworzenie przez Google (max 3 proby co 3 sekundy)
-            for _ in range(3):
-                time.sleep(3.0)
-                vals = ws_temp.get_all_values()
-                if vals and len(vals) > 1 and not str(vals[0][0]).startswith(("#N/A", "Loading", "#ERROR", "#VALUE!")):
-                    parsed = parse_ss_rows_data(vals)
-                    if parsed:
-                        ws_temp.clear() # Posprzataj po sobie
-                        return parsed, f"OK (IMPORTHTML: {len(parsed)} meczów)"
-                    break # Tabela zła lub pusta - sprobuj nastepny indeks
+            # Wyszukanie komórki z wynikiem głównym meczu
+            for idx, td in enumerate(komorki):
+                txt = td.get_text(strip=True).replace("*", "")
+                m_score = re.fullmatch(r'(\d+)[\:\-](\d+)', txt)
+                if m_score and 0 < idx < len(komorki) - 1:
+                    h_candidate = komorki[idx - 1].get_text(strip=True)
+                    a_candidate = komorki[idx + 1].get_text(strip=True)
                     
-        ws_temp.clear()
-        return [], "OSTRZEŻENIE: Brak meczów na stronie (IMPORTHTML pusty)"
+                    if h_candidate and a_candidate and "HOME" not in h_candidate.upper():
+                        home_team = h_candidate
+                        away_team = a_candidate
+                        score_found = f"{m_score.group(1)}:{m_score.group(2)}"
+                        break
+
+            if score_found and home_team and away_team:
+                if ht_match:
+                    try:
+                        g_gosp_1h = int(ht_match.group(1))
+                        g_gosc_1h = int(ht_match.group(2))
+                    except ValueError:
+                        pass
+                
+                local_data.append([home_team, away_team, score_found, g_gosp_1h, g_gosc_1h])
+                ss_count += 1
+
+        if ss_count > 0:
+            local_report.append(["SoccerStats", url_ss_clean, f"OK (Pobrano: {ss_count} wierszy)"])
+        else:
+            local_report.append(["SoccerStats", url_ss_clean, "OSTRZEŻENIE: Brak meczów na stronie (0)"])
     except Exception as e:
-        return [], f"BŁĄD IMPORTHTML: {e}"
+        local_report.append(["SoccerStats", url_ss_clean, f"BŁĄD: {str(e)}"])
+        
+    return local_data, local_report
 
 dane_soccerstats_baza = []
-print("Rozpoczynam stabilne pobieranie z SoccerStats (Sekwencyjnie)...")
+print("Rozpoczynam pobieranie z SoccerStats (Autoryzacja Cookie)...")
 try:
     if os.path.exists("ligi_soccerstats.xlsx"):
         urls_ss = pd.read_excel("ligi_soccerstats.xlsx")["URL"].dropna().tolist()
         
-        # Wykonujemy to w zwykłej pętli, aby uniknąć przeciążenia Google API Quota (Limit żądań zapisu na arkusz)
-        for u in urls_ss:
-            u_clean = str(u).strip()
-            
-            # Normalizacja linku do pełnego widoku bydate (tego z ikonkami, który wymieniłeś)
-            if "pmtype=bydate" not in u_clean:
-                if "?" in u_clean: u_clean += "&pmtype=bydate"
-                else: u_clean += "?pmtype=bydate"
-            
-            matches, rep_msg = [], ""
-            
-            # Najpierw testujemy direct (lokalnie działa, a nuż przejdzie na GH)
-            try:
-                skaner_ss = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True})
-                resp = skaner_ss.get(u_clean, timeout=15)
-                if resp.status_code == 200:
-                    soup_ss = BeautifulSoup(resp.text, "html.parser")
-                    rows_data = [[c.get_text(" ", strip=True) for c in r.find_all(["td", "th"])] for r in soup_ss.find_all("tr")]
-                    matches = parse_ss_rows_data(rows_data)
-                    if matches: rep_msg = f"OK (Direct: {len(matches)} meczów)"
-            except: pass
+        base_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Referer": "https://www.soccerstats.com/"
+        }
+        
+        ss_args = [(str(u).strip(), base_headers) for u in urls_ss]
+        
+        # Ograniczamy do 3 wątków, żeby nie ryzykować blokady sesji w Cloudflare
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            for data_chunk, report_chunk in executor.map(scrape_ss_worker, ss_args):
+                dane_soccerstats_baza.extend(data_chunk)
+                scrape_report.extend(report_chunk)
 
-            # FALLBACK DO GOOGLE SHEETS
-            if not matches:
-                time.sleep(1.0)
-                matches, rep_msg = fetch_ss_via_importhtml(spreadsheet, u_clean)
-            
-            scrape_report.append(["SoccerStats", u_clean, rep_msg])
-            if matches:
-                dane_soccerstats_baza.extend(matches)
-
-        if dane_soccerstats_baza:
+        if dane_soccerstats_baza: 
             ss_df = pd.DataFrame(dane_soccerstats_baza, columns=["Home", "Away", "Score", "Gole_Gosp_1H", "Gole_Gosc_1H"]).drop_duplicates(subset=["Home", "Away", "Score"])
-        else:
+        else: 
             ss_df = pd.DataFrame()
-except Exception as e:
-    scrape_report.append(["SoccerStats", "ligi_soccerstats.xlsx", f"BŁĄD GŁÓWNY: {e}"])
+except Exception as e: 
+    scrape_report.append(["SoccerStats", "Główny proces", f"BŁĄD: {e}"])
     ss_df = pd.DataFrame()
 
 # ==========================================
@@ -693,7 +698,7 @@ if not fixtures_clean.empty and not valid_matches.empty:
         df_h2h = pd.DataFrame(h2h_list, columns=h2h_cols)
 
 # ==========================================================
-# 6. SILNIKI PREDYKCYJNE (Z centralnym Generatorem Ryzyka)
+# 6. SILNIKI PREDYKCYJNE
 # ==========================================================
 all_generated_predictions = []
 
@@ -1021,7 +1026,7 @@ for idx, row in fixtures_clean.iterrows():
         valid_shots = valid_shots.dropna(subset=['Shots_H', 'Shots_A', 'ShotsTarget_H', 'ShotsTarget_A'])
         
         h_tot_all_s = valid_shots[(valid_shots['Base_League'] == fixture_base) & ((valid_shots['Home'] == home) | (valid_shots['Away'] == home))].copy()
-        a_tot_all_s = valid_shots[(valid_shots['Base_League'] == fixture_base) & ((valid_shots['Home'] == away) | (valid_shots['Away'] == away))].copy()
+        a_tot_all_s = valid_shots[(valid_shots['Base_League'] == fixture_base) & ((valid_shots['Home'] == away) | (valid_matches['Away'] == away))].copy()
         h_dom_s = valid_shots[(valid_shots['Base_League'] == fixture_base) & (valid_shots['Home'] == home)]
         a_wyj_s = valid_shots[(valid_shots['Base_League'] == fixture_base) & (valid_shots['Away'] == away)]
 
@@ -1441,5 +1446,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Wymuszono sekwencyjne pobieranie SoccerStats (IMPORTHTML Hybrid) dla 100% stabilności na GitHub Actions.")
+print("Wymuszono autoryzację za pomocą Twojego Cookie przeglądarki, omijając blokady i puste tabele.")
 print("=" * 60)
