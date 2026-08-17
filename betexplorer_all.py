@@ -346,40 +346,73 @@ results_df = df[df["Type"] == "Result"].copy()
 # ==========================================
 def scrape_ss_worker(args):
     url_ss_clean, headers = args
-    time.sleep(random.uniform(0.1, 2.0))
+    # Automatyczne usunięcie parametru paywallu, jeśli został w pliku Excel
+    url_ss_clean = url_ss_clean.replace("&pmtype=bydate", "").replace("?pmtype=bydate", "")
+    if "results.asp" in url_ss_clean and "latest.asp" not in url_ss_clean:
+        url_ss_clean = url_ss_clean.replace("results.asp", "latest.asp")
+
+    time.sleep(random.uniform(0.2, 1.5))
     local_data = []
     local_report = []
-    skaner_ss = cloudscraper.create_scraper(browser={'browser': 'chrome','platform': 'windows','desktop': True})
+    
+    skaner_ss = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True})
+    
     try:
         response_ss = skaner_ss.get(url_ss_clean, headers=headers, timeout=30)
+        if response_ss.status_code != 200:
+            local_report.append(["SoccerStats", url_ss_clean, f"BŁĄD HTTP: Kod {response_ss.status_code}"])
+            return local_data, local_report
+
         soup_ss = BeautifulSoup(response_ss.text, "html.parser")
-        tabela_meczow = next((t for t in soup_ss.find_all("table") if "HT" in t.get_text() and "BTS" in t.get_text() and len(t.find_all("tr")) > 15), None)
+        
+        # Wyszukiwanie wszystkich wierszy zawierających wyniki meczów
+        rows = soup_ss.find_all("tr")
         ss_count = 0
-        if tabela_meczow:
-            for wiersz in tabela_meczow.find_all("tr"):
-                komorki = wiersz.find_all(["td", "th"])
-                if len(komorki) >= 6:
-                    teksty = [k.get_text(" ", strip=True) for k in komorki]
-                    wynik_index = next((idx for idx, val in enumerate(teksty) if ("-" in val or ":" in val) and any(c.isdigit() for c in val) and 1 <= idx <= 5), -1)
-                    if wynik_index != -1:
-                        wynik = teksty[wynik_index]
-                        gospodarz = teksty[wynik_index - 1]
-                        gosc = teksty[wynik_index + 1] if wynik_index + 1 < len(teksty) else ""
-                        if "HOME" in gospodarz.upper(): continue
-                        if gospodarz and gosc and gosc != gospodarz:
-                            statystyki = [s for s in teksty[wynik_index + 2:] if s.strip()] 
-                            ht = statystyki[0] if len(statystyki) > 0 else ""
-                            wynik_czysty = wynik.replace("*", "").strip().replace(" ", "").replace("-", ":")
-                            ht_czysty = ht.replace("*", "").strip().replace(" ", "").replace("-", ":").replace("(", "").replace(")", "")
-                            g_gosp_1h, g_gosc_1h = "", ""
-                            if ":" in ht_czysty:
-                                try: p_1h = ht_czysty.split(":"); g_gosp_1h, g_gosc_1h = int(p_1h[0]), int(p_1h[1])
-                                except: pass
-                            local_data.append([gospodarz, gosc, wynik_czysty, g_gosp_1h, g_gosc_1h])
-                            ss_count += 1
-        if ss_count > 0: local_report.append(["SoccerStats", url_ss_clean, f"OK (Pobrano: {ss_count} wierszy)"])
-        else: local_report.append(["SoccerStats", url_ss_clean, "OSTRZEŻENIE: Brak meczów na stronie (0)"])
-    except Exception as e: local_report.append(["SoccerStats", url_ss_clean, f"BŁĄD HTTP: {str(e)}"])
+
+        for row in rows:
+            komorki = row.find_all(["td", "th"])
+            if len(komorki) < 4:
+                continue
+
+            teksty = [k.get_text(" ", strip=True) for k in komorki]
+            
+            # Wyszukiwanie komórki z wynikiem głównym (np. "2 - 1" lub "2 : 0")
+            wynik_index = next((idx for idx, val in enumerate(teksty) 
+                                if re.search(r'^\d+\s*[-:]\s*\d+$', val.replace("*", "").strip()) and 1 <= idx <= 5), -1)
+            
+            if wynik_index != -1:
+                gospodarz = teksty[wynik_index - 1].strip()
+                wynik_raw = teksty[wynik_index].strip()
+                gosc = teksty[wynik_index + 1].strip() if wynik_index + 1 < len(teksty) else ""
+
+                if not gospodarz or not gosc or "HOME" in gospodarz.upper() or gospodarz == gosc:
+                    continue
+
+                wynik_czysty = wynik_raw.replace("*", "").replace(" ", "").replace("-", ":")
+
+                # Parsowanie wyniku do przerwy (HT)
+                g_gosp_1h, g_gosc_1h = "", ""
+                reszta_tekstow = " ".join(teksty[wynik_index + 2:])
+                ht_match = re.search(r'\(?\s*(\d+)\s*[-:]\s*(\d+)\s*\)?', reszta_tekstow)
+                
+                if ht_match:
+                    try:
+                        g_gosp_1h = int(ht_match.group(1))
+                        g_gosc_1h = int(ht_match.group(2))
+                    except ValueError:
+                        pass
+
+                local_data.append([gospodarz, gosc, wynik_czysty, g_gosp_1h, g_gosc_1h])
+                ss_count += 1
+
+        if ss_count > 0:
+            local_report.append(["SoccerStats", url_ss_clean, f"OK (Pobrano: {ss_count} wierszy)"])
+        else:
+            local_report.append(["SoccerStats", url_ss_clean, "OSTRZEŻENIE: Brak meczów na stronie (0)"])
+
+    except Exception as e:
+        local_report.append(["SoccerStats", url_ss_clean, f"BŁĄD PARSOWANIA: {str(e)}"])
+
     return local_data, local_report
 
 dane_soccerstats_baza = []
