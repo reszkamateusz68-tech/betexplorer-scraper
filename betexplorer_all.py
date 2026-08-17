@@ -18,6 +18,19 @@ import concurrent.futures
 today = datetime.now()
 
 # ==========================================================
+# 0. INICJALIZACJA GOOGLE SHEETS (NA SAMYM POCZĄTKU)
+# ==========================================================
+# Przeniesienie inicjalizacji na górę gwarantuje, że Sekcja 2 widzi zmienną `spreadsheet`
+scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+if os.path.exists("credentials.json"):
+    creds = Credentials.from_service_account_file("credentials.json", scopes=scope)
+else:
+    creds = Credentials.from_service_account_info(json.loads(os.environ["GOOGLE_CREDENTIALS"]), scopes=scope)
+
+client = gspread.authorize(creds)
+spreadsheet = client.open("BetExplorer")
+
+# ==========================================================
 # GŁÓWNE FUNKCJE POMOCNICZE
 # ==========================================================
 def global_recalc_przedzial(row):
@@ -410,119 +423,111 @@ fixtures_df = df[df["Type"] == "Fixture"].copy()
 results_df = df[df["Type"] == "Result"].copy()
 
 # ==========================================
-# 2. STABILNE POBIERANIE Z SOCCERSTATS (WARM SESSION + BYDATE)
+# 2. SEKWENCYJNE POBIERANIE Z SOCCERSTATS (IMPORTHTML HYBRID)
 # ==========================================
-def parse_ss_html(html_text, target_url):
-    soup = BeautifulSoup(html_text, "html.parser")
-    rows = soup.find_all("tr")
-    local_data = []
-    ss_count = 0
-
-    for row in rows:
-        komorki = row.find_all("td")
-        if len(komorki) < 4:
-            continue
-
-        row_text = " ".join(k.get_text(" ", strip=True) for k in komorki)
+# Używamy Google Sheets IMPORTHTML by ominąć WAF na GitHub Actions
+def parse_ss_rows_data(rows_data):
+    parsed = []
+    for row in rows_data:
+        if not isinstance(row, list) or len(row) < 4: continue
+        teksty = [str(k).strip() for k in row if str(k).strip()]
         
-        # Ekstrakcja goli do przerwy: (X-Y) lub (X:Y)
-        ht_match = re.search(r'\(\s*(\d+)\s*[-:]\s*(\d+)\s*\)', row_text)
+        wynik_index = next((idx for idx, val in enumerate(teksty) 
+                            if re.search(r'^\d+\s*[-:]\s*\d+$', val.replace("*", "").strip()) and 1 <= idx <= 5), -1)
         
-        home_team, away_team, score_found = None, None, None
-        g_gosp_1h, g_gosc_1h = "", ""
+        if wynik_index != -1:
+            gospodarz = teksty[wynik_index - 1].strip()
+            wynik_raw = teksty[wynik_index].strip()
+            gosc = teksty[wynik_index + 1].strip() if wynik_index + 1 < len(teksty) else ""
 
-        for idx, td in enumerate(komorki):
-            txt = td.get_text(strip=True).replace("*", "")
-            m_score = re.fullmatch(r'(\d+)[\:\-](\d+)', txt)
-            if m_score and 0 < idx < len(komorki) - 1:
-                h_candidate = komorki[idx - 1].get_text(strip=True)
-                a_candidate = komorki[idx + 1].get_text(strip=True)
-                
-                if h_candidate and a_candidate and "HOME" not in h_candidate.upper():
-                    home_team = h_candidate
-                    away_team = a_candidate
-                    score_found = f"{m_score.group(1)}:{m_score.group(2)}"
-                    break
+            if not gospodarz or not gosc or "HOME" in gospodarz.upper() or gospodarz == gosc:
+                continue
 
-        if score_found and home_team and away_team:
+            wynik_czysty = wynik_raw.replace("*", "").replace(" ", "").replace("-", ":")
+            
+            g_gosp_1h, g_gosc_1h = "", ""
+            reszta_tekstow = " ".join(teksty[wynik_index + 2:])
+            ht_match = re.search(r'\(\s*(\d+)\s*[-:]\s*(\d+)\s*\)', reszta_tekstow)
             if ht_match:
                 try:
                     g_gosp_1h = int(ht_match.group(1))
                     g_gosc_1h = int(ht_match.group(2))
-                except ValueError:
-                    pass
-            
-            local_data.append([home_team, away_team, score_found, g_gosp_1h, g_gosc_1h])
-            ss_count += 1
+                except: pass
 
-    return local_data, ss_count
+            parsed.append([gospodarz, gosc, wynik_czysty, g_gosp_1h, g_gosc_1h])
+    return parsed
+
+def fetch_ss_via_importhtml(sheet_client, url_clean):
+    ws_temp_name = "_temp_ss_scrape"
+    try:
+        try: ws_temp = sheet_client.worksheet(ws_temp_name)
+        except: ws_temp = sheet_client.add_worksheet(title=ws_temp_name, rows=600, cols=20)
+
+        # SoccerStats na widoku bydate uzywa przewaznie indeksu 11, ale sprawdzamy 10 i 12 dla pewnosci
+        for table_idx in [11, 10, 12]:
+            formula = f'=IMPORTHTML("{url_clean}", "table", {table_idx})'
+            ws_temp.clear()
+            ws_temp.update(values=[[formula]], range_name="A1", value_input_option="USER_ENTERED")
+            
+            # Czekamy na przetworzenie przez Google (max 3 proby co 3 sekundy)
+            for _ in range(3):
+                time.sleep(3.0)
+                vals = ws_temp.get_all_values()
+                if vals and len(vals) > 1 and not str(vals[0][0]).startswith(("#N/A", "Loading", "#ERROR", "#VALUE!")):
+                    parsed = parse_ss_rows_data(vals)
+                    if parsed:
+                        ws_temp.clear() # Posprzataj po sobie
+                        return parsed, f"OK (IMPORTHTML: {len(parsed)} meczów)"
+                    break # Tabela zła lub pusta - sprobuj nastepny indeks
+                    
+        ws_temp.clear()
+        return [], "OSTRZEŻENIE: Brak meczów na stronie (IMPORTHTML pusty)"
+    except Exception as e:
+        return [], f"BŁĄD IMPORTHTML: {e}"
 
 dane_soccerstats_baza = []
-print("Rozpoczynam stabilne pobieranie z SoccerStats (Warm Session)...")
-
+print("Rozpoczynam stabilne pobieranie z SoccerStats (Sekwencyjnie)...")
 try:
     if os.path.exists("ligi_soccerstats.xlsx"):
         urls_ss = pd.read_excel("ligi_soccerstats.xlsx")["URL"].dropna().tolist()
         
-        # Inicjalizacja scrapera z pełnym nagłówkiem desktopowym
-        skaner_ss = cloudscraper.create_scraper(
-            browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
-        )
-        skaner_ss.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Referer": "https://www.soccerstats.com/"
-        })
-
-        # 1. Krok kluczowy: Rozgrzanie sesji na stronie głównej celem pobrania tokenów Cloudflare
-        try:
-            skaner_ss.get("https://www.soccerstats.com/", timeout=20)
-            time.sleep(2.0)
-        except Exception:
-            pass
-
-        # 2. Pobieranie sekwencyjne lig z kontrolowanym opóźnieniem
+        # Wykonujemy to w zwykłej pętli, aby uniknąć przeciążenia Google API Quota (Limit żądań zapisu na arkusz)
         for u in urls_ss:
-            target_url = str(u).strip()
-            if "latest.asp" in target_url:
-                target_url = target_url.replace("latest.asp", "results.asp")
-            if "pmtype=bydate" not in target_url:
-                target_url += ("&" if "?" in target_url else "?") + "pmtype=bydate"
-
-            time.sleep(random.uniform(1.8, 3.2))
+            u_clean = str(u).strip()
             
-            response_ss = None
-            for attempt in range(3):
-                try:
-                    response_ss = skaner_ss.get(target_url, timeout=30)
-                    if response_ss.status_code == 200:
-                        break
-                    elif response_ss.status_code in [403, 429]:
-                        time.sleep(4.0 * (attempt + 1))
-                except Exception:
-                    time.sleep(2.0)
+            # Normalizacja linku do pełnego widoku bydate (tego z ikonkami, który wymieniłeś)
+            if "pmtype=bydate" not in u_clean:
+                if "?" in u_clean: u_clean += "&pmtype=bydate"
+                else: u_clean += "?pmtype=bydate"
+            
+            matches, rep_msg = [], ""
+            
+            # Najpierw testujemy direct (lokalnie działa, a nuż przejdzie na GH)
+            try:
+                skaner_ss = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True})
+                resp = skaner_ss.get(u_clean, timeout=15)
+                if resp.status_code == 200:
+                    soup_ss = BeautifulSoup(resp.text, "html.parser")
+                    rows_data = [[c.get_text(" ", strip=True) for c in r.find_all(["td", "th"])] for r in soup_ss.find_all("tr")]
+                    matches = parse_ss_rows_data(rows_data)
+                    if matches: rep_msg = f"OK (Direct: {len(matches)} meczów)"
+            except: pass
 
-            if response_ss and response_ss.status_code == 200:
-                m_data, count = parse_ss_html(response_ss.text, target_url)
-                if count > 0:
-                    dane_soccerstats_baza.extend(m_data)
-                    scrape_report.append(["SoccerStats", target_url, f"OK (Pobrano: {count} wierszy)"])
-                else:
-                    scrape_report.append(["SoccerStats", target_url, "OSTRZEŻENIE: Brak meczów na stronie (0)"])
-            else:
-                code_err = response_ss.status_code if response_ss else "Brak odpowiedzi"
-                scrape_report.append(["SoccerStats", target_url, f"BŁĄD HTTP: Kod {code_err}"])
+            # FALLBACK DO GOOGLE SHEETS
+            if not matches:
+                time.sleep(1.0)
+                matches, rep_msg = fetch_ss_via_importhtml(spreadsheet, u_clean)
+            
+            scrape_report.append(["SoccerStats", u_clean, rep_msg])
+            if matches:
+                dane_soccerstats_baza.extend(matches)
 
         if dane_soccerstats_baza:
-            ss_df = pd.DataFrame(
-                dane_soccerstats_baza, 
-                columns=["Home", "Away", "Score", "Gole_Gosp_1H", "Gole_Gosc_1H"]
-            ).drop_duplicates(subset=["Home", "Away", "Score"])
+            ss_df = pd.DataFrame(dane_soccerstats_baza, columns=["Home", "Away", "Score", "Gole_Gosp_1H", "Gole_Gosc_1H"]).drop_duplicates(subset=["Home", "Away", "Score"])
         else:
             ss_df = pd.DataFrame()
 except Exception as e:
-    scrape_report.append(["SoccerStats", "ligi_soccerstats.xlsx", f"BŁĄD GŁÓWNY: {str(e)}"])
+    scrape_report.append(["SoccerStats", "ligi_soccerstats.xlsx", f"BŁĄD GŁÓWNY: {e}"])
     ss_df = pd.DataFrame()
 
 # ==========================================
@@ -667,7 +672,7 @@ if not league_tables.empty:
     for _, r in league_tables.iterrows():
         team_tiers[(r['League'], r['Team'])] = r['Koszyk']
 
-# --- GENERATOR H2H ---
+# --- GENERATOR H2H DLA ZAKŁADKI "H2H_Mecze" ---
 h2h_list = []
 h2h_cols = ["Match_ID", "Nadchodzący Mecz", "Data Meczu", "Liga", "Data H2H", "Gospodarz H2H", "Gość H2H", "Wynik H2H", "Gole HT", "Rożne H2H"]
 df_h2h = pd.DataFrame(columns=h2h_cols)
@@ -688,7 +693,7 @@ if not fixtures_clean.empty and not valid_matches.empty:
         df_h2h = pd.DataFrame(h2h_list, columns=h2h_cols)
 
 # ==========================================================
-# 6. SILNIKI PREDYKCYJNE
+# 6. SILNIKI PREDYKCYJNE (Z centralnym Generatorem Ryzyka)
 # ==========================================================
 all_generated_predictions = []
 
@@ -1135,11 +1140,6 @@ for idx, row in fixtures_clean.iterrows():
 # ==========================================================
 print("Inicjalizacja Modułu Backtestingu (Śledzenie Skuteczności)...")
 
-scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-creds = Credentials.from_service_account_file("credentials.json", scopes=scope) if os.path.exists("credentials.json") else Credentials.from_service_account_info(json.loads(os.environ["GOOGLE_CREDENTIALS"]), scopes=scope)
-client = gspread.authorize(creds)
-spreadsheet = client.open("BetExplorer")
-
 cols_all_pred = ["Match_ID", "Zagrane", "Wyslij_AKO", "Kupon_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status"]
 cols_historia = ["Match_ID", "Zagrane", "Kupon_ID", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 
@@ -1441,5 +1441,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Poprawnie zintegrowano widok bydate z SoccerStats i naprawiono ekstrakcję goli do przerwy (HTHG / HTAG).")
+print("Wymuszono sekwencyjne pobieranie SoccerStats (IMPORTHTML Hybrid) dla 100% stabilności na GitHub Actions.")
 print("=" * 60)
