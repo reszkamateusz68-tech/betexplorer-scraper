@@ -1,6 +1,5 @@
 import os
 import json
-import time
 import requests
 import gspread
 import pandas as pd
@@ -96,18 +95,41 @@ def send_telegram(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
     try:
-        response = requests.post(url, json=payload, timeout=10)
+        response = requests.post(url, json=payload, timeout=15)
         if response.status_code != 200:
             print(f"Błąd wysyłki Telegram: {response.text}")
             return False
         return True
     except Exception as e:
-        print(f"Błąd wysyłki Telegram: {e}")
+        print(f"Błąd wysyłki Telegram (Wyjątek): {e}")
         return False
 
 # ==========================================
-# FUNKCJA GENERUJĄCA STATYSTYKI I POWODY PORAŻKI
+# GŁÓWNA FUNKCJA FORMATUJĄCA (Z BEZPIECZNYM ZAPISEM)
 # ==========================================
+def prepare_for_gsheets(df):
+    df = df.astype(str)
+    output = [df.columns.tolist()]
+    for row in df.values.tolist():
+        new_row = []
+        for idx, val in enumerate(row):
+            col_name = df.columns[idx]
+            if pd.isna(val) or val == "nan":
+                new_row.append("")
+                continue
+            str_val = str(val).strip()
+            if str_val in ["<NA>", "NaN", "None", "", "inf", "-inf", "-"]:
+                new_row.append("")
+            else:
+                if any(k in col_name for k in ["Odd", "Avg", "Value", "PPG", "Kurs", "Szansa", "Profit", "Marża", "Yield", "Stawka", "Wygrana", "Liczba", "Consensus"]):
+                    clean_val = str_val.replace("%", "").replace(",", ".").strip()
+                    new_row.append(clean_val)
+                else:
+                    if str_val.endswith(".0"): new_row.append(str_val[:-2])
+                    else: new_row.append(str_val)
+        output.append(new_row)
+    return output
+
 def format_match_details(m_row, df_results):
     match_id = str(m_row.get('Match_ID', '')).strip()
     status = str(m_row.get('Status', 'W OCZEKIWANIU')).upper()
@@ -141,7 +163,6 @@ def format_match_details(m_row, df_results):
     if status == "PRZEGRANA":
         reasons = []
         for sub_bet in sub_bets:
-            # 1X2 / 1X / X2
             if sub_bet in ["1", "1X"] and pd.notna(hg) and pd.notna(ag) and hg < ag:
                 reasons.append(f"Porażka gospodarzy ({int(hg)}:{int(ag)})")
             elif sub_bet == "1" and pd.notna(hg) and pd.notna(ag) and hg == ag:
@@ -149,7 +170,6 @@ def format_match_details(m_row, df_results):
             elif sub_bet in ["2", "X2"] and pd.notna(hg) and pd.notna(ag) and hg > ag:
                 reasons.append(f"Porażka gości ({int(hg)}:{int(ag)})")
                 
-            # Gole ogółem
             elif sub_bet.startswith("U") and not sub_bet.startswith(("HT_U", "2H_U", "HU", "AU", "C_U", "HC_U", "AC_U")) and pd.notna(tg):
                 try:
                     line = float(sub_bet[1:])
@@ -161,7 +181,6 @@ def format_match_details(m_row, df_results):
                     if tg < line: reasons.append(f"Łącznie goli: {int(tg)} (wymagano: ponad {line})")
                 except: pass
                 
-            # Gole 1H i 2H
             elif sub_bet.startswith("HT_U") and pd.notna(ht_h) and pd.notna(ht_a):
                 try:
                     line = float(sub_bet.replace("HT_U", ""))
@@ -175,7 +194,6 @@ def format_match_details(m_row, df_results):
                     if h2_tg > line: reasons.append(f"Gole w 2. połowie: {int(h2_tg)} (linia: {line})")
                 except: pass
                 
-            # Gole drużyn
             elif sub_bet.startswith("HU") and pd.notna(hg):
                 try:
                     line = float(sub_bet.replace("HU", ""))
@@ -187,7 +205,6 @@ def format_match_details(m_row, df_results):
                     if ag > line: reasons.append(f"Gole gości: {int(ag)} (linia: {line})")
                 except: pass
                 
-            # Rożne
             elif sub_bet.startswith("C_U") and pd.notna(tc):
                 try:
                     line = float(sub_bet.replace("C_U", ""))
@@ -204,7 +221,6 @@ def format_match_details(m_row, df_results):
                     if ac > line: reasons.append(f"Rożne gości: {int(ac)} (linia: {line})")
                 except: pass
                 
-            # Strzały
             elif sub_bet == "S_1" and pd.notna(sh) and pd.notna(sa) and sh <= sa:
                 reasons.append(f"Strzały ogółem: {int(sh)}:{int(sa)} (brak wygranej gospodarzy)")
             elif sub_bet == "ST_1" and pd.notna(sth) and pd.notna(sta) and sth <= sta:
@@ -239,25 +255,30 @@ def format_match_details(m_row, df_results):
 
     return stats_str
 
-def prepare_for_gsheets(df):
-    df = df.astype(str)
-    output = [df.columns.tolist()]
-    for row in df.values.tolist():
-        new_row = ["" if pd.isna(val) or str(val).strip() in ["nan", "<NA>", "NaN", "None"] else str(val).strip() for val in row]
-        output.append(new_row)
-    return output
-
 # ==========================================
 # 1. WYSYŁKA NOWYCH KUPONÓW (HURTOWA BATCH)
 # ==========================================
 if 'Wyslij_AKO' in df_pred.columns:
-    do_wysylki = df_pred[df_pred['Wyslij_AKO'].astype(str).str.upper().isin(['TRUE', 'TAK', '1'])].copy()
+    # Dodano warianty 'PRAWDA' jako zabezpieczenie dla zlokalizowanych arkuszy Google
+    do_wysylki = df_pred[df_pred['Wyslij_AKO'].astype(str).str.upper().isin(['TRUE', 'TAK', '1', 'PRAWDA'])].copy()
     
     if not do_wysylki.empty:
         empty_mask = do_wysylki['Kupon_ID'].astype(str).str.strip() == ""
+        
+        # Generator nowego ID jeśli jest pusty (i globalna poprawa ID)
         if empty_mask.any():
             new_id = f"AKO_{datetime.now().strftime('%y%m%d_%H%M')}"
-            do_wysylki.loc[empty_mask, 'Kupon_ID'] = new_id
+            
+            # Bezpośrednia modyfikacja DataFrame (dużo bezpieczniejsze niż update_cells)
+            df_pred.loc[df_pred['Match_ID'].isin(do_wysylki[empty_mask]['Match_ID']) & df_pred['Typ'].isin(do_wysylki[empty_mask]['Typ']), 'Kupon_ID'] = new_id
+            
+            if not df_hist.empty:
+                for _, r in do_wysylki[empty_mask].iterrows():
+                    hist_mask = (df_hist['Match_ID'] == r['Match_ID']) & (df_hist['Engine'] == r['Engine']) & (df_hist['Typ'] == r['Typ'])
+                    df_hist.loc[hist_mask, 'Kupon_ID'] = new_id
+            
+            # Ponowne wczytanie po nadaniu ID
+            do_wysylki = df_pred[df_pred['Wyslij_AKO'].astype(str).str.upper().isin(['TRUE', 'TAK', '1', 'PRAWDA'])].copy()
 
         wyslane_id = []
 
@@ -301,12 +322,17 @@ if 'Wyslij_AKO' in df_pred.columns:
             
             if send_telegram(wiadomosc): 
                 wyslane_id.append(kupon_id)
-                print(f"Pomyślnie wysłano powiadomienie Telegram dla kuponu: {kupon_id}")
+                print(f"Pomyślnie wysłano powiadomienie Telegram dla nowego kuponu: {kupon_id}")
 
         if wyslane_id:
+            # Aktualizacja z pełnym wgraniem DataFrame (Zastępuje awaryjne update_cells)
             df_pred.loc[df_pred['Kupon_ID'].isin(wyslane_id), 'Wyslij_AKO'] = "FALSE"
             ws_pred.clear()
             ws_pred.update(prepare_for_gsheets(df_pred))
+            
+            if not df_hist.empty:
+                ws_hist.clear()
+                ws_hist.update(prepare_for_gsheets(df_hist))
 
 # ==========================================
 # 2. WYSYŁKA PODSUMOWAŃ (HURTOWA BATCH)
@@ -316,18 +342,18 @@ if 'Telegram_Status' not in df_ako.columns:
 
 if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
     mask_auto = (df_ako['Status_AKO'].isin(['WYGRANA', 'PRZEGRANA'])) & (df_ako['Telegram_Status'] != 'WYSŁANO')
-    mask_manual = (df_ako['Wyslij_Podsumowanie'].astype(str).str.upper().isin(['TRUE', 'TAK', '1']))
+    mask_manual = (df_ako['Wyslij_Podsumowanie'].astype(str).str.upper().isin(['TRUE', 'TAK', '1', 'PRAWDA']))
     
     do_podsumowania = df_ako[mask_auto | mask_manual]
 
     if not do_podsumowania.empty:
-        zaktualizowane_ako_ids = []
+        zaktualizowane = False
 
         for _, rekord in do_podsumowania.iterrows():
             kupon_id = str(rekord['Kupon_ID']).strip()
             if not kupon_id: continue
             
-            is_manual = str(rekord.get('Wyslij_Podsumowanie', '')).upper() in ['TRUE', 'TAK', '1']
+            is_manual = str(rekord.get('Wyslij_Podsumowanie', '')).upper() in ['TRUE', 'TAK', '1', 'PRAWDA']
             
             mecze_hist = df_hist[df_hist['Kupon_ID'].astype(str).str.strip() == kupon_id] if not df_hist.empty and 'Kupon_ID' in df_hist.columns else pd.DataFrame()
             mecze_pred = df_pred[df_pred['Kupon_ID'].astype(str).str.strip() == kupon_id] if not df_pred.empty and 'Kupon_ID' in df_pred.columns else pd.DataFrame()
@@ -386,6 +412,8 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
             except: stawka_pln = 100.0
             
             stawka_j = round(stawka_pln / WARTOSC_JEDNOSTKI_PLN, 2)
+            
+            # CAŁKOWITA WYGRANA BRUTTO PO ODLICZENIU 12% PODATKU
             wygrana_pln = round(kurs_ako * stawka_pln * PODATEK_BUKMACHERSKI, 2)
             wygrana_j = round(wygrana_pln / WARTOSC_JEDNOSTKI_PLN, 2)
             
@@ -413,9 +441,9 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
                 df_ako.loc[idx_ako, 'Kurs_AKO'] = str(kurs_ako)
                 if real_status_ako in ['WYGRANA', 'PRZEGRANA']:
                     df_ako.loc[idx_ako, 'Telegram_Status'] = "WYSŁANO"
-                zaktualizowane_ako_ids.append(kupon_id)
+                zaktualizowane = True
 
-        if zaktualizowane_ako_ids:
+        if zaktualizowane:
             ws_ako.clear()
             ws_ako.update(prepare_for_gsheets(df_ako))
             print("Pomyślnie wysłano podsumowania i zaktualizowano arkusz Kupony_AKO.")
