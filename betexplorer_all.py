@@ -342,62 +342,57 @@ fixtures_df = df[df["Type"] == "Fixture"].copy()
 results_df = df[df["Type"] == "Result"].copy()
 
 # ==========================================
-# 2. BEZPIECZNE POBIERANIE Z SOCCERSTATS 
+# 2. WIELOWĄTKOWE POBIERANIE Z SOCCERSTATS 
 # ==========================================
 def scrape_ss_worker(args):
-    url_ss_clean, _ = args
+    url_ss_raw = args[0] if isinstance(args, (list, tuple)) else args
+    url_ss_clean = str(url_ss_raw).strip()
     
-    # 1. Neutralizacja parametrów paywalla i ujednolicenie adresu
-    url_ss_clean = str(url_ss_clean).strip().replace("&pmtype=bydate", "").replace("?pmtype=bydate", "")
+    # 1. Neutralizacja paywalla & ujednolicenie struktury linków
+    url_ss_clean = url_ss_clean.replace("&pmtype=bydate", "").replace("?pmtype=bydate", "")
     if "results.asp" in url_ss_clean and "latest.asp" not in url_ss_clean:
         url_ss_clean = url_ss_clean.replace("results.asp", "latest.asp")
 
-    # 2. Losowy jitter przed startem wątku zapobiegający jednoczesnemu uderzeniu
-    time.sleep(random.uniform(0.8, 2.5))
-    
+    time.sleep(random.uniform(0.3, 1.2))
     local_data = []
     local_report = []
-    
-    # 3. Pełne nagłówki przeglądarkowe (omijające WAF Cloudflare 403)
-    ss_headers = {
+
+    session = requests.Session()
+    session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Referer": "https://www.soccerstats.com/",
-        "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-        "Sec-Ch-Ua-Mobile": "?0",
-        "Sec-Ch-Ua-Platform": '"Windows"',
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "same-origin",
-        "Upgrade-Insecure-Requests": "1"
-    }
+        "Referer": "https://www.soccerstats.com/"
+    })
 
-    scraper_ss = cloudscraper.create_scraper(
-        browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
-    )
-    
-    response_ss = None
-    max_retries = 3
-    for attempt in range(max_retries):
-        if attempt > 0:
-            time.sleep(random.uniform(3.0, 6.0) * attempt)
+    response_text = None
+    last_err = ""
+
+    for attempt in range(3):
         try:
-            response_ss = scraper_ss.get(url_ss_clean, headers=ss_headers, timeout=30)
-            if response_ss.status_code == 200:
+            resp = session.get(url_ss_clean, timeout=20)
+            if resp.status_code == 200:
+                response_text = resp.text
                 break
-        except Exception:
-            if attempt == max_retries - 1:
-                pass
+            elif resp.status_code in [403, 429]:
+                scraper_fallback = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True})
+                resp_cb = scraper_fallback.get(url_ss_clean, timeout=25)
+                if resp_cb.status_code == 200:
+                    response_text = resp_cb.text
+                    break
+                last_err = f"Kod {resp_cb.status_code}"
+            else:
+                last_err = f"Kod {resp.status_code}"
+        except Exception as e:
+            last_err = str(e)
+            time.sleep(1.5 * (attempt + 1))
 
-    if response_ss is None or response_ss.status_code != 200:
-        code_txt = response_ss.status_code if response_ss else "Brak połączenia"
-        local_report.append(["SoccerStats", url_ss_clean, f"BŁĄD HTTP: Kod {code_txt}"])
+    if not response_text:
+        local_report.append(["SoccerStats", url_ss_clean, f"BŁĄD: {last_err}"])
         return local_data, local_report
 
     try:
-        soup_ss = BeautifulSoup(response_ss.text, "html.parser")
+        soup_ss = BeautifulSoup(response_text, "html.parser")
         rows = soup_ss.find_all("tr")
         ss_count = 0
 
@@ -408,7 +403,7 @@ def scrape_ss_worker(args):
 
             teksty = [k.get_text(" ", strip=True) for k in komorki]
             
-            # Wyszukiwanie komórki z wynikiem głównym (np. "2 - 1" lub "2 : 0")
+            # Wyszukiwanie komórki z wynikiem głównym meczu
             wynik_index = next((idx for idx, val in enumerate(teksty) 
                                 if re.search(r'^\d+\s*[-:]\s*\d+$', val.replace("*", "").strip()) and 1 <= idx <= 5), -1)
             
@@ -441,21 +436,20 @@ def scrape_ss_worker(args):
             local_report.append(["SoccerStats", url_ss_clean, f"OK (Pobrano: {ss_count} wierszy)"])
         else:
             local_report.append(["SoccerStats", url_ss_clean, "OSTRZEŻENIE: Brak meczów na stronie (0)"])
-            
+
     except Exception as e:
         local_report.append(["SoccerStats", url_ss_clean, f"BŁĄD PARSOWANIA: {str(e)}"])
 
     return local_data, local_report
 
 dane_soccerstats_baza = []
-print("Rozpoczynam pobieranie z SoccerStats (Zoptymalizowany ruch)...")
+print("Rozpoczynam pobieranie z SoccerStats (Wielowątkowo)...")
 try:
     if os.path.exists("ligi_soccerstats.xlsx"):
         urls_ss = pd.read_excel("ligi_soccerstats.xlsx")["URL"].dropna().tolist()
         ss_args = [(str(u).strip(), None) for u in urls_ss]
         
-        # Zmniejszenie liczby wątków do 3 eliminuje wykrywanie scrapera przez WAF
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
             for data_chunk, report_chunk in executor.map(scrape_ss_worker, ss_args):
                 dane_soccerstats_baza.extend(data_chunk)
                 scrape_report.extend(report_chunk)
