@@ -18,7 +18,7 @@ import concurrent.futures
 today = datetime.now()
 
 # ==========================================================
-# 0. INICJALIZACJA GOOGLE SHEETS
+# 0. INICJALIZACJA GOOGLE SHEETS (Z ZABEZPIECZENIEM 503)
 # ==========================================================
 scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 if os.path.exists("credentials.json"):
@@ -27,7 +27,18 @@ else:
     creds = Credentials.from_service_account_info(json.loads(os.environ["GOOGLE_CREDENTIALS"]), scopes=scope)
 
 client = gspread.authorize(creds)
-spreadsheet = client.open("BetExplorer")
+
+# Exponential Backoff dla API Google Sheets
+max_retries = 5
+for attempt in range(max_retries):
+    try:
+        spreadsheet = client.open("BetExplorer")
+        break
+    except gspread.exceptions.APIError as e:
+        if "503" in str(e) and attempt < max_retries - 1:
+            time.sleep(2 ** attempt)  # Czeka 1s, 2s, 4s, 8s...
+        else:
+            raise e
 
 # ==========================================================
 # GŁÓWNE FUNKCJE POMOCNICZE
