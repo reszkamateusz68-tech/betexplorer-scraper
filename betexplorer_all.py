@@ -215,21 +215,29 @@ def calc_betbuilder_copula(odds_list, rho=0.65):
 # ==========================================================
 # FUNKCJE ANALITYCZNE, EVALUACJA I KONTROLA RYZYKA
 # ==========================================================
-def get_weighted_stats(df, target_col, condition_lambda, prior_prob=0.5, alpha=2.0):
-    if df.empty: return 0.0, 0, 0, False
-        
+def get_weighted_stats(data, target_col, condition_lambda, prior_prob=0.5, alpha=2.0):
+    # NAPRAWA: Zabezpieczenie przed podaniem listy zamiast DataFrame
+    if isinstance(data, pd.DataFrame):
+        if data.empty: return 0.0, 0, 0, False
+        if target_col is None:
+            valid_values = data.to_dict('records')
+        else:
+            if target_col not in data.columns: return 0.0, 0, 0, False
+            valid_values = [v for v in data[target_col].tolist() if pd.notna(v)]
+    else:
+        # Obsługa listy słowników (ekstremalnie szybkie)
+        if not data: return 0.0, 0, 0, False
+        if target_col is None:
+            valid_values = data
+        else:
+            valid_values = [d.get(target_col) for d in data if pd.notna(d.get(target_col))]
+
     total_weight = 0.0
     weighted_hits = 0.0
     total_hits = 0
-    
-    if target_col is None:
-        valid_values = [row for _, row in df.iterrows()]
-    else:
-        if target_col not in df.columns: return 0.0, 0, 0, False
-        values = df[target_col].tolist()
-        valid_values = [v for v in values if pd.notna(v)]
-        
     total_len = len(valid_values)
+    
+    if total_len == 0: return 0.0, 0, 0, False
     
     for i, val in enumerate(valid_values):
         if i < 10: w = 1.0
@@ -256,30 +264,28 @@ def get_weighted_stats(df, target_col, condition_lambda, prior_prob=0.5, alpha=2
         
     return prob, total_hits, total_len, is_smoothed
 
-def evaluate_bet(bet_type, row_data):
+def evaluate_bet(bet_type, r):
     bet = str(bet_type).upper().strip()
     
-    hg = pd.to_numeric(row_data.get('FTHG', np.nan))
-    ag = pd.to_numeric(row_data.get('FTAG', np.nan))
-    tg = pd.to_numeric(row_data.get('Total_Goals', np.nan))
-    ht_hg = pd.to_numeric(row_data.get('HTHG', np.nan))
-    ht_ag = pd.to_numeric(row_data.get('HTAG', np.nan))
-    hc = pd.to_numeric(row_data.get('Corners_H', np.nan))
-    ac = pd.to_numeric(row_data.get('Corners_A', np.nan))
-    hs = pd.to_numeric(row_data.get('Shots_H', np.nan))
-    away_s = pd.to_numeric(row_data.get('Shots_A', np.nan))
-    hst = pd.to_numeric(row_data.get('ShotsTarget_H', np.nan))
-    ast = pd.to_numeric(row_data.get('ShotsTarget_A', np.nan))
-
-    if pd.isna(hg) or pd.isna(ag): return "W OCZEKIWANIU"
-
     if "+" in bet:
-        parts = bet.split("+")
-        results = [evaluate_bet(p.strip(), row_data) for p in parts]
-        if "W OCZEKIWANIU" in results: return "W OCZEKIWANIU"
-        if "PRZEGRANA" in results: return "PRZEGRANA"
-        if "DO RĘCZNEJ KONTROLI" in results: return "DO RĘCZNEJ KONTROLI"
+        results = []
+        for p in bet.split("+"):
+            res = evaluate_bet(p.strip(), r)
+            if res == "W OCZEKIWANIU": return "W OCZEKIWANIU"
+            if res == "PRZEGRANA": return "PRZEGRANA"
+            if res == "DO RĘCZNEJ KONTROLI": return "DO RĘCZNEJ KONTROLI"
+            results.append(res)
         return "WYGRANA"
+
+    def get_num(key):
+        val = r.get(key)
+        if val is None or pd.isna(val) or val == "": return None
+        try: return float(val)
+        except: return None
+
+    hg = get_num('FTHG')
+    ag = get_num('FTAG')
+    if hg is None or ag is None: return "W OCZEKIWANIU"
 
     if bet == "1": return "WYGRANA" if hg > ag else "PRZEGRANA"
     if bet == "X": return "WYGRANA" if hg == ag else "PRZEGRANA"
@@ -288,12 +294,16 @@ def evaluate_bet(bet_type, row_data):
     if bet == "X2": return "WYGRANA" if hg <= ag else "PRZEGRANA"
     if bet == "12": return "WYGRANA" if hg != ag else "PRZEGRANA"
     
-    if bet.startswith("O") and pd.notna(tg) and "_" not in bet: return "WYGRANA" if tg > float(bet[1:]) else "PRZEGRANA"
-    if bet.startswith("U") and pd.notna(tg) and "_" not in bet: return "WYGRANA" if tg < float(bet[1:]) else "PRZEGRANA"
-    if bet.startswith("HT_U") and pd.notna(ht_hg) and pd.notna(ht_ag): return "WYGRANA" if (ht_hg + ht_ag) < float(bet[4:]) else "PRZEGRANA"
-    if bet.startswith("2H_U") and pd.notna(tg) and pd.notna(ht_hg) and pd.notna(ht_ag): return "WYGRANA" if (tg - (ht_hg + ht_ag)) < float(bet[4:]) else "PRZEGRANA"
-    if bet.startswith("HU") and pd.notna(hg): return "WYGRANA" if hg < float(bet[2:]) else "PRZEGRANA"
-    if bet.startswith("AU") and pd.notna(ag): return "WYGRANA" if ag < float(bet[2:]) else "PRZEGRANA"
+    tg = get_num('Total_Goals')
+    if bet.startswith("O") and tg is not None and "_" not in bet: return "WYGRANA" if tg > float(bet[1:]) else "PRZEGRANA"
+    if bet.startswith("U") and tg is not None and "_" not in bet: return "WYGRANA" if tg < float(bet[1:]) else "PRZEGRANA"
+    
+    ht_h = get_num('HTHG')
+    ht_a = get_num('HTAG')
+    if bet.startswith("HT_U") and ht_h is not None and ht_a is not None: return "WYGRANA" if (ht_h + ht_a) < float(bet[4:]) else "PRZEGRANA"
+    if bet.startswith("2H_U") and tg is not None and ht_h is not None and ht_a is not None: return "WYGRANA" if (tg - (ht_h + ht_a)) < float(bet[4:]) else "PRZEGRANA"
+    if bet.startswith("HU") and hg is not None: return "WYGRANA" if hg < float(bet[2:]) else "PRZEGRANA"
+    if bet.startswith("AU") and ag is not None: return "WYGRANA" if ag < float(bet[2:]) else "PRZEGRANA"
 
     if bet.startswith("MG_"):
         try:
@@ -301,7 +311,9 @@ def evaluate_bet(bet_type, row_data):
             return "WYGRANA" if low <= tg <= high else "PRZEGRANA"
         except: pass
 
-    if pd.notna(hc) and pd.notna(ac):
+    hc = get_num('Corners_H')
+    ac = get_num('Corners_A')
+    if hc is not None and ac is not None:
         tc = hc + ac
         if bet.startswith("C_U"): return "WYGRANA" if tc < float(bet[3:]) else "PRZEGRANA"
         if bet.startswith("C_O"): return "WYGRANA" if tc > float(bet[3:]) else "PRZEGRANA"
@@ -310,13 +322,17 @@ def evaluate_bet(bet_type, row_data):
         if bet.startswith("HC_O"): return "WYGRANA" if hc > float(bet[4:]) else "PRZEGRANA"
         if bet.startswith("AC_O"): return "WYGRANA" if ac > float(bet[4:]) else "PRZEGRANA"
 
-    if pd.notna(hs) and pd.notna(away_s):
-        if bet == "S_1": return "WYGRANA" if hs > away_s else "PRZEGRANA"
-        if bet == "S_2": return "WYGRANA" if hs < away_s else "PRZEGRANA"
+    sh = get_num('Shots_H')
+    sa = get_num('Shots_A')
+    if sh is not None and sa is not None:
+        if bet == "S_1": return "WYGRANA" if sh > sa else "PRZEGRANA"
+        if bet == "S_2": return "WYGRANA" if sh < sa else "PRZEGRANA"
     
-    if pd.notna(hst) and pd.notna(ast):
-        if bet == "ST_1": return "WYGRANA" if hst > ast else "PRZEGRANA"
-        if bet == "ST_2": return "WYGRANA" if hst < ast else "PRZEGRANA"
+    sth = get_num('ShotsTarget_H')
+    sta = get_num('ShotsTarget_A')
+    if sth is not None and sta is not None:
+        if bet == "ST_1": return "WYGRANA" if sth > sta else "PRZEGRANA"
+        if bet == "ST_2": return "WYGRANA" if sth < sta else "PRZEGRANA"
 
     return "DO RĘCZNEJ KONTROLI"
 
@@ -1505,5 +1521,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Pomyślnie zaimplementowano filtr najbliższych 7 dni oraz usunięto zakładkę H2H_Mecze.")
+print("Pomyślnie zaimplementowano filtr najbliższych 7 dni, załatano 'empty' z listami, zintegrowano modele matematyczne i usunięto H2H.")
 print("=" * 60)
