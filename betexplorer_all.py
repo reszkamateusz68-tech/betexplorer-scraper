@@ -409,93 +409,121 @@ else: df["Time"] = pd.Series(dtype='object')
 fixtures_df = df[df["Type"] == "Fixture"].copy()
 results_df = df[df["Type"] == "Result"].copy()
 
-# ==========================================================
-# 2. ZOPTYMALIZOWANE POBIERANIE Z SOCCERSTATS (BYDATE)
-# ==========================================================
-def scrape_ss_worker(args):
-    url_ss_clean, headers = args
-    time.sleep(random.uniform(0.1, 2.0))
+# ==========================================
+# 2. STABILNE POBIERANIE Z SOCCERSTATS (WARM SESSION + BYDATE)
+# ==========================================
+def parse_ss_html(html_text, target_url):
+    soup = BeautifulSoup(html_text, "html.parser")
+    rows = soup.find_all("tr")
     local_data = []
-    local_report = []
+    ss_count = 0
 
-    # Dynamiczna konwersja na endpoint wyników bydate
-    target_url = url_ss_clean
-    if "latest.asp" in target_url:
-        target_url = target_url.replace("latest.asp", "results.asp")
-    if "pmtype=bydate" not in target_url:
-        target_url += ("&" if "?" in target_url else "?") + "pmtype=bydate"
+    for row in rows:
+        komorki = row.find_all("td")
+        if len(komorki) < 4:
+            continue
 
-    skaner_ss = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True})
-    try:
-        response_ss = skaner_ss.get(target_url, headers=headers, timeout=30)
-        if response_ss.status_code != 200:
-            local_report.append(["SoccerStats", target_url, f"BŁĄD HTTP: Kod {response_ss.status_code}"])
-            return local_data, local_report
+        row_text = " ".join(k.get_text(" ", strip=True) for k in komorki)
+        
+        # Ekstrakcja goli do przerwy: (X-Y) lub (X:Y)
+        ht_match = re.search(r'\(\s*(\d+)\s*[-:]\s*(\d+)\s*\)', row_text)
+        
+        home_team, away_team, score_found = None, None, None
+        g_gosp_1h, g_gosc_1h = "", ""
 
-        soup_ss = BeautifulSoup(response_ss.text, "html.parser")
-        rows = soup_ss.find_all("tr")
-        ss_count = 0
-
-        for row in rows:
-            komorki = row.find_all("td")
-            if len(komorki) < 4:
-                continue
-
-            row_text = " ".join(k.get_text(" ", strip=True) for k in komorki)
-            
-            # Wyszukanie wyniku 1. połowy w formacie (X-Y) lub (X:Y)
-            ht_match = re.search(r'\(\s*(\d+)\s*[-:]\s*(\d+)\s*\)', row_text)
-            
-            home_team, away_team, score_found = None, None, None
-            g_gosp_1h, g_gosc_1h = "", ""
-
-            # Wyszukanie komórki z wynikiem głównym meczu
-            for idx, td in enumerate(komorki):
-                txt = td.get_text(strip=True)
-                m_score = re.fullmatch(r'(\d+)[\:\-](\d+)', txt)
-                if m_score and 0 < idx < len(komorki) - 1:
-                    h_candidate = komorki[idx - 1].get_text(strip=True)
-                    a_candidate = komorki[idx + 1].get_text(strip=True)
-                    
-                    if h_candidate and a_candidate and "HOME" not in h_candidate.upper():
-                        home_team = h_candidate
-                        away_team = a_candidate
-                        score_found = f"{m_score.group(1)}:{m_score.group(2)}"
-                        break
-
-            if score_found and home_team and away_team:
-                if ht_match:
-                    g_gosp_1h, g_gosc_1h = int(ht_match.group(1)), int(ht_match.group(2))
+        for idx, td in enumerate(komorki):
+            txt = td.get_text(strip=True).replace("*", "")
+            m_score = re.fullmatch(r'(\d+)[\:\-](\d+)', txt)
+            if m_score and 0 < idx < len(komorki) - 1:
+                h_candidate = komorki[idx - 1].get_text(strip=True)
+                a_candidate = komorki[idx + 1].get_text(strip=True)
                 
-                local_data.append([home_team, away_team, score_found, g_gosp_1h, g_gosc_1h])
-                ss_count += 1
+                if h_candidate and a_candidate and "HOME" not in h_candidate.upper():
+                    home_team = h_candidate
+                    away_team = a_candidate
+                    score_found = f"{m_score.group(1)}:{m_score.group(2)}"
+                    break
 
-        if ss_count > 0:
-            local_report.append(["SoccerStats", target_url, f"OK (Pobrano: {ss_count} wierszy)"])
-        else:
-            local_report.append(["SoccerStats", target_url, "OSTRZEŻENIE: Brak meczów na stronie (0)"])
-    except Exception as e:
-        local_report.append(["SoccerStats", target_url, f"BŁĄD: {str(e)}"])
-    return local_data, local_report
+        if score_found and home_team and away_team:
+            if ht_match:
+                try:
+                    g_gosp_1h = int(ht_match.group(1))
+                    g_gosc_1h = int(ht_match.group(2))
+                except ValueError:
+                    pass
+            
+            local_data.append([home_team, away_team, score_found, g_gosp_1h, g_gosc_1h])
+            ss_count += 1
+
+    return local_data, ss_count
 
 dane_soccerstats_baza = []
-print("Rozpoczynam pobieranie z SoccerStats (Wielowątkowo)...")
+print("Rozpoczynam stabilne pobieranie z SoccerStats (Warm Session)...")
+
 try:
     if os.path.exists("ligi_soccerstats.xlsx"):
         urls_ss = pd.read_excel("ligi_soccerstats.xlsx")["URL"].dropna().tolist()
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"}
-        ss_args = [(str(u).strip(), headers) for u in urls_ss]
         
-        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-            for data_chunk, report_chunk in executor.map(scrape_ss_worker, ss_args):
-                dane_soccerstats_baza.extend(data_chunk)
-                scrape_report.extend(report_chunk)
+        # Inicjalizacja scrapera z pełnym nagłówkiem desktopowym
+        skaner_ss = cloudscraper.create_scraper(
+            browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
+        )
+        skaner_ss.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Referer": "https://www.soccerstats.com/"
+        })
 
-        if dane_soccerstats_baza: 
-            ss_df = pd.DataFrame(dane_soccerstats_baza, columns=["Home", "Away", "Score", "Gole_Gosp_1H", "Gole_Gosc_1H"]).drop_duplicates(subset=["Home", "Away", "Score"])
-        else: 
+        # 1. Krok kluczowy: Rozgrzanie sesji na stronie głównej celem pobrania tokenów Cloudflare
+        try:
+            skaner_ss.get("https://www.soccerstats.com/", timeout=20)
+            time.sleep(2.0)
+        except Exception:
+            pass
+
+        # 2. Pobieranie sekwencyjne lig z kontrolowanym opóźnieniem
+        for u in urls_ss:
+            target_url = str(u).strip()
+            if "latest.asp" in target_url:
+                target_url = target_url.replace("latest.asp", "results.asp")
+            if "pmtype=bydate" not in target_url:
+                target_url += ("&" if "?" in target_url else "?") + "pmtype=bydate"
+
+            time.sleep(random.uniform(1.8, 3.2))
+            
+            response_ss = None
+            for attempt in range(3):
+                try:
+                    response_ss = skaner_ss.get(target_url, timeout=30)
+                    if response_ss.status_code == 200:
+                        break
+                    elif response_ss.status_code in [403, 429]:
+                        time.sleep(4.0 * (attempt + 1))
+                except Exception:
+                    time.sleep(2.0)
+
+            if response_ss and response_ss.status_code == 200:
+                m_data, count = parse_ss_html(response_ss.text, target_url)
+                if count > 0:
+                    dane_soccerstats_baza.extend(m_data)
+                    scrape_report.append(["SoccerStats", target_url, f"OK (Pobrano: {count} wierszy)"])
+                else:
+                    scrape_report.append(["SoccerStats", target_url, "OSTRZEŻENIE: Brak meczów na stronie (0)"])
+            else:
+                code_err = response_ss.status_code if response_ss else "Brak odpowiedzi"
+                scrape_report.append(["SoccerStats", target_url, f"BŁĄD HTTP: Kod {code_err}"])
+
+        if dane_soccerstats_baza:
+            ss_df = pd.DataFrame(
+                dane_soccerstats_baza, 
+                columns=["Home", "Away", "Score", "Gole_Gosp_1H", "Gole_Gosc_1H"]
+            ).drop_duplicates(subset=["Home", "Away", "Score"])
+        else:
             ss_df = pd.DataFrame()
-except Exception: ss_df = pd.DataFrame()
+except Exception as e:
+    scrape_report.append(["SoccerStats", "ligi_soccerstats.xlsx", f"BŁĄD GŁÓWNY: {str(e)}"])
+    ss_df = pd.DataFrame()
 
 # ==========================================
 # 3. MAPOWANIE I SCALANIE DANYCH 
