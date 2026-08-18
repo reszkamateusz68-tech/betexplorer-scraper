@@ -13,7 +13,7 @@ WARTOSC_JEDNOSTKI_PLN = 100.0
 PODATEK_BUKMACHERSKI = 0.88    
 
 # Link do profesjonalnego podglądu Dashboardu
-LINK_DASHBOARD = "\n🌐 <a href='https://datastudio.google.com/embed/reporting/f2e229d0-903a-45c4-9752-a72dd19a9bf4/page/jZP4F'><b>Interaktywny Dashboard Analityczny</b></a>"
+LINK_DASHBOARD = "\n📊 <a href='https://datastudio.google.com/embed/reporting/f2e229d0-903a-45c4-9752-a72dd19a9bf4/page/jZP4F'><b>Interaktywny System Analityczny StatLab Analytics</b></a>"
 
 # ==========================================
 # SZABLONY WIADOMOŚCI STATLAB ANALYTICS
