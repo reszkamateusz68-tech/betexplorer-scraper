@@ -1290,6 +1290,24 @@ for idx, row in fixtures_clean.iterrows():
             arg = f"Anomalia underowa. Średnia sezonu obu ekip: {round(season_avg, 2)}. Ost. 2 mecze: tylko {round(last_2_avg, 2)} goli. Oczekiwane przełamanie."
             add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Anomalies", "O1.5", 85.0, round(est_odd, 2), arg)
 
+# ----------------------------------------------------
+    # SILNIK: UNDERDOG HANDICAP PRO (Handicap na słabsze drużyny +1.5)
+    # ----------------------------------------------------
+    if len(h_dom) >= 5 and len(a_wyj) >= 5 and a_tier in ['Koszyk 4', 'Koszyk 5', 'Koszyk 6']:
+        # Sprawdzamy jak często gospodarz u siebie wygrywa różnicą 2+ goli (blowout)
+        prob_h_blowout = sum((h_dom['FTHG'] - h_dom['FTAG']) >= 2) / len(h_dom)
+        # Sprawdzamy jak często gość na wyjeździe przegrywa różnicą 2+ goli
+        prob_a_blowout = sum((a_wyj['FTHG'] - a_wyj['FTAG']) >= 2) / len(a_wyj)
+        
+        # Prawdopodobieństwo wejścia handicapa +1.5 na słabszą drużynę (gościa)
+        prob_h_hc = 1.0 - prob_h_blowout
+        prob_a_hc = 1.0 - prob_a_blowout
+        
+        avg_hc_prob = (prob_h_hc + prob_a_hc) / 2
+        
+        if avg_hc_prob >= 0.85:
+            arg = f"Handicap Gość +1.5 | Gosp wygrywa 2+ golami tylko w {sum((h_dom['FTHG'] - h_dom['FTAG']) >= 2)}/{len(h_dom)} meczów. Gość przegrywa 2+ golami tylko w {sum((a_wyj['FTHG'] - a_wyj['FTAG']) >= 2)}/{len(a_wyj)}."
+            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Underdog Handicap", "2 (+1.5)", round(avg_hc_prob*100, 1), 1.18, arg)
 
 # ==========================================================
 # 7. SYSTEM ŚLEDZENIA SKUTECZNOŚCI I YIELDU (BACKTESTER)
