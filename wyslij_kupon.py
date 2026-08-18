@@ -7,7 +7,7 @@ from datetime import datetime
 from google.oauth2.service_account import Credentials
 
 # ==========================================
-# KONFIGURACJA FINANSOWA I API
+# KONFIGURACJA FINANSOWA I API (StatLab Analytics)
 # ==========================================
 WARTOSC_JEDNOSTKI_PLN = 100.0  
 PODATEK_BUKMACHERSKI = 0.88    
@@ -16,10 +16,10 @@ PODATEK_BUKMACHERSKI = 0.88
 LINK_DASHBOARD = "\n🌐 <a href='https://datastudio.google.com/embed/reporting/f2e229d0-903a-45c4-9752-a72dd19a9bf4/page/jZP4F'><b>Interaktywny Dashboard Analityczny</b></a>"
 
 # ==========================================
-# SZABLONY WIADOMOŚCI
+# SZABLONY WIADOMOŚCI STATLAB ANALYTICS
 # ==========================================
 SZABLON_NOWY = """
-🔥 <b>PROPOZYCJA AKO</b> 🔥
+🔥 <b>PROPOZYCJA AKO | StatLab Analytics</b> 🔥
 
 🆔 <i>{id_kuponu}</i>
 ───────────────
@@ -27,11 +27,13 @@ SZABLON_NOWY = """
 📊 <b>Podsumowanie Kuponu:</b>
 📈 Łączny kurs: {kurs}
 💰 Stawka: {stawka_j}j ({stawka_pln} PLN przy 1j={wartosc_j}zł)
-💸 Ewentualna wygrana: {wygrana_j}j ({wygrana_pln} PLN po odliczeniu podatku)
-""" + LINK_DASHBOARD
+💸 Ewentualna wygrana: {wygrana_j}j ({wygrana_pln} PLN po podatku 12%)
+───────────────
+🤖 <i>StatLab Engine | Czysta matematyka i statystyka</i>
+"""
 
 SZABLON_WYGRANA = """
-✅ <b>KUPON ZAKOŃCZONY ZYSKIEM!</b> ✅
+✅ <b>KUPON ZAKOŃCZONY ZYSKIEM!</b> | StatLab</b> ✅
 
 🆔 <i>{id_kuponu}</i>
 ───────────────
@@ -41,7 +43,7 @@ SZABLON_WYGRANA = """
 """ + LINK_DASHBOARD
 
 SZABLON_PRZEGRANA = """
-❌ <b>KUPON ZAKOŃCZONY PORAŻKĄ</b> ❌
+❌ <b>KUPON ZAKOŃCZONY PORAŻKĄ</b> | StatLab</b> ❌
 
 🆔 <i>{id_kuponu}</i>
 ───────────────
