@@ -1608,7 +1608,7 @@ spreadsheet.worksheet("All_Predictions").clear()
 if not df_all_predictions.empty: spreadsheet.worksheet("All_Predictions").update(prepare_for_gsheets(df_all_predictions))
 
 summary_data = [
-    ["==== PODSUMOWANIE OGÓLNE ====", "", ""],
+    ["==== StatLab Analytics | Podsumowanie Ogólne ====", "", ""],
     ["Ostatnia aktualizacja", datetime.now().strftime("%Y-%m-%d %H:%M:%S"), ""],
     ["Fixtures Czyste", len(fixtures_clean), ""],
     ["Results Zintegrowane", len(results_clean), ""],
@@ -1628,5 +1628,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Pomyślnie zaimplementowano filtr najbliższych 7 dni, załatano 'empty' z listami, zintegrowano nowe modele matematyczne (w tym OPTA).")
+print("StatLab Analytics: Silnik zaktualizowany, spójne kotwice kursowe i zoptymalizowany zapis GSheets.")
 print("=" * 60)
