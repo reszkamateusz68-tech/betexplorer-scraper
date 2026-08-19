@@ -1582,7 +1582,7 @@ if not df_all_predictions.empty:
     df_all_predictions = df_all_predictions.sort_values(by=["Data_Sort", "Szansa"], ascending=[True, False]).drop(columns=['Data_Sort', 'Unikalny_Klucz', 'Group_Date', 'Max_Coupons'], errors='ignore')
 
 # ==========================================
-# 8. WYSYŁKA GOOGLE SHEETS
+# 8. WYSYŁKA GOOGLE SHEETS (ZOPTYMALIZOWANA)
 # ==========================================
 all_sheets = ["Summary", "Fixtures", "Results", "League_Tables", "H2H_Mecze", "Historia_Typow", "All_Predictions", "Kupony_AKO"]
 
@@ -1591,13 +1591,17 @@ for sheet_name in all_sheets:
     except: spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=30)
 
 def safe_batch_update(ws_name, df_data):
+    if df_data.empty:
+        return
     ws = spreadsheet.worksheet(ws_name)
-    time.sleep(1.0)
+    time.sleep(1.5) # Wydłużony odstęp chroniący przed limitami API
     ws.clear()
-    if not df_data.empty:
-        ws.update(prepare_for_gsheets(df_data))
+    
+    data_to_write = prepare_for_gsheets(df_data)
+    # Jawne wskazanie parametrów optymalizuje czas przetwarzania po stronie serwerów Google
+    ws.update(values=data_to_write, range_name='A1')
 
-print("Zapisywanie danych do Google Sheets...")
+print("Zapisywanie danych do Google Sheets (Tryb: Safe Batch)...")
 safe_batch_update("Fixtures", fixtures_clean)
 safe_batch_update("Results", results_clean)
 safe_batch_update("League_Tables", league_tables)
@@ -1614,21 +1618,19 @@ summary_data = [
     ["Przetworzone Typy w Historii", len(df_historia), ""],
     ["Wygenerowane Predykcje (Suma)", len(df_all_predictions), ""]
 ]
-summary_data.append(["", "", ""])
-summary_data.append(["==== RAPORT POBIERANIA (LOGI) ====", "", ""])
-summary_data.append(["Źródło", "URL / Plik", "Status"])
-for rep in scrape_report:
-    summary_data.append(rep)
+summary_data.extend([["", "", ""], ["==== RAPORT POBIERANIA (LOGI) ====", "", ""], ["Źródło", "URL / Plik", "Status"]])
+summary_data.extend(scrape_report)
 
 try:
     ws_sum = spreadsheet.worksheet("Summary")
 except:
     ws_sum = spreadsheet.add_worksheet(title="Summary", rows=1000, cols=10)
-time.sleep(1.0)
+
+time.sleep(1.5)
 ws_sum.clear()
-ws_sum.update(summary_data)
+ws_sum.update(values=summary_data, range_name='A1')
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Zaktualizowano arkusz i utworzono zoptymalizowane pakiety AKO wg dni tygodnia.")
+print("Zaktualizowano arkusz i wdrożono optymalizację GSheets API.")
 print("=" * 60)
