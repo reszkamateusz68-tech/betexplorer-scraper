@@ -12,17 +12,17 @@ from google.oauth2.service_account import Credentials
 WARTOSC_JEDNOSTKI_PLN = 100.0  
 PODATEK_BUKMACHERSKI = 0.88    
 
-# Profesjonalny przycisk Inline "Premium"
+# Przycisk Inline przenoszący do interaktywnego panelu Looker Studio
 DASHBOARD_KEYBOARD = {
     "inline_keyboard": [
         [
-            {"text": "💎 Otwórz Panel StatLab Premium", "url": "https://datastudio.google.com/embed/reporting/f2e229d0-903a-45c4-9752-a72dd19a9bf4/page/jZP4F"}
+            {"text": "💎 Otwórz Platformę StatLab Analytics", "url": "https://datastudio.google.com/embed/reporting/f2e229d0-903a-45c4-9752-a72dd19a9bf4/page/jZP4F"}
         ]
     ]
 }
 
 # ==========================================
-# SZABLONY WIADOMOŚCI
+# SZABLONY WIADOMOŚCI STATLAB ANALYTICS
 # ==========================================
 SZABLON_NOWY = """
 🔥 <b>PROPOZYCJA AKO | StatLab Analytics</b> 🔥
@@ -32,34 +32,38 @@ SZABLON_NOWY = """
 {mecze}───────────────
 📊 <b>Podsumowanie Kuponu:</b>
 📈 Łączny kurs: {kurs}
-💰 Stawka: {stawka_j}j ({stawka_pln} PLN przy 1j={wartosc_j}zł)
-💸 Ewentualna wygrana: {wygrana_j}j ({wygrana_pln} PLN po podatku)
+💰 Stawka: {stawka_j}j ({stawka_pln} PLN | 1j={wartosc_j} PLN)
+💸 Ewentualna wygrana: {wygrana_j}j ({wygrana_pln} PLN po podatku 12%)
 ───────────────
 🤖 <i>StatLab Engine | Czysta matematyka i statystyka</i>
 """
 
 SZABLON_WYGRANA = """
-✅ <b>KUPON ZAKOŃCZONY ZYSKIEM!</b> | StatLab ✅
+✅ <b>KUPON ROZLICZONY: ZYSK! | StatLab</b> ✅
 
 🆔 <i>{id_kuponu}</i>
 ───────────────
 {mecze}───────────────
 📈 Łączny kurs: {kurs}
-💰 Wygrana: {wygrana_j}j ({wygrana_pln} PLN po odliczeniu podatku)
+💰 Wygrana: {wygrana_j}j ({wygrana_pln} PLN po podatku)
+───────────────
+📊 <i>Pełny rejestr zaktualizowany w bazie</i>
 """
 
 SZABLON_PRZEGRANA = """
-❌ <b>KUPON ZAKOŃCZONY PORAŻKĄ</b> | StatLab ❌
+❌ <b>KUPON ROZLICZONY: PORAŻKA | StatLab</b> ❌
 
 🆔 <i>{id_kuponu}</i>
 ───────────────
 {mecze}───────────────
 📈 Łączny kurs: {kurs}
 📉 Strata: {stawka_j}j ({stawka_pln} PLN)
+───────────────
+📌 <i>Pełna transparentność – bilans zaktualizowany w bazie</i>
 """
 
 SZABLON_OCZEKUJE = """
-⏳ <b>KUPON W GRZE (OCZEKUJE)</b> ⏳
+⏳ <b>KUPON W GRZE (OCZEKUJE) | StatLab</b> ⏳
 
 🆔 <i>{id_kuponu}</i>
 ───────────────
@@ -67,7 +71,7 @@ SZABLON_OCZEKUJE = """
 📊 <b>Status Kuponu:</b>
 📈 Łączny kurs: {kurs}
 💰 Stawka: {stawka_j}j ({stawka_pln} PLN)
-💸 Potencjalna wygrana: {wygrana_j}j ({wygrana_pln} PLN po odliczeniu podatku)
+💸 Potencjalna wygrana: {wygrana_j}j ({wygrana_pln} PLN po podatku)
 """
 
 # ==========================================
@@ -103,14 +107,8 @@ def send_telegram(text, reply_markup=None):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         print("Brak danych uwierzytelniających Telegram (Token / Chat_ID).")
         return False
-    
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID, 
-        "text": text, 
-        "parse_mode": "HTML"
-    }
-    
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
     if reply_markup:
         payload["reply_markup"] = reply_markup
         
@@ -336,7 +334,8 @@ if 'Wyslij_AKO' in df_pred.columns:
                 wygrana_j=wygrana_j, wygrana_pln=wygrana_pln
             )
             
-            if send_telegram(wiadomosc, reply_markup=DASHBOARD_KEYBOARD): wyslane_id.append(kupon_id)
+            if send_telegram(wiadomosc, reply_markup=DASHBOARD_KEYBOARD): 
+                wyslane_id.append(kupon_id)
             
         if wyslane_id:
             komorki_do_odznaczenia = []
