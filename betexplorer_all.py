@@ -1562,38 +1562,54 @@ if not df_all_predictions.empty:
     df_all_predictions = df_all_predictions.sort_values(by=["Data_Sort", "Szansa"], ascending=[True, False]).drop(columns=['Data_Sort', 'Unikalny_Klucz'], errors='ignore')
 
 # ==========================================
-# 7c. AUTO-KREATOR PAKIETÓW AKO (StatLab Presets)
+# 7c. AUTO-KREATOR AKO W WIDEŁKACH (2.30 - 6.50)
 # ==========================================
-print("Generowanie zautomatyzowanych pakietów AKO dnia...")
+print("Generowanie optymalnych kuponów AKO (Kurs: 2.30 - 6.50)...")
 
-presets_ako = []
 if not df_all_predictions.empty:
-    dzis_str = datetime.now().strftime('%Y-%m-%d')
-    typy_dzis = df_all_predictions[df_all_predictions['Data'] >= dzis_str].copy()
+    dzis_dt = datetime.now().date()
+    pula_predykcji = df_all_predictions.copy()
+    pula_predykcji['Data_DT'] = pd.to_datetime(pula_predykcji['Data'], errors='coerce').dt.date
+    pula_aktywna = pula_predykcji[pula_predykcji['Data_DT'] >= dzis_dt].sort_values(by=['Szansa'], ascending=False)
     
-    # 1. Bezpieczny Dubel (2 zdarzenia 95%+)
-    safe_picks = typy_dzis[typy_dzis['Szansa'] >= 95.0].drop_duplicates(subset=['Match_ID']).head(2)
-    if len(safe_picks) == 2:
-        k_id = f"PRESET_SAFE_{datetime.now().strftime('%y%m%d')}"
-        kurs = round(float(safe_picks.iloc[0]['Kurs_Szac']) * float(safe_picks.iloc[1]['Kurs_Szac']), 2)
-        skrot = " | ".join(safe_picks['Gospodarz'].str[:3] + "-" + safe_picks['Gość'].str[:3])
-        presets_ako.append([k_id, dzis_str, skrot, 2, kurs, 100, "1j", "W OCZEKIWANIU", round(kurs*100*0.88, 2), 0.0, "FALSE", ""])
-
-    # 2. Taśma BetBuilder Pro (Kombinacja szablonów korelacyjnych)
-    bb_picks = typy_dzis[typy_dzis['Engine'] == 'BetBuilder Pro'].drop_duplicates(subset=['Match_ID']).head(3)
-    if len(bb_picks) >= 2:
-        k_id = f"PRESET_BB_{datetime.now().strftime('%y%m%d')}"
-        kurs_bb = 1.0
-        for _, r in bb_picks.iterrows():
-            kurs_bb *= float(r['Kurs_Szac'])
-        kurs_bb = round(kurs_bb, 2)
-        skrot_bb = " | ".join(bb_picks['Gospodarz'].str[:3] + "-" + bb_picks['Gość'].str[:3])
-        presets_ako.append([k_id, dzis_str, skrot_bb, len(bb_picks), kurs_bb, 50, "0.5j", "W OCZEKIWANIU", round(kurs_bb*50*0.88, 2), 0.0, "FALSE", ""])
-
-if presets_ako:
-    df_presets = pd.DataFrame(presets_ako, columns=cols_ako)
-    # Scalamy z istniejącą tabelą AKO, unikając duplikatów
-    df_ako = pd.concat([df_presets, df_ako]).drop_duplicates(subset=['Kupon_ID'], keep='last')
+    # Bierzemy typy unikalne pod kątem Match_ID
+    unikalne_mecze = pula_aktywna.drop_duplicates(subset=['Match_ID'])
+    
+    zebrane_typy = []
+    biezacy_kurs = 1.0
+    
+    for _, typ_row in unikalne_mecze.iterrows():
+        try:
+            k = float(str(typ_row['Kurs_Szac']).replace(',', '.'))
+        except:
+            k = 1.0
+            
+        if k > 1.01:
+            zebrane_typy.append(typ_row)
+            biezacy_kurs *= k
+            
+            # Gdy kurs wejdzie w docelowy przedział 2.30 - 6.50, tworzymy gotowy kupon
+            if 2.30 <= biezacy_kurs <= 6.50:
+                nowe_id_ako = f"AKO_PRO_{datetime.now().strftime('%y%m%d_%H%M')}"
+                
+                # Oznaczamy powiązane typy w df_all_predictions i df_historia
+                for t in zebrane_typy:
+                    k_match = t['Match_ID']
+                    k_eng = t['Engine']
+                    k_typ = t['Typ']
+                    
+                    mask_pred = (df_all_predictions['Match_ID'] == k_match) & (df_all_predictions['Engine'] == k_eng) & (df_all_predictions['Typ'] == k_typ)
+                    df_all_predictions.loc[mask_pred, 'Kupon_ID'] = nowe_id_ako
+                    df_all_predictions.loc[mask_pred, 'Zagrane'] = "TRUE"
+                    
+                    if not df_historia.empty:
+                        mask_hist = (df_historia['Match_ID'] == k_match) & (df_historia['Engine'] == k_eng) & (df_historia['Typ'] == k_typ)
+                        df_historia.loc[mask_hist, 'Kupon_ID'] = nowe_id_ako
+                        df_historia.loc[mask_hist, 'Zagrane'] = "TRUE"
+                
+                # Resetujemy bufor do stworzenia kolejnego kuponu
+                zebrane_typy = []
+                biezacy_kurs = 1.0
 
 # ==========================================
 # 8. WYSYŁKA GOOGLE SHEETS
