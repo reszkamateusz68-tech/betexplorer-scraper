@@ -12,7 +12,6 @@ from google.oauth2.service_account import Credentials
 WARTOSC_JEDNOSTKI_PLN = 100.0  
 PODATEK_BUKMACHERSKI = 0.88    
 
-# Przycisk Inline przenoszący do interaktywnego panelu Looker Studio
 DASHBOARD_KEYBOARD = {
     "inline_keyboard": [
         [
@@ -22,48 +21,56 @@ DASHBOARD_KEYBOARD = {
 }
 
 # ==========================================
-# SZABLONY WIADOMOŚCI STATLAB ANALYTICS
+# SZABLONY WIADOMOŚCI
 # ==========================================
 SZABLON_NOWY = """
-🔥 <b>PROPOZYCJA AKO | StatLab Analytics</b> 🔥
+🔥 <b>PROPOZYCJA AKO</b> 🔥
 
 🆔 <i>{id_kuponu}</i>
 ───────────────
 {mecze}───────────────
 📊 <b>Podsumowanie Kuponu:</b>
 📈 Łączny kurs: {kurs}
-💰 Stawka: {stawka_j}j ({stawka_pln} PLN | 1j={wartosc_j} PLN)
-💸 Ewentualna wygrana: {wygrana_j}j ({wygrana_pln} PLN po podatku 12%)
+💰 Stawka: {stawka_j}j ({stawka_pln} PLN przy 1j={wartosc_j}zł)
+💸 Ewentualna wygrana: {wygrana_j}j ({wygrana_pln} PLN po odliczeniu podatku)
+"""
+
+SZABLON_EKSPERT = """
+👑 <b>KUPON SPECJALISTY | TOP PICK</b> 👑
+
+🆔 <i>{id_kuponu}</i>
 ───────────────
-🤖 <i>StatLab Engine | Czysta matematyka i statystyka</i>
+{mecze}───────────────
+📊 <b>Podsumowanie Kuponu:</b>
+📈 Łączny kurs: {kurs}
+💰 Stawka: {stawka_j}j ({stawka_pln} PLN przy 1j={wartosc_j}zł)
+💸 Ewentualna wygrana: {wygrana_j}j ({wygrana_pln} PLN po odliczeniu podatku)
+───────────────
+🎯 <i>Ręczna selekcja wsparta modelem matematycznym</i>
 """
 
 SZABLON_WYGRANA = """
-✅ <b>KUPON ROZLICZONY: ZYSK! | StatLab</b> ✅
+✅ <b>KUPON ROZLICZONY: ZYSK!</b> ✅
 
 🆔 <i>{id_kuponu}</i>
 ───────────────
 {mecze}───────────────
 📈 Łączny kurs: {kurs}
-💰 Wygrana: {wygrana_j}j ({wygrana_pln} PLN po podatku)
-───────────────
-📊 <i>Pełny rejestr zaktualizowany w bazie</i>
+💰 Wygrana: {wygrana_j}j ({wygrana_pln} PLN po odliczeniu podatku)
 """
 
 SZABLON_PRZEGRANA = """
-❌ <b>KUPON ROZLICZONY: PORAŻKA | StatLab</b> ❌
+❌ <b>KUPON ROZLICZONY: PORAŻKA</b> ❌
 
 🆔 <i>{id_kuponu}</i>
 ───────────────
 {mecze}───────────────
 📈 Łączny kurs: {kurs}
 📉 Strata: {stawka_j}j ({stawka_pln} PLN)
-───────────────
-📌 <i>Pełna transparentność – bilans zaktualizowany w bazie</i>
 """
 
 SZABLON_OCZEKUJE = """
-⏳ <b>KUPON W GRZE (OCZEKUJE) | StatLab</b> ⏳
+⏳ <b>KUPON W GRZE (OCZEKUJE)</b> ⏳
 
 🆔 <i>{id_kuponu}</i>
 ───────────────
@@ -71,7 +78,7 @@ SZABLON_OCZEKUJE = """
 📊 <b>Status Kuponu:</b>
 📈 Łączny kurs: {kurs}
 💰 Stawka: {stawka_j}j ({stawka_pln} PLN)
-💸 Potencjalna wygrana: {wygrana_j}j ({wygrana_pln} PLN po podatku)
+💸 Potencjalna wygrana: {wygrana_j}j ({wygrana_pln} PLN po odliczeniu podatku)
 """
 
 # ==========================================
@@ -119,7 +126,7 @@ def send_telegram(text, reply_markup=None):
     return True
 
 # ==========================================
-# FUNKCJA GENERUJĄCA STATYSTYKI I POWODY PORAŻKI
+# FUNKCJA GENERUJĄCA STATYSTYKI I POWODY PORAŻKI (KULOODPORNA)
 # ==========================================
 def format_match_details(m_row, df_results):
     match_id = str(m_row.get('Match_ID', '')).strip()
@@ -216,6 +223,18 @@ def format_match_details(m_row, df_results):
                 reasons.append(f"Strzały ogółem: {int(sh)}:{int(sa)} (brak wygranej gospodarzy)")
             elif sub_bet == "ST_1" and pd.notna(sth) and pd.notna(sta) and sth <= sta:
                 reasons.append(f"Strzały celne: {int(sth)}:{int(sta)} (brak wygranej gospodarzy)")
+                
+            elif sub_bet == "H_ST_O2.5" and pd.notna(sth) and sth < 3:
+                reasons.append(f"Celne gospodarzy: {int(sth)} (linia: 2.5)")
+            elif sub_bet == "H_S_O11.5" and pd.notna(sh) and sh < 12:
+                reasons.append(f"Strzały gospodarzy: {int(sh)} (linia: 11.5)")
+            elif sub_bet == "A_ST_U4.5" and pd.notna(sta) and sta > 4:
+                reasons.append(f"Celne gości: {int(sta)} (linia: 4.5)")
+                
+            elif sub_bet == "2 (+1.5)" and pd.notna(hg) and pd.notna(ag) and (hg - ag) > 1:
+                reasons.append(f"Handicap gości +1.5 niepokryty (wynik: {int(hg)}:{int(ag)})")
+            elif sub_bet == "1 (+1.5)" and pd.notna(hg) and pd.notna(ag) and (ag - hg) > 1:
+                reasons.append(f"Handicap gospodarzy +1.5 niepokryty (wynik: {int(hg)}:{int(ag)})")
 
         reasons = list(dict.fromkeys(reasons))
 
@@ -322,13 +341,16 @@ if 'Wyslij_AKO' in df_pred.columns:
                 rekord = kupon_data.iloc[0]
                 try: stawka_pln = float(str(rekord.get('Stawka', '100')).replace(',', '.'))
                 except: stawka_pln = 100.0
-            else: stawka_pln = 100.0
+            else:
+                stawka_pln = 1000.0 if str(kupon_id).startswith("AKO_EXPERT") else 100.0
             
             stawka_j = round(stawka_pln / WARTOSC_JEDNOSTKI_PLN, 2)
             wygrana_pln = round(stawka_pln * kurs_ako * PODATEK_BUKMACHERSKI, 2)
             wygrana_j = round(wygrana_pln / WARTOSC_JEDNOSTKI_PLN, 2)
             
-            wiadomosc = SZABLON_NOWY.format(
+            szablon_do_uzycia = SZABLON_EKSPERT if str(kupon_id).startswith("AKO_EXPERT") else SZABLON_NOWY
+            
+            wiadomosc = szablon_do_uzycia.format(
                 id_kuponu=kupon_id, mecze=lista_meczow_txt, kurs=f"{kurs_ako:.2f}",
                 stawka_j=stawka_j, stawka_pln=stawka_pln, wartosc_j=int(WARTOSC_JEDNOSTKI_PLN),
                 wygrana_j=wygrana_j, wygrana_pln=wygrana_pln
