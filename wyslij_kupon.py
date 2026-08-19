@@ -7,16 +7,22 @@ from datetime import datetime
 from google.oauth2.service_account import Credentials
 
 # ==========================================
-# KONFIGURACJA FINANSOWA I API (StatLab Analytics)
+# KONFIGURACJA FINANSOWA I API
 # ==========================================
 WARTOSC_JEDNOSTKI_PLN = 100.0  
 PODATEK_BUKMACHERSKI = 0.88    
 
-# Link do profesjonalnego podglądu Dashboardu
-LINK_DASHBOARD = "\n📊 <a href='https://datastudio.google.com/embed/reporting/f2e229d0-903a-45c4-9752-a72dd19a9bf4/page/jZP4F'><b>Interaktywny System Analityczny StatLab Analytics</b></a>"
+# Profesjonalny przycisk Inline "Premium"
+DASHBOARD_KEYBOARD = {
+    "inline_keyboard": [
+        [
+            {"text": "💎 Otwórz Panel StatLab Premium", "url": "https://datastudio.google.com/embed/reporting/f2e229d0-903a-45c4-9752-a72dd19a9bf4/page/jZP4F"}
+        ]
+    ]
+}
 
 # ==========================================
-# SZABLONY WIADOMOŚCI STATLAB ANALYTICS
+# SZABLONY WIADOMOŚCI
 # ==========================================
 SZABLON_NOWY = """
 🔥 <b>PROPOZYCJA AKO | StatLab Analytics</b> 🔥
@@ -27,30 +33,30 @@ SZABLON_NOWY = """
 📊 <b>Podsumowanie Kuponu:</b>
 📈 Łączny kurs: {kurs}
 💰 Stawka: {stawka_j}j ({stawka_pln} PLN przy 1j={wartosc_j}zł)
-💸 Ewentualna wygrana: {wygrana_j}j ({wygrana_pln} PLN po podatku 12%)
+💸 Ewentualna wygrana: {wygrana_j}j ({wygrana_pln} PLN po podatku)
 ───────────────
 🤖 <i>StatLab Engine | Czysta matematyka i statystyka</i>
 """
 
 SZABLON_WYGRANA = """
-✅ <b>KUPON ZAKOŃCZONY ZYSKIEM!</b> | StatLab</b> ✅
+✅ <b>KUPON ZAKOŃCZONY ZYSKIEM!</b> | StatLab ✅
 
 🆔 <i>{id_kuponu}</i>
 ───────────────
 {mecze}───────────────
 📈 Łączny kurs: {kurs}
 💰 Wygrana: {wygrana_j}j ({wygrana_pln} PLN po odliczeniu podatku)
-""" + LINK_DASHBOARD
+"""
 
 SZABLON_PRZEGRANA = """
-❌ <b>KUPON ZAKOŃCZONY PORAŻKĄ</b> | StatLab</b> ❌
+❌ <b>KUPON ZAKOŃCZONY PORAŻKĄ</b> | StatLab ❌
 
 🆔 <i>{id_kuponu}</i>
 ───────────────
 {mecze}───────────────
 📈 Łączny kurs: {kurs}
 📉 Strata: {stawka_j}j ({stawka_pln} PLN)
-""" + LINK_DASHBOARD
+"""
 
 SZABLON_OCZEKUJE = """
 ⏳ <b>KUPON W GRZE (OCZEKUJE)</b> ⏳
@@ -62,7 +68,7 @@ SZABLON_OCZEKUJE = """
 📈 Łączny kurs: {kurs}
 💰 Stawka: {stawka_j}j ({stawka_pln} PLN)
 💸 Potencjalna wygrana: {wygrana_j}j ({wygrana_pln} PLN po odliczeniu podatku)
-""" + LINK_DASHBOARD
+"""
 
 # ==========================================
 # INICJALIZACJA GOOGLE SHEETS
@@ -93,12 +99,21 @@ df_hist = pd.DataFrame(ws_hist.get_all_records())
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-def send_telegram(text):
+def send_telegram(text, reply_markup=None):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         print("Brak danych uwierzytelniających Telegram (Token / Chat_ID).")
         return False
+    
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID, 
+        "text": text, 
+        "parse_mode": "HTML"
+    }
+    
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+        
     response = requests.post(url, json=payload)
     if response.status_code != 200:
         print(f"Błąd wysyłki Telegram: {response.text}")
@@ -106,7 +121,7 @@ def send_telegram(text):
     return True
 
 # ==========================================
-# FUNKCJA GENERUJĄCA STATYSTYKI I POWODY PORAŻKI (KULOODPORNA)
+# FUNKCJA GENERUJĄCA STATYSTYKI I POWODY PORAŻKI
 # ==========================================
 def format_match_details(m_row, df_results):
     match_id = str(m_row.get('Match_ID', '')).strip()
@@ -141,7 +156,6 @@ def format_match_details(m_row, df_results):
     if status == "PRZEGRANA":
         reasons = []
         for sub_bet in sub_bets:
-            # 1X2 / 1X / X2
             if sub_bet in ["1", "1X"] and pd.notna(hg) and pd.notna(ag) and hg < ag:
                 reasons.append(f"Porażka gospodarzy ({int(hg)}:{int(ag)})")
             elif sub_bet == "1" and pd.notna(hg) and pd.notna(ag) and hg == ag:
@@ -149,7 +163,6 @@ def format_match_details(m_row, df_results):
             elif sub_bet in ["2", "X2"] and pd.notna(hg) and pd.notna(ag) and hg > ag:
                 reasons.append(f"Porażka gości ({int(hg)}:{int(ag)})")
                 
-            # Gole ogółem
             elif sub_bet.startswith("U") and not sub_bet.startswith(("HT_U", "2H_U", "HU", "AU", "C_U", "HC_U", "AC_U")) and pd.notna(tg):
                 try:
                     line = float(sub_bet[1:])
@@ -161,7 +174,6 @@ def format_match_details(m_row, df_results):
                     if tg < line: reasons.append(f"Łącznie goli: {int(tg)} (wymagano: ponad {line})")
                 except: pass
                 
-            # Gole 1H i 2H
             elif sub_bet.startswith("HT_U") and pd.notna(ht_h) and pd.notna(ht_a):
                 try:
                     line = float(sub_bet.replace("HT_U", ""))
@@ -175,7 +187,6 @@ def format_match_details(m_row, df_results):
                     if h2_tg > line: reasons.append(f"Gole w 2. połowie: {int(h2_tg)} (linia: {line})")
                 except: pass
                 
-            # Gole drużyn
             elif sub_bet.startswith("HU") and pd.notna(hg):
                 try:
                     line = float(sub_bet.replace("HU", ""))
@@ -187,7 +198,6 @@ def format_match_details(m_row, df_results):
                     if ag > line: reasons.append(f"Gole gości: {int(ag)} (linia: {line})")
                 except: pass
                 
-            # Rożne
             elif sub_bet.startswith("C_U") and pd.notna(tc):
                 try:
                     line = float(sub_bet.replace("C_U", ""))
@@ -204,25 +214,10 @@ def format_match_details(m_row, df_results):
                     if ac > line: reasons.append(f"Rożne gości: {int(ac)} (linia: {line})")
                 except: pass
                 
-            # Strzały
             elif sub_bet == "S_1" and pd.notna(sh) and pd.notna(sa) and sh <= sa:
                 reasons.append(f"Strzały ogółem: {int(sh)}:{int(sa)} (brak wygranej gospodarzy)")
             elif sub_bet == "ST_1" and pd.notna(sth) and pd.notna(sta) and sth <= sta:
                 reasons.append(f"Strzały celne: {int(sth)}:{int(sta)} (brak wygranej gospodarzy)")
-                
-            # Nowe rynki Strzałów (OPTA)
-            elif sub_bet == "H_ST_O2.5" and pd.notna(sth) and sth < 3:
-                reasons.append(f"Celne gospodarzy: {int(sth)} (linia: 2.5)")
-            elif sub_bet == "H_S_O11.5" and pd.notna(sh) and sh < 12:
-                reasons.append(f"Strzały gospodarzy: {int(sh)} (linia: 11.5)")
-            elif sub_bet == "A_ST_U4.5" and pd.notna(sta) and sta > 4:
-                reasons.append(f"Celne gości: {int(sta)} (linia: 4.5)")
-                
-            # Nowe rynki Handicapów
-            elif sub_bet == "2 (+1.5)" and pd.notna(hg) and pd.notna(ag) and (hg - ag) > 1:
-                reasons.append(f"Handicap gości +1.5 niepokryty (wynik: {int(hg)}:{int(ag)})")
-            elif sub_bet == "1 (+1.5)" and pd.notna(hg) and pd.notna(ag) and (ag - hg) > 1:
-                reasons.append(f"Handicap gospodarzy +1.5 niepokryty (wynik: {int(hg)}:{int(ag)})")
 
         reasons = list(dict.fromkeys(reasons))
 
@@ -332,7 +327,6 @@ if 'Wyslij_AKO' in df_pred.columns:
             else: stawka_pln = 100.0
             
             stawka_j = round(stawka_pln / WARTOSC_JEDNOSTKI_PLN, 2)
-            # CAŁKOWITA WYGRANA BRUTTO PO ODLICZENIU 12% PODATKU
             wygrana_pln = round(stawka_pln * kurs_ako * PODATEK_BUKMACHERSKI, 2)
             wygrana_j = round(wygrana_pln / WARTOSC_JEDNOSTKI_PLN, 2)
             
@@ -342,7 +336,7 @@ if 'Wyslij_AKO' in df_pred.columns:
                 wygrana_j=wygrana_j, wygrana_pln=wygrana_pln
             )
             
-            if send_telegram(wiadomosc): wyslane_id.append(kupon_id)
+            if send_telegram(wiadomosc, reply_markup=DASHBOARD_KEYBOARD): wyslane_id.append(kupon_id)
             
         if wyslane_id:
             komorki_do_odznaczenia = []
@@ -440,8 +434,6 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
             except: stawka_pln = 100.0
             
             stawka_j = round(stawka_pln / WARTOSC_JEDNOSTKI_PLN, 2)
-            
-            # CAŁKOWITA WYGRANA BRUTTO PO ODLICZENIU 12% PODATKU
             wygrana_pln = round(kurs_ako * stawka_pln * PODATEK_BUKMACHERSKI, 2)
             wygrana_j = round(wygrana_pln / WARTOSC_JEDNOSTKI_PLN, 2)
             
@@ -462,7 +454,7 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
                     wygrana_j=wygrana_j, wygrana_pln=wygrana_pln
                 )
                 
-            if send_telegram(wiadomosc):
+            if send_telegram(wiadomosc, reply_markup=DASHBOARD_KEYBOARD):
                 for r_idx, row in enumerate(ws_ako_data):
                     if row[idx_kupon] == kupon_id:
                         if is_manual: 
