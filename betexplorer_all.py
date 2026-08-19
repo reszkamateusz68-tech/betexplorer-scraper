@@ -157,7 +157,6 @@ def prepare_for_gsheets(df):
     for row in df.values.tolist():
         new_row = []
         for idx, val in enumerate(row):
-            # NAPRAWA BŁĘDU TYPEERROR: col_name jako twardy string
             col_name = str(df.columns[idx]) 
             
             if pd.isna(val) or val == "nan":
@@ -1248,11 +1247,18 @@ for idx, row in fixtures_clean.iterrows():
             arg = f"Anomalia underowa. Średnia sezonu obu ekip: {round(season_avg, 2)}. Ost. 2 mecze: tylko {round(last_2_avg, 2)} goli. Oczekiwane przełamanie."
             add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Anomalies", "O1.5", 85.0, round(est_odd, 2), arg)
 
+
 # ==========================================================
 # 7. SYSTEM ŚLEDZENIA SKUTECZNOŚCI I YIELDU (BACKTESTER)
 # ==========================================================
 print("Inicjalizacja Modułu Backtestingu (Śledzenie Skuteczności)...")
 
+scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+creds = Credentials.from_service_account_file("credentials.json", scopes=scope) if os.path.exists("credentials.json") else Credentials.from_service_account_info(json.loads(os.environ["GOOGLE_CREDENTIALS"]), scopes=scope)
+client = gspread.authorize(creds)
+spreadsheet = client.open("BetExplorer")
+
+# CZYSZCZENIE ZBĘDNYCH KOLUMN 
 cols_all_pred = ["Match_ID", "Zagrane", "Wyslij_AKO", "Kupon_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status"]
 cols_historia = ["Match_ID", "Zagrane", "Kupon_ID", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 
@@ -1303,54 +1309,94 @@ for col in cols_historia:
 df_historia = df_historia[cols_historia]
 
 # ==========================================
-# 7c. AUTO-KREATOR AKO (MIN. 2.30) - LIMIT 3 KUPONY DZIENNIE
+# 7c. AUTO-KREATOR AKO Z PODZIAŁEM NA DNI TYGODNIA (KURS MIN. 2.30)
 # ==========================================
-print("Generowanie optymalnych kuponów AKO (Kurs: min. 2.30, max 3 dziennie)...")
+print("Generowanie optymalnych kuponów AKO (Podział na dni tygodnia, kurs min. 2.30)...")
 
 if not df_all_predictions.empty:
     dzis_dt = datetime.now().date()
     pula_predykcji = df_all_predictions.copy()
     pula_predykcji['Data_DT'] = pd.to_datetime(pula_predykcji['Data'], errors='coerce').dt.date
-    pula_aktywna = pula_predykcji[pula_predykcji['Data_DT'] >= dzis_dt].sort_values(by=['Szansa'], ascending=False)
     
-    unikalne_mecze = pula_aktywna.drop_duplicates(subset=['Match_ID'])
+    # Funkcja mapująca datę meczu na odpowiednią pulę (i limit kuponów)
+    def get_ako_group(date_obj):
+        if pd.isna(date_obj): return None, 0
+        wd = date_obj.weekday()
+        # wd: 0=Pon, 1=Wt, 2=Śr, 3=Czw, 4=Pt, 5=Sob, 6=Niedz
+        if wd in [0, 1, 2]: 
+            target = date_obj - timedelta(days=wd) # Grupujemy wszystko do poniedziałku
+            return target.strftime('%Y%m%d'), 1
+        elif wd in [3, 4]: 
+            target = date_obj + timedelta(days=(4-wd)) # Grupujemy czw/pt do piątku
+            return target.strftime('%Y%m%d'), 1
+        elif wd == 5: 
+            return date_obj.strftime('%Y%m%d'), 4
+        elif wd == 6: 
+            return date_obj.strftime('%Y%m%d'), 4
+        return None, 0
+
+    grupy_info = pula_predykcji['Data_DT'].apply(get_ako_group)
+    pula_predykcji['Group_Date'] = [x[0] for x in grupy_info]
+    pula_predykcji['Max_Coupons'] = [x[1] for x in grupy_info]
     
-    zebrane_typy = []
-    biezacy_kurs = 1.0
-    kupony_stworzone = 0
+    # Filtrujemy mecze od dziś w przód, które nie mają jeszcze przypisanego kuponu
+    pula_aktywna = pula_predykcji[(pula_predykcji['Data_DT'] >= dzis_dt) & (pula_predykcji['Kupon_ID'] == "")].sort_values(by=['Szansa'], ascending=False)
     
-    for _, typ_row in unikalne_mecze.iterrows():
-        # Utrzymanie twardego limitu 3 kuponów
-        if kupony_stworzone >= 3:
-            break
+    # Pobieramy wszystkie stworzone dotychczas kupony, by nie przekroczyć tygodniowych limitów
+    istniejace_kupony = df_all_predictions['Kupon_ID'].dropna().unique()
+    
+    unikalne_grupy = pula_aktywna[['Group_Date', 'Max_Coupons']].drop_duplicates().dropna()
+    
+    for _, grp in unikalne_grupy.iterrows():
+        g_date = grp['Group_Date']
+        max_c = grp['Max_Coupons']
+        if not g_date: continue
+        
+        prefiks = f"AKO_{g_date}"
+        wygenerowane_w_grupie = [k for k in istniejace_kupony if str(k).startswith(prefiks)]
+        aktualna_liczba = len(wygenerowane_w_grupie)
+        
+        if aktualna_liczba >= max_c:
+            continue
             
-        try: k = float(str(typ_row['Kurs_Szac']).replace(',', '.'))
-        except: k = 1.0
-            
-        if k > 1.01:
-            zebrane_typy.append(typ_row)
-            biezacy_kurs *= k
-            
-            # Gdy kurs wejdzie w docelowy przedział min. 2.30, tworzymy gotowy kupon
-            if biezacy_kurs >= 2.30:
-                kupony_stworzone += 1
-                nowe_id_ako = f"AKO_PRO_{datetime.now().strftime('%y%m%d')}_0{kupony_stworzone}"
+        mecze_grupy = pula_aktywna[pula_aktywna['Group_Date'] == g_date].drop_duplicates(subset=['Match_ID'])
+        
+        zebrane_typy = []
+        biezacy_kurs = 1.0
+        
+        for _, typ_row in mecze_grupy.iterrows():
+            try: k = float(str(typ_row['Kurs_Szac']).replace(',', '.'))
+            except: k = 1.0
                 
-                # Zaznaczamy powiązane typy i odblokowujemy flagę Wyslij_AKO
-                for t in zebrane_typy:
-                    k_match, k_eng, k_typ = t['Match_ID'], t['Engine'], t['Typ']
-                    mask_pred = (df_all_predictions['Match_ID'] == k_match) & (df_all_predictions['Engine'] == k_eng) & (df_all_predictions['Typ'] == k_typ)
-                    df_all_predictions.loc[mask_pred, 'Kupon_ID'] = nowe_id_ako
-                    df_all_predictions.loc[mask_pred, 'Zagrane'] = "TRUE"
-                    df_all_predictions.loc[mask_pred, 'Wyslij_AKO'] = "TRUE"
+            if k > 1.01:
+                zebrane_typy.append(typ_row)
+                biezacy_kurs *= k
                 
-                zebrane_typy = []
-                biezacy_kurs = 1.0
+                # Gdy mamy minimum 2.30 dla grupy
+                if biezacy_kurs >= 2.30:
+                    aktualna_liczba += 1
+                    nowe_id_ako = f"{prefiks}_{aktualna_liczba:02d}"
+                    istniejace_kupony = np.append(istniejace_kupony, nowe_id_ako)
+                    
+                    for t in zebrane_typy:
+                        k_match, k_eng, k_typ = t['Match_ID'], t['Engine'], t['Typ']
+                        mask_pred = (df_all_predictions['Match_ID'] == k_match) & (df_all_predictions['Engine'] == k_eng) & (df_all_predictions['Typ'] == k_typ)
+                        df_all_predictions.loc[mask_pred, 'Kupon_ID'] = nowe_id_ako
+                        df_all_predictions.loc[mask_pred, 'Zagrane'] = "TRUE"
+                        df_all_predictions.loc[mask_pred, 'Wyslij_AKO'] = "TRUE"
+                    
+                    zebrane_typy = []
+                    biezacy_kurs = 1.0
+                    
+                    if aktualna_liczba >= max_c:
+                        break # Przejście do kolejnego dnia po osiągnięciu limitu
 
 if not df_all_predictions.empty:
     nowe_typy_df = df_all_predictions.copy()
     if 'Termin' in nowe_typy_df.columns: nowe_typy_df = nowe_typy_df.drop(columns=['Termin'])
     if 'Wyslij_AKO' in nowe_typy_df.columns: nowe_typy_df = nowe_typy_df.drop(columns=['Wyslij_AKO'])
+    if 'Group_Date' in nowe_typy_df.columns: nowe_typy_df = nowe_typy_df.drop(columns=['Group_Date'])
+    if 'Max_Coupons' in nowe_typy_df.columns: nowe_typy_df = nowe_typy_df.drop(columns=['Max_Coupons'])
     
     nowe_typy_df['Profit'] = ""
     nowe_typy_df['Yield_Wplyw'] = ""
@@ -1533,7 +1579,7 @@ if not df_all_predictions.empty:
     df_all_predictions['Data_Sort'] = pd.to_datetime(df_all_predictions['Data'].astype(str) + ' ' + df_all_predictions['Godzina'].astype(str).replace('', '00:00').replace('-', '00:00'), errors='coerce')
     now = datetime.now()
     df_all_predictions = df_all_predictions[df_all_predictions['Data_Sort'] >= now - timedelta(hours=3)]
-    df_all_predictions = df_all_predictions.sort_values(by=["Data_Sort", "Szansa"], ascending=[True, False]).drop(columns=['Data_Sort', 'Unikalny_Klucz'], errors='ignore')
+    df_all_predictions = df_all_predictions.sort_values(by=["Data_Sort", "Szansa"], ascending=[True, False]).drop(columns=['Data_Sort', 'Unikalny_Klucz', 'Group_Date', 'Max_Coupons'], errors='ignore')
 
 # ==========================================
 # 8. WYSYŁKA GOOGLE SHEETS
@@ -1574,7 +1620,6 @@ summary_data.append(["Źródło", "URL / Plik", "Status"])
 for rep in scrape_report:
     summary_data.append(rep)
 
-# ZAPIS LOGÓW PODSUMOWANIA (BEZ PANDAS - BEZPOŚREDNIA LISTA)
 try:
     ws_sum = spreadsheet.worksheet("Summary")
 except:
@@ -1585,5 +1630,5 @@ ws_sum.update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Pomyślnie i bezpiecznie zaktualizowano arkusz i utworzono gotowe pakiety AKO.")
+print("Zaktualizowano arkusz i utworzono zoptymalizowane pakiety AKO wg dni tygodnia.")
 print("=" * 60)
