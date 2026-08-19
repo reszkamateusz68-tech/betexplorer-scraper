@@ -157,7 +157,9 @@ def prepare_for_gsheets(df):
     for row in df.values.tolist():
         new_row = []
         for idx, val in enumerate(row):
-            col_name = df.columns[idx]
+            # NAPRAWA BŁĘDU TYPEERROR: col_name jako twardy string
+            col_name = str(df.columns[idx]) 
+            
             if pd.isna(val) or val == "nan":
                 new_row.append("")
                 continue
@@ -1572,7 +1574,14 @@ summary_data.append(["Źródło", "URL / Plik", "Status"])
 for rep in scrape_report:
     summary_data.append(rep)
 
-safe_batch_update("Summary", pd.DataFrame(summary_data))
+# ZAPIS LOGÓW PODSUMOWANIA (BEZ PANDAS - BEZPOŚREDNIA LISTA)
+try:
+    ws_sum = spreadsheet.worksheet("Summary")
+except:
+    ws_sum = spreadsheet.add_worksheet(title="Summary", rows=1000, cols=10)
+time.sleep(1.0)
+ws_sum.clear()
+ws_sum.update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
