@@ -453,8 +453,6 @@ results_df = df[df["Type"] == "Result"].copy()
 # ==========================================================
 # 2. POBIERANIE Z SOCCERSTATS (CZYSTE ŻĄDANIA HTTP + COOKIE)
 # ==========================================================
-
-# ⚠️ TUTAJ WKLEJ SKOPIOWANE COOKIE Z PRZEGLĄDARKI ⚠️
 SOCCERSTATS_COOKIE = """
 vpl=1; tz=60; usprivacy=1---; _gid=GA1.2.592421716.1786952949; FCCDCF=%5Bnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2C%5B%5B32%2C%22%5B%5C%228500bd73-6ac3-43ec-9d29-8f5a5d6be8c8%5C%22%2C%5B1786952949%2C332000000%5D%5D%22%5D%5D%5D; euconsent-v2=CQpFxYAQpFxYAAKA9AENCsFgAAAAAEPgABpYAAAZgABMNDogDLIgUCBQEIIEACgrCACgQBAAAkBRAQAmDAhyBgAusIkAIAUAAQQAgABBgACAAASABCIAIACAQAgQCBQABgAQBAQAMDAAGAChEAgABAdAxSAggECwASIwoDBAhAAQCAlsqEEoGBBHCFIscAggREwUAACIABUBAIB4WAgJKCViQQBcQXQAIAAAAUYIoCKQkwBRUGQLQVgScBkaYAg-YJEkOgiAJghIyDIhJUEg8UxRAghyA2KWYA6eIKAGXayQh_qBZsAXIl2HUgAA.IMwtR_G__bXlv-bb36btkeYxf9_hr7sQxBgbIsm4FzLvW7JwG32EbJEyatiIKmRIAu3DBIQNtHBjURUChKIAVrzDsaE2U4TtKJ-BkiHMZYytQCExvm4tjeQCZ4ur_90d0mR-t6dr-2dzy27hnn3a9fuS1UJydKYetHfv-ZhOS-_IU9_x-_4v4_MbpEm0eSVv9tUtt4zc64vv6dpuxt-Tyff6f__f73fW7X__e__33_8qX3_r76-___3__v___ff_________9__-_______4.YAAAAAAAAAAA; addtl_consent=2~~dv.20.43.46.55.57.61.70.83.89.93.108.117.122.124.135.143.144.147.149.159.161.184.192.196.211.228.230.236.239.255.259.266.272.286.291.311.313.314.320.322.323.327.340.358.367.370.371.385.407.415.424.429.430.436.445.469.486.491.494.495.522.523.540.550.560.568.574.576.587.591.621.723.737.797.798.802.803.817.820.827.839.864.899.904.922.931.938.955.959.979.981.985.986.1003.1027.1031.1033.1040.1046.1047.1048.1051.1053.1067.1092.1095.1097.1099.1107.1109.1126.1135.1143.1149.1152.1162.1166.1171.1186.1188.1192.1205.1215.1220.1226.1227.1230.1252.1268.1270.1276.1284.1290.1301.1307.1312.1329.1342.1345.1356.1362.1365.1375.1403.1415.1416.1419.1421.1423.1440.1449.1455.1495.1512.1514.1516.1525.1540.1548.1555.1558.1567.1570.1577.1579.1583.1584.1598.1603.1616.1638.1651.1653.1659.1660.1661.1667.1677.1678.1682.1697.1699.1712.1716.1720.1721.1725.1732.1735.1745.1750.1753.1782.1786.1794.1800.1808.1810.1825.1827.1832.1838.1840.1843.1845.1859.1870.1878.1880.1882.1889.1898.1911.1917.1928.1929.1942.1944.1958.1962.1963.1964.1967.1968.1969.1978.1985.1987.2003.2008.2016.2027.2035.2038.2039.2044.2047.2052.2056.2064.2068.2069.2072.2074.2084.2088.2090.2103.2107.2109.2115.2124.2130.2133.2135.2137.2140.2141.2147.2156.2166.2177.2186.2205.2213.2216.2219.2220.2222.2223.2224.2225.2227.2234.2251.2253.2262.2271.2275.2278.2279.2282.2295.2299.2309.2312.2316.2322.2325.2328.2331.2335.2336.2343.2354.2358.2359.2370.2373.2376.2377.2400.2403.2405.2406.2410.2411.2414.2415.2416.2418.2425.2427.2440.2447.2453.2461.2465.2468.2472.2477.2484.2486.2488.2493.2498.2501.2506.2510.2517.2526.2527.2531.2534.2535.2542.2552.2559.2564.2567.2568.2569.2571.2572.2575.2577.2579.2583.2584.2589.2595.2596.2604.2605.2609.2610.2612.2614.2621.2624.2627.2628.2629.2633.2636.2639.2642.2643.2645.2646.2650.2651.2652.2656.2657.2658.2660.2661.2669.2670.2677.2681.2684.2687.2689.2690.2695.2698.2699.2713.2714.2729.2739.2767.2768.2770.2772.2778.2784.2787.2791.2792.2798.2801.2805.2812.2813.2814.2816.2817.2821.2822.2824.2826.2827.2830.2831.2832.2833.2834.2838.2839.2844.2846.2849.2850.2852.2854.2860.2862.2863.2865.2867.2869.2872.2874.2875.2878.2880.2881.2882.2883.2884.2886.2887.2888.2889.2891.2893.2894.2895.2897.2898.2900.2901.2908.2909.2916.2917.2918.2920.2922.2923.2927.2929.2930.2931.2940.2941.2947.2949.2950.2956.2958.2961.2963.2964.2965.2966.2968.2972.2973.2974.2975.2979.2980.2981.2983.2985.2986.2987.2994.2995.2997.2999.3000.3001.3002.3003.3005.3008.3009.3010.3012.3016.3017.3018.3019.3023.3028.3031.3034.3038.3043.3051.3052.3053.3055.3058.3059.3063.3066.3073.3074.3075.3076.3077.3089.3090.3093.3094.3095.3097.3099.3100.3106.3107.3109.3112.3117.3119.3120.3126.3127.3128.3130.3133.3135.3136.3137.3145.3149.3151.3153.3155.3165.3167.3169.3172.3173.3177.3182.3184.3185.3186.3187.3188.3189.3190.3194.3196.3200.3201.3209.3210.3213.3214.3215.3217.3218.3222.3223.3225.3226.3227.3228.3230.3231.3233.3234.3235.3236.3237.3238.3240.3244.3250.3251.3253.3254.3257.3260.3266.3270.3272.3286.3288.3289.3290.3292.3293.3296.3299.3300.3303.3306.3307.3309.3314.3315.3316.3318.3323.3324.3328.3330.3331.3531.3631.3731.3831.4131.4531.4631.4731.4831.5231.6731.6931.7131.7235.7831.7931.8931.10231.10631.10831.11031.11531.11631.13431.13632.13731.14034.14133.14237.15731.16831.16931.21233.21731.23031.25131.25931.26031.26631.27731.27831.28031.28332.28731.29631.30331.30532.30732.32531.33931.34231.34631.34731.36831.39131.39531.40632.41131.41531.43631.43731.43831.45931.47232.47531.48131.49231.49332.49431.50831.52831.54231.55631.56831.56931.57131.57231.57531.57931.58131.58631.59831.59832.60731.60831.60931.61931.63831; IABGPP_HDR_GppString=DBABMA~CQpFxYAQpFxYAAKA9AENCsFgAAAAAEPgABpYAAAZgABMNDogDLIgUCBQEIIEACgrCACgQBAAAkBRAQAmDAhyBgAusIkAIAUAAQQAgABBgACAAASABCIAIACAQAgQCBQABgAQBAQAMDAAGAChEAgABAdAxSAggECwASIwoDBAhAAQCAlsqEEoGBBHCFIscAggREwUAACIABUBAIB4WAgJKCViQQBcQXQAIAAAAUYIoCKQkwBRUGQLQVgScBkaYAg-YJEkOgiAJghIyDIhJUEg8UxRAghyA2KWYA6eIKAGXayQh_qBZsAXIl2HUgAA.IMwtR_G__bXlv-bb36btkeYxf9_hr7sQxBgbIsm4FzLvW7JwG32EbJEyatiIKmRIAu3DBIQNtHBjURUChKIAVrzDsaE2U4TtKJ-BkiHMZYytQCExvm4tjeQCZ4ur_90d0mR-t6dr-2dzy27hnn3a9fuS1UJydKYetHfv-ZhOS-_IU9_x-_4v4_MbpEm0eSVv9tUtt4zc64vv6dpuxt-Tyff6f__f73fW7X__e__33_8qX3_r76-___3__v___ff_________9__-_______4.YAAAAAAAAAAA; _sharedID=a7fbc8ed-7bb4-4cb0-94b5-6b97d8e6219a; _sharedID_cst=t%2B76YQ%3D%3D; pbjs-unifiedid=%7B%22TDID_LOOKUP%22%3A%22FALSE%22%2C%22TDID_CREATED_AT%22%3A%222026-08-17T07%3A49%3A11%22%7D; pbjs-unifiedid_cst=t%2B76YQ%3D%3D; __eoi=ID=497ac6736560df57:T=1786952951:RT=1786955902:S=AA-AfjbsB14GA3AxG9y4mfwEWxGc; mmode=1; steady-token=OHNSYlFnZXVkWjY5TURvYzdWZzU4UT09; _ga_J8LQZG5L45=GS2.1.s1786952948$o1$g1$t1786955969$j60$l0$h0; _ga=GA1.2.1208505623.1786952949; ASPSESSIONIDCGBQBQBA=CBCKIPMACGIMIAGJGCMHMFMH; cf_clearance=WEXK9SgkThAoclWDnR1MfVLmT7F8MwOoMof1oCtsZpY-1786959493-1.2.1.1-fCXIw9UKMkPSp3li1KsTrP9dpVxyHQcYJjeF9L5F0MDTRynVH8OsJEBHZnZ9aIllwpsnWUqJ_AmjRdYZk1GYMcfFcDFZipr1eDtBVYDOnpOSknqMtx56E6KQcrTy4FhPSzfi96QqZgdEqDOQY9iry5VLLMLpQ9DZSJYxuScEFL7aNvcADrfJpeOnRo151KBG5ho8TB6O9boQulI69SdzNPtQrBige_3h2Z.JCpT5XgXTdoejAtLcANDvFmAcgE0oG2uGb8Oe5NjYcA0ElhBDHXDCuFpdksqjDLjT5ePt2n9PLPHdgojLbLC.o1AUVxyhWA3lWnRG2Ty8xybSiqSPSMhvApferFETb.d6lPMVmRc; sc_is_visitor_unique=rx2749989.1786959496.A982D77FDE164D479557346F7927B684.3.3.3.3.3.3.3.3.3
 """
@@ -777,15 +775,12 @@ def add_pred(match_id, termin, date, time, league, home, away, engine, typ, szan
         if kurs_docelowy >= 1.50: kurs_docelowy = round(kurs_docelowy * 0.95, 2)
         elif 1.20 <= kurs_docelowy < 1.50: kurs_docelowy = round(kurs_docelowy * 0.975, 2)
         
-    # Absolutny próg bezpieczeństwa
     if kurs_docelowy < 1.015: 
         kurs_docelowy = 1.01
 
-    # GARBAGE COLLECTOR W LOCIE - POMIJANIE SŁABYCH TYPÓW SOLO
     if engine != "BetBuilder Pro" and "+" not in typ_k and kurs_docelowy < 1.05:
         return
 
-    # --- Centralny Silnik Wyceny Ryzyka (Modyfikacja Medali) ---
     prob_decimal = float(szansa) / 100.0
     if prob_decimal >= 0.95 and kurs_docelowy >= 1.20:
         risk_tag = "🥇 1. ZŁOTY TYP"
@@ -823,7 +818,6 @@ for idx, row in fixtures_clean.iterrows():
     
     o1_raw, ox_raw, o2_raw = row['Odd_1'], row['Odd_X'], row['Odd_2']
 
-    # --- WSPÓLNE BAZY DO ANALIZ ---
     h_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == home) | (valid_matches['Away'] == home))].copy()
     a_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == away) | (valid_matches['Away'] == away))].copy()
     h_dom = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Home'] == home)].copy()
@@ -832,7 +826,6 @@ for idx, row in fixtures_clean.iterrows():
     h_tier = team_tiers.get((league, home), 'Koszyk 3')
     a_tier = team_tiers.get((league, away), 'Koszyk 3')
 
-    # PRZYGOTOWANIE BAZY POD EVALUATE_BET DLA SZABLONÓW PREMIUM
     if len(h_dom) > 0:
         h_dom['HT_Total'] = pd.to_numeric(h_dom['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(h_dom['HTAG'], errors='coerce').fillna(0)
         h_dom['2H_Total'] = pd.to_numeric(h_dom['Total_Goals'], errors='coerce').fillna(0) - h_dom['HT_Total']
@@ -847,9 +840,7 @@ for idx, row in fixtures_clean.iterrows():
         a_tot_all['Team_GF'] = np.where(a_tot_all['Home'] == away, a_tot_all['FTHG'], a_tot_all['FTAG'])
         a_tot_all['Team_GA'] = np.where(a_tot_all['Home'] == away, a_tot_all['FTAG'], a_tot_all['FTHG'])
 
-    # ----------------------------------------------------
     # 6a. 1X PRO
-    # ----------------------------------------------------
     lg_matches = valid_matches[valid_matches['Base_League'] == fixture_base]
     if len(lg_matches) >= 20 and len(h_tot_all) >= 5 and len(a_tot_all) >= 5 and len(h_dom) > 0 and len(a_wyj) > 0:
         lg_home_goals, lg_away_goals = lg_matches['FTHG'].mean(), lg_matches['FTAG'].mean()
@@ -915,11 +906,8 @@ for idx, row in fixtures_clean.iterrows():
                 
             add_pred(match_id, d_termin, d_date, d_time, league, home, away, "1X Pro", typ_kod, round(final_prob*100, 1), round(fair_odd, 2), arg)
 
-    # ----------------------------------------------------
     # 6b. GOAL LINE PRO
-    # ----------------------------------------------------
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
-        # Konwersja na słowniki dla szybkości
         h_dom_dict = h_dom.to_dict('records')
         a_wyj_dict = a_wyj.to_dict('records')
         h_tot_all_dict = h_tot_all.to_dict('records')
@@ -949,9 +937,7 @@ for idx, row in fixtures_clean.iterrows():
                 if h_sm or a_sm: arg += " | ⚠️ Wygładzenie Bayesowskie"
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Line Pro", f"O{line}", round(avg_prob_o*100, 1), KOTWICE_KURSOWE.get(f"O{line}", 1.10), arg)
 
-    # ----------------------------------------------------
     # 6c. BETBUILDER PRO Z SZABLONAMI PREMIUM
-    # ----------------------------------------------------
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
         h_dom_dict = h_dom.to_dict('records')
         a_wyj_dict = a_wyj.to_dict('records')
@@ -969,9 +955,7 @@ for idx, row in fixtures_clean.iterrows():
                 if h_sm or a_sm: arg += " | ⚠️ Bayes"
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "BetBuilder Pro", tpl, round(avg_p*100, 1), round(est_odd, 2), arg)
 
-    # ----------------------------------------------------
     # 6d. MULTIGOL
-    # ----------------------------------------------------
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
         h_last_goals = get_last_match_goals(fixture_base, home)
         a_last_goals = get_last_match_goals(fixture_base, away)
@@ -1005,9 +989,7 @@ for idx, row in fixtures_clean.iterrows():
                 if was_sm: arg += " | ⚠️ Wygładzenie Bayesowskie"
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Multigol", typ_kod, round(pewnosc*100, 1), round(est_odd, 2), arg)
 
-    # ----------------------------------------------------
     # 6e. CORNERS PRO
-    # ----------------------------------------------------
     valid_corners = valid_matches.dropna(subset=['Corners_H', 'Corners_A']).copy()
     h_tot_all_c = valid_corners[(valid_corners['Base_League'] == fixture_base) & ((valid_corners['Home'] == home) | (valid_corners['Away'] == home))].copy()
     a_tot_all_c = valid_corners[(valid_corners['Base_League'] == fixture_base) & ((valid_corners['Home'] == away) | (valid_corners['Away'] == away))].copy()
@@ -1073,9 +1055,7 @@ for idx, row in fixtures_clean.iterrows():
             if any_smoothed: uzasadnienie += " | ⚠️ Wygładzenie Bayesowskie"
             add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Corners Pro", "+".join(c_blocks_code), round(np.mean(c_probs)*100, 1), round(est_odd, 2), uzasadnienie)
 
-    # ----------------------------------------------------
     # 6f. SHOTS PRO
-    # ----------------------------------------------------
     valid_shots = valid_matches.dropna(subset=['Shots_H', 'Shots_A', 'ShotsTarget_H', 'ShotsTarget_A']).copy()
     if not valid_shots.empty:
         valid_shots['Shots_H'] = pd.to_numeric(valid_shots['Shots_H'], errors='coerce')
@@ -1114,7 +1094,7 @@ for idx, row in fixtures_clean.iterrows():
             h_tot_all_s['Team_ST'] = np.where(h_tot_all_s['Home'] == home, h_tot_all_s['ShotsTarget_H'], h_tot_all_s['ShotsTarget_A'])
             h_tot_all_s['Opp_ST'] = np.where(h_tot_all_s['Home'] == home, h_tot_all_s['ShotsTarget_A'], h_tot_all_s['ShotsTarget_H'])
             a_tot_all_s['Team_ST'] = np.where(a_tot_all_s['Home'] == away, a_tot_all_s['ShotsTarget_H'], a_tot_all_s['ShotsTarget_A'])
-            a_tot_all_s['Opp_ST'] = np.where(a_tot_all_s['Home'] == away, a_tot_all_s['ShotsTarget_A'], a_tot_all_s['ShotsTarget_H'])
+            a_tot_all_s['Opp_ST'] = np.where(a_tot_all_s['Home'] == away, a_tot_all_s['Shots_A'], a_tot_all_s['Shots_H'])
             
             h_tot_st_win = sum((h_tot_all_s['Team_ST'] - h_tot_all_s['Opp_ST']) > 0)
             a_tot_st_lose = sum((a_tot_all_s['Team_ST'] - a_tot_all_s['Opp_ST']) < 0)
@@ -1137,40 +1117,32 @@ for idx, row in fixtures_clean.iterrows():
                 if any_sm: arg += " | ⚠️ Wygładzenie Bayesowskie"
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Shots Pro", "ST_1", round(prob_h_st*100, 1), round(est_odd_st, 2), arg)
 
-    # ----------------------------------------------------
-    # 6k. OPTA SHOTS FLOOR (Minimalne linie strzałów Fortuny)
-    # ----------------------------------------------------
+    # 6k. OPTA SHOTS FLOOR
     if 'valid_shots' in locals() and not valid_shots.empty:
         if len(h_dom_s) >= 4 and len(a_wyj_s) >= 4:
             h_dom_s_dict = h_dom_s.to_dict('records')
             a_wyj_s_dict = a_wyj_s.to_dict('records')
             
-            # Gosp. odda min. 11.5 strzałów łącznie (12+)
             prob_h_s11, h_th_s, h_tl_s, h_sm_s = get_weighted_stats(h_dom_s_dict, 'Shots_H', lambda x: pd.notna(x) and x >= 11.5, prior_prob=0.80)
             if prob_h_s11 >= 0.82:
                 arg = f"Strzały Gosp u siebie 12+: {h_th_s}/{h_tl_s} meczów (śr. dom: {round(h_dom_s['Shots_H'].mean(), 1)})."
                 if h_sm_s: arg += " | ⚠️ Wygładzenie Bayesowskie"
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Opta Shots Floor", "H_S_O11.5", round(prob_h_s11*100, 1), KOTWICE_KURSOWE.get("H_S_O11.5", 1.40), arg)
 
-            # Gosp. odda min. 2.5 strzałów celnych (3+)
             prob_h_st3, h_th_st, h_tl_st, h_sm_st = get_weighted_stats(h_dom_s_dict, 'ShotsTarget_H', lambda x: pd.notna(x) and x >= 2.5, prior_prob=0.85)
             if prob_h_st3 >= 0.85:
                 arg = f"Celne Gosp u siebie 3+: {h_th_st}/{h_tl_st} meczów (śr. celnych: {round(h_dom_s['ShotsTarget_H'].mean(), 1)})."
                 if h_sm_st: arg += " | ⚠️ Wygładzenie Bayesowskie"
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Opta Shots Floor", "H_ST_O2.5", round(prob_h_st3*100, 1), KOTWICE_KURSOWE.get("H_ST_O2.5", 1.22), arg)
 
-            # Gość poniżej 4.5 strzałów celnych na wyjeździe
             prob_a_stu4, a_th_stu, a_tl_stu, a_sm_stu = get_weighted_stats(a_wyj_s_dict, 'ShotsTarget_A', lambda x: pd.notna(x) and x <= 4.5, prior_prob=0.80)
             if prob_a_stu4 >= 0.82:
                 arg = f"Gość wyjazd SOT under 4.5: {a_th_stu}/{a_tl_stu} meczów (śr. wyjazd: {round(a_wyj_s['ShotsTarget_A'].mean(), 1)})."
                 if a_sm_stu: arg += " | ⚠️ Wygładzenie Bayesowskie"
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Opta Shots Floor", "A_ST_U4.5", round(prob_a_stu4*100, 1), KOTWICE_KURSOWE.get("A_ST_U4.5", 1.25), arg)
 
-    # ----------------------------------------------------
-    # 6l. COMBO DC+UNDER (Standardowa oferta łączona)
-    # ----------------------------------------------------
+    # 6l. COMBO DC+UNDER
     if len(h_dom) >= 5 and len(a_wyj) >= 5:
-        # Combo 1X + U3.5
         h_dom_eval_1x_u35 = sum((h_dom['FTHG'] >= h_dom['FTAG']) & (h_dom['Total_Goals'] < 3.5))
         a_wyj_eval_1x_u35 = sum((a_wyj['FTAG'] <= a_wyj['FTHG']) & (a_wyj['Total_Goals'] < 3.5))
         prob_1x_u35 = ((h_dom_eval_1x_u35 / len(h_dom)) + (a_wyj_eval_1x_u35 / len(a_wyj))) / 2.0
@@ -1179,7 +1151,6 @@ for idx, row in fixtures_clean.iterrows():
             arg = f"Combo 1X + U3.5 | Dom Gosp trafione: {h_dom_eval_1x_u35}/{len(h_dom)}, Wyjazd Gość bez wygranej i U3.5: {a_wyj_eval_1x_u35}/{len(a_wyj)}."
             add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Combo DC & Goals", "1X+U3.5", round(prob_1x_u35*100, 1), KOTWICE_KURSOWE.get("1X+U3.5", 1.52), arg)
 
-        # Combo 1X + U4.5
         h_dom_eval_1x_u45 = sum((h_dom['FTHG'] >= h_dom['FTAG']) & (h_dom['Total_Goals'] < 4.5))
         a_wyj_eval_1x_u45 = sum((a_wyj['FTAG'] <= a_wyj['FTHG']) & (a_wyj['Total_Goals'] < 4.5))
         prob_1x_u45 = ((h_dom_eval_1x_u45 / len(h_dom)) + (a_wyj_eval_1x_u45 / len(a_wyj))) / 2.0
@@ -1188,9 +1159,7 @@ for idx, row in fixtures_clean.iterrows():
             arg = f"Combo 1X + U4.5 | Dom Gosp trafione: {h_dom_eval_1x_u45}/{len(h_dom)}, Wyjazd Gość bez wygranej i U4.5: {a_wyj_eval_1x_u45}/{len(a_wyj)}."
             add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Combo DC & Goals", "1X+U4.5", round(prob_1x_u45*100, 1), KOTWICE_KURSOWE.get("1X+U4.5", 1.35), arg)
 
-    # ----------------------------------------------------
-    # 6m. HALFTIME DEFENSE (Under 1.5 HT)
-    # ----------------------------------------------------
+    # 6m. HALFTIME DEFENSE
     if len(h_dom) >= 5 and len(a_wyj) >= 5:
         h_dom_dict_ht = h_dom.to_dict('records')
         a_wyj_dict_ht = a_wyj.to_dict('records')
@@ -1203,26 +1172,19 @@ for idx, row in fixtures_clean.iterrows():
             if h_sm_ht or a_sm_ht: arg += " | ⚠️ Bayes"
             add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Halftime Defense", "HT_U1.5", round(avg_ht_u15*100, 1), KOTWICE_KURSOWE.get("HT_U1.5", 1.23), arg)
 
-    # ----------------------------------------------------
     # 6n. UNDERDOG HANDICAP PRO
-    # ----------------------------------------------------
     if len(h_dom) >= 5 and len(a_wyj) >= 5 and a_tier in ['Koszyk 4', 'Koszyk 5', 'Koszyk 6']:
-        # Handicap na gościa (+1.5)
         h_blowouts = sum((h_dom['FTHG'] - h_dom['FTAG']) >= 2)
         a_blowouts = sum((a_wyj['FTHG'] - a_wyj['FTAG']) >= 2)
-        
         prob_h_hc = 1.0 - (h_blowouts / len(h_dom))
         prob_a_hc = 1.0 - (a_blowouts / len(a_wyj))
-        
         avg_hc_prob = (prob_h_hc + prob_a_hc) / 2
         
         if avg_hc_prob >= 0.85:
             arg = f"Handicap Gość +1.5 | Gosp wygrywa 2+ golami tylko w {h_blowouts}/{len(h_dom)} meczów. Gość przegrywa 2+ golami tylko w {a_blowouts}/{len(a_wyj)}."
             add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Underdog Handicap", "2 (+1.5)", round(avg_hc_prob*100, 1), KOTWICE_KURSOWE.get("2 (+1.5)", 1.18), arg)
 
-    # ----------------------------------------------------
     # 6g. ZIMNY PRYSZNIC
-    # ----------------------------------------------------
     if h_tier in ['Koszyk 1', 'Koszyk 2'] and len(h_tot_all) > 0:
         last_m = h_tot_all.iloc[0] 
         if last_m['Away'] == home and last_m['FTHG'] >= last_m['FTAG']:
@@ -1232,9 +1194,7 @@ for idx, row in fixtures_clean.iterrows():
                 arg = f"Gospodarz ({h_tier}) szuka rewanżu u siebie po stracie punktów na wyjeździe z dużo słabszym rywalem ({opp_tier})."
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Cold Shower", "1", 85.0, round(est_odd, 2), arg)
 
-    # ----------------------------------------------------
     # 6h. UKRYTA FORMA (Proxy xG)
-    # ----------------------------------------------------
     for team, is_home in [(home, True), (away, False)]:
         t_past = valid_shots[(valid_shots['Base_League'] == fixture_base) & ((valid_shots['Home'] == team) | (valid_shots['Away'] == team))]
         if len(t_past) >= 3:
@@ -1257,9 +1217,7 @@ for idx, row in fixtures_clean.iterrows():
                     arg = f"Wysokie xG. W 3 ost. meczach zespół oddał {int(st_for)} celnych strzałów, ale zdobył tylko {int(g_for)} goli."
                     add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Hidden Form", typ_kod, 80.0, round(est_odd, 2), arg)
 
-    # ----------------------------------------------------
     # 6i. ANOMALIE ROŻNYCH
-    # ----------------------------------------------------
     valid_corners_all = valid_matches.dropna(subset=['Corners_H', 'Corners_A']).copy()
     for team, is_home in [(home, True), (away, False)]:
         t_past = valid_corners_all[(valid_corners_all['Base_League'] == fixture_base) & ((valid_corners_all['Home'] == team) | (valid_corners_all['Away'] == team))].copy()
@@ -1274,9 +1232,7 @@ for idx, row in fixtures_clean.iterrows():
                 arg = f"Pęknięta seria. Średnia sezonu zespołu: {round(season_avg, 2)}. Średnia 2 ost. meczów: tylko {round(last_2_avg, 2)}."
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Corner Anomalies", typ_kod, 82.0, round(est_odd, 2), arg)
 
-    # ----------------------------------------------------
     # 6j. ANOMALIE BRAMKOWE
-    # ----------------------------------------------------
     t_past = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == home) | (valid_matches['Away'] == away))]
     if len(t_past) >= 10:
         season_avg = t_past['Total_Goals'].mean()
@@ -1290,31 +1246,11 @@ for idx, row in fixtures_clean.iterrows():
             arg = f"Anomalia underowa. Średnia sezonu obu ekip: {round(season_avg, 2)}. Ost. 2 mecze: tylko {round(last_2_avg, 2)} goli. Oczekiwane przełamanie."
             add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Anomalies", "O1.5", 85.0, round(est_odd, 2), arg)
 
-# ----------------------------------------------------
-    # SILNIK: UNDERDOG HANDICAP PRO (Handicap na słabsze drużyny +1.5)
-    # ----------------------------------------------------
-    if len(h_dom) >= 5 and len(a_wyj) >= 5 and a_tier in ['Koszyk 4', 'Koszyk 5', 'Koszyk 6']:
-        # Sprawdzamy jak często gospodarz u siebie wygrywa różnicą 2+ goli (blowout)
-        prob_h_blowout = sum((h_dom['FTHG'] - h_dom['FTAG']) >= 2) / len(h_dom)
-        # Sprawdzamy jak często gość na wyjeździe przegrywa różnicą 2+ goli
-        prob_a_blowout = sum((a_wyj['FTHG'] - a_wyj['FTAG']) >= 2) / len(a_wyj)
-        
-        # Prawdopodobieństwo wejścia handicapa +1.5 na słabszą drużynę (gościa)
-        prob_h_hc = 1.0 - prob_h_blowout
-        prob_a_hc = 1.0 - prob_a_blowout
-        
-        avg_hc_prob = (prob_h_hc + prob_a_hc) / 2
-        
-        if avg_hc_prob >= 0.85:
-            arg = f"Handicap Gość +1.5 | Gosp wygrywa 2+ golami tylko w {sum((h_dom['FTHG'] - h_dom['FTAG']) >= 2)}/{len(h_dom)} meczów. Gość przegrywa 2+ golami tylko w {sum((a_wyj['FTHG'] - a_wyj['FTAG']) >= 2)}/{len(a_wyj)}."
-            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Underdog Handicap", "2 (+1.5)", round(avg_hc_prob*100, 1), 1.18, arg)
-
 # ==========================================================
 # 7. SYSTEM ŚLEDZENIA SKUTECZNOŚCI I YIELDU (BACKTESTER)
 # ==========================================================
 print("Inicjalizacja Modułu Backtestingu (Śledzenie Skuteczności)...")
 
-# CZYSZCZENIE ZBĘDNYCH KOLUMN 
 cols_all_pred = ["Match_ID", "Zagrane", "Wyslij_AKO", "Kupon_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status"]
 cols_historia = ["Match_ID", "Zagrane", "Kupon_ID", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 
@@ -1364,12 +1300,56 @@ for col in cols_historia:
     if col not in df_historia.columns: df_historia[col] = ""
 df_historia = df_historia[cols_historia]
 
+# ==========================================
+# 7c. AUTO-KREATOR AKO (MIN. 2.30) - LIMIT 3 KUPONY DZIENNIE
+# ==========================================
+print("Generowanie optymalnych kuponów AKO (Kurs: min. 2.30, max 3 dziennie)...")
+
+if not df_all_predictions.empty:
+    dzis_dt = datetime.now().date()
+    pula_predykcji = df_all_predictions.copy()
+    pula_predykcji['Data_DT'] = pd.to_datetime(pula_predykcji['Data'], errors='coerce').dt.date
+    pula_aktywna = pula_predykcji[pula_predykcji['Data_DT'] >= dzis_dt].sort_values(by=['Szansa'], ascending=False)
+    
+    unikalne_mecze = pula_aktywna.drop_duplicates(subset=['Match_ID'])
+    
+    zebrane_typy = []
+    biezacy_kurs = 1.0
+    kupony_stworzone = 0
+    
+    for _, typ_row in unikalne_mecze.iterrows():
+        # Utrzymanie twardego limitu 3 kuponów
+        if kupony_stworzone >= 3:
+            break
+            
+        try: k = float(str(typ_row['Kurs_Szac']).replace(',', '.'))
+        except: k = 1.0
+            
+        if k > 1.01:
+            zebrane_typy.append(typ_row)
+            biezacy_kurs *= k
+            
+            # Gdy kurs wejdzie w docelowy przedział min. 2.30, tworzymy gotowy kupon
+            if biezacy_kurs >= 2.30:
+                kupony_stworzone += 1
+                nowe_id_ako = f"AKO_PRO_{datetime.now().strftime('%y%m%d')}_0{kupony_stworzone}"
+                
+                # Zaznaczamy powiązane typy i odblokowujemy flagę Wyslij_AKO
+                for t in zebrane_typy:
+                    k_match, k_eng, k_typ = t['Match_ID'], t['Engine'], t['Typ']
+                    mask_pred = (df_all_predictions['Match_ID'] == k_match) & (df_all_predictions['Engine'] == k_eng) & (df_all_predictions['Typ'] == k_typ)
+                    df_all_predictions.loc[mask_pred, 'Kupon_ID'] = nowe_id_ako
+                    df_all_predictions.loc[mask_pred, 'Zagrane'] = "TRUE"
+                    df_all_predictions.loc[mask_pred, 'Wyslij_AKO'] = "TRUE"
+                
+                zebrane_typy = []
+                biezacy_kurs = 1.0
+
 if not df_all_predictions.empty:
     nowe_typy_df = df_all_predictions.copy()
     if 'Termin' in nowe_typy_df.columns: nowe_typy_df = nowe_typy_df.drop(columns=['Termin'])
     if 'Wyslij_AKO' in nowe_typy_df.columns: nowe_typy_df = nowe_typy_df.drop(columns=['Wyslij_AKO'])
     
-    # Dodajemy Profit i Yield na sztywno do DF przed włączeniem w Historię
     nowe_typy_df['Profit'] = ""
     nowe_typy_df['Yield_Wplyw'] = ""
         
@@ -1380,10 +1360,8 @@ if not df_all_predictions.empty:
     if not df_historia.empty:
         df_historia['Unikalny_Klucz'] = df_historia['Match_ID'].astype(str) + "_" + df_historia['Engine'].astype(str) + "_" + df_historia['Typ'].astype(str)
         df_historia = df_historia.drop_duplicates(subset=['Unikalny_Klucz'], keep='last')
-        
         nowe_typy_df['Unikalny_Klucz'] = nowe_typy_df['Match_ID'].astype(str) + "_" + nowe_typy_df['Engine'].astype(str) + "_" + nowe_typy_df['Typ'].astype(str)
         
-        # --- ZABEZPIECZENIE: Globalny, sztywny update tagów do Historii ze wszystkich wpisów All_Predictions
         for idx in df_historia.index:
             klucz = df_historia.at[idx, 'Unikalny_Klucz']
             if klucz in map_kupon and str(map_kupon[klucz]).strip() != "":
@@ -1418,7 +1396,6 @@ if not df_all_predictions.empty:
         
     df_historia = pd.concat([df_historia, do_dodania], ignore_index=True)
 
-# OPTYMALIZACJA O(1) BACKTESTERA
 if not df_historia.empty and not results_clean.empty:
     results_dict = {str(r['Match_ID']): r for r in results_clean.to_dict('records')}
     
@@ -1427,7 +1404,6 @@ if not df_historia.empty and not results_clean.empty:
             match_id = str(row["Match_ID"])
             match_row = results_dict.get(match_id)
             
-            # --- ZABEZPIECZENIE: Przesunięcia czasowe (Fuzzy Match) ---
             if not match_row:
                 fuzzy = results_clean[(results_clean['Home'] == row['Gospodarz']) & (results_clean['Away'] == row['Gość'])].copy()
                 if not fuzzy.empty:
@@ -1439,7 +1415,6 @@ if not df_historia.empty and not results_clean.empty:
                             if not fuzzy.empty:
                                 match_row = fuzzy.sort_values('Diff').iloc[0].to_dict()
                     except: pass
-            # -----------------------------------------------------------
             
             if match_row and pd.notna(match_row.get('FTHG')):
                 nowy_status = evaluate_bet(row["Typ"], match_row)
@@ -1553,130 +1528,53 @@ if not df_historia.empty:
     df_historia = pd.concat([df_oczek, df_rozst]).drop(columns=['Data_Sort', 'Unikalny_Klucz'], errors='ignore')
 
 if not df_all_predictions.empty: 
-    # TWORZYMY DATĘ DO SORTOWANIA I OGRANICZAMY DO NAJBLIŻSZYCH MECZÓW
     df_all_predictions['Data_Sort'] = pd.to_datetime(df_all_predictions['Data'].astype(str) + ' ' + df_all_predictions['Godzina'].astype(str).replace('', '00:00').replace('-', '00:00'), errors='coerce')
-    # Odfiltruj stare mecze (zostawiamy te od -3 godzin wstecz)
     now = datetime.now()
     df_all_predictions = df_all_predictions[df_all_predictions['Data_Sort'] >= now - timedelta(hours=3)]
-    # Sortowanie: ascending=True dla daty daje najbliższe daty na górze
     df_all_predictions = df_all_predictions.sort_values(by=["Data_Sort", "Szansa"], ascending=[True, False]).drop(columns=['Data_Sort', 'Unikalny_Klucz'], errors='ignore')
-
-# ==========================================
-# 7c. AUTO-KREATOR AKO W WIDEŁKACH (2.30 - 6.50)
-# ==========================================
-print("Generowanie optymalnych kuponów AKO (Kurs: 2.30 - 6.50)...")
-
-if not df_all_predictions.empty:
-    dzis_dt = datetime.now().date()
-    pula_predykcji = df_all_predictions.copy()
-    pula_predykcji['Data_DT'] = pd.to_datetime(pula_predykcji['Data'], errors='coerce').dt.date
-    pula_aktywna = pula_predykcji[pula_predykcji['Data_DT'] >= dzis_dt].sort_values(by=['Szansa'], ascending=False)
-    
-    # Bierzemy typy unikalne pod kątem Match_ID
-    unikalne_mecze = pula_aktywna.drop_duplicates(subset=['Match_ID'])
-    
-    zebrane_typy = []
-    biezacy_kurs = 1.0
-    
-    for _, typ_row in unikalne_mecze.iterrows():
-        try:
-            k = float(str(typ_row['Kurs_Szac']).replace(',', '.'))
-        except:
-            k = 1.0
-            
-        if k > 1.01:
-            zebrane_typy.append(typ_row)
-            biezacy_kurs *= k
-            
-            # Gdy kurs wejdzie w docelowy przedział 2.30 - 6.50, tworzymy gotowy kupon
-            if 2.30 <= biezacy_kurs <= 6.50:
-                nowe_id_ako = f"AKO_PRO_{datetime.now().strftime('%y%m%d_%H%M')}"
-                
-                # Oznaczamy powiązane typy w df_all_predictions i df_historia
-                for t in zebrane_typy:
-                    k_match = t['Match_ID']
-                    k_eng = t['Engine']
-                    k_typ = t['Typ']
-                    
-                    mask_pred = (df_all_predictions['Match_ID'] == k_match) & (df_all_predictions['Engine'] == k_eng) & (df_all_predictions['Typ'] == k_typ)
-                    df_all_predictions.loc[mask_pred, 'Kupon_ID'] = nowe_id_ako
-                    df_all_predictions.loc[mask_pred, 'Zagrane'] = "TRUE"
-                    
-                    if not df_historia.empty:
-                        mask_hist = (df_historia['Match_ID'] == k_match) & (df_historia['Engine'] == k_eng) & (df_historia['Typ'] == k_typ)
-                        df_historia.loc[mask_hist, 'Kupon_ID'] = nowe_id_ako
-                        df_historia.loc[mask_hist, 'Zagrane'] = "TRUE"
-                
-                # Resetujemy bufor do stworzenia kolejnego kuponu
-                zebrane_typy = []
-                biezacy_kurs = 1.0
 
 # ==========================================
 # 8. WYSYŁKA GOOGLE SHEETS
 # ==========================================
-all_sheets = ["Summary", "Fixtures", "Results", "League_Tables", "Historia_Typow", "All_Predictions", "Kupony_AKO"]
-
-# --- USUNIĘCIE ZAKŁADKI H2H_Mecze (JEŚLI ISTNIEJE) ---
-try:
-    ws_h2h = spreadsheet.worksheet("H2H_Mecze")
-    spreadsheet.del_worksheet(ws_h2h)
-except:
-    pass
+all_sheets = ["Summary", "Fixtures", "Results", "League_Tables", "H2H_Mecze", "Historia_Typow", "All_Predictions", "Kupony_AKO"]
 
 for sheet_name in all_sheets:
     try: spreadsheet.worksheet(sheet_name)
     except: spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=30)
 
-print("Wysyłam Czysty Terminarz do Google Sheets...")
-time.sleep(1.5)
-spreadsheet.worksheet("Fixtures").clear()
-if not fixtures_clean.empty: spreadsheet.worksheet("Fixtures").update(prepare_for_gsheets(fixtures_clean))
+def safe_batch_update(ws_name, df_data):
+    ws = spreadsheet.worksheet(ws_name)
+    time.sleep(1.0)
+    ws.clear()
+    if not df_data.empty:
+        ws.update(prepare_for_gsheets(df_data))
 
-print("Wysyłam Historię ze statystykami do Google Sheets...")
-time.sleep(1.5)
-spreadsheet.worksheet("Results").clear()
-if not results_clean.empty: spreadsheet.worksheet("Results").update(prepare_for_gsheets(results_clean))
-
-print("Wysyłam Tabele Ligowe...")
-time.sleep(1.5)
-spreadsheet.worksheet("League_Tables").clear()
-if not league_tables.empty: spreadsheet.worksheet("League_Tables").update(prepare_for_gsheets(league_tables))
-
-print("Wysyłam Logi Systemu Backtestingu (Historia_Typow)...")
-time.sleep(1.5)
-ws_historia.clear()
-if not df_historia.empty: ws_historia.update(prepare_for_gsheets(df_historia))
-
-print("Wysyłam Moduł Portfela AKO (Kupony_AKO)...")
-time.sleep(1.5)
-ws_ako.clear()
-if not df_ako.empty: ws_ako.update(prepare_for_gsheets(df_ako))
-
-print("Wysyłam Ujednoliconą Listę Wszystkich Predykcji (All_Predictions)...")
-time.sleep(1.5)
-spreadsheet.worksheet("All_Predictions").clear()
-if not df_all_predictions.empty: spreadsheet.worksheet("All_Predictions").update(prepare_for_gsheets(df_all_predictions))
+print("Zapisywanie danych do Google Sheets...")
+safe_batch_update("Fixtures", fixtures_clean)
+safe_batch_update("Results", results_clean)
+safe_batch_update("League_Tables", league_tables)
+if 'df_h2h' in locals() and not df_h2h.empty: safe_batch_update("H2H_Mecze", df_h2h)
+safe_batch_update("Historia_Typow", df_historia)
+safe_batch_update("Kupony_AKO", df_ako)
+safe_batch_update("All_Predictions", df_all_predictions)
 
 summary_data = [
-    ["==== StatLab Analytics | Podsumowanie Ogólne ====", "", ""],
+    ["==== PODSUMOWANIE OGÓLNE ====", "", ""],
     ["Ostatnia aktualizacja", datetime.now().strftime("%Y-%m-%d %H:%M:%S"), ""],
     ["Fixtures Czyste", len(fixtures_clean), ""],
     ["Results Zintegrowane", len(results_clean), ""],
     ["Przetworzone Typy w Historii", len(df_historia), ""],
     ["Wygenerowane Predykcje (Suma)", len(df_all_predictions), ""]
 ]
-# Dodanie logów z powrotem do podsumowania
 summary_data.append(["", "", ""])
 summary_data.append(["==== RAPORT POBIERANIA (LOGI) ====", "", ""])
 summary_data.append(["Źródło", "URL / Plik", "Status"])
 for rep in scrape_report:
     summary_data.append(rep)
 
-time.sleep(1.5)
-spreadsheet.worksheet("Summary").clear()
-spreadsheet.worksheet("Summary").update(summary_data)
+safe_batch_update("Summary", pd.DataFrame(summary_data))
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("StatLab Analytics: Silnik zaktualizowany, spójne kotwice kursowe i zoptymalizowany zapis GSheets.")
+print("Pomyślnie i bezpiecznie zaktualizowano arkusz i utworzono gotowe pakiety AKO.")
 print("=" * 60)
