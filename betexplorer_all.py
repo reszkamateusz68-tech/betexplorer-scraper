@@ -620,10 +620,8 @@ if not fixtures_df.empty:
     fixtures_df['Match_ID'] = fixtures_df['Date_str'] + "_" + fixtures_df['Home'].str[:3].str.upper() + "_" + fixtures_df['Away'].str[:3].str.upper()
     fixtures_df['Termin'] = fixtures_df['Date'].apply(categorize_date)
     
-    # --- OGRANICZENIE DO 7 DNI (FIXTURES I ALL_PREDICTIONS) ---
     dozwolone_terminy = ["Dziś", "Jutro", "Za 2 dni", "Za 3 dni", "Za 4 dni", "Za 5 dni", "Za 6 dni", "Za 7 dni"]
     fixtures_df = fixtures_df[fixtures_df['Termin'].isin(dozwolone_terminy)].copy()
-    # ----------------------------------------------------------
 
     fixtures_df['Status_Kursów'] = np.where(fixtures_df['Odd1'].astype(str).str.strip().isin(["", "-", "nan"]), "Brak Kursów", "Są Kursy")
 
@@ -652,7 +650,6 @@ if not results_clean.empty:
 if not valid_matches.empty:
     valid_matches['Base_League'] = valid_matches['League'].apply(get_base_league)
     
-    # ⚠️ OPTYMALIZACJA WYDAJNOŚCIOWA: GLOBALNA KONWERSJA TYPÓW ⚠️
     valid_matches['FTHG'] = pd.to_numeric(valid_matches['FTHG'], errors='coerce').fillna(0).astype(int)
     valid_matches['FTAG'] = pd.to_numeric(valid_matches['FTAG'], errors='coerce').fillna(0).astype(int)
     valid_matches['HTHG'] = pd.to_numeric(valid_matches['HTHG'], errors='coerce')
@@ -739,7 +736,6 @@ KOTWICE_KURSOWE = {
     '2 (+1.5)': 1.18, '1 (+1.5)': 1.18
 }
 
-# NOWE SZABLONY PREMIUM ZGODNIE Z ZALECENIEM
 SZABLONY_PREMIUM = [
     "O0.5+U5.5+HT_U3.5+2H_U3.5+HU3.5+AU3.5",
     "O0.5+U4.5+HT_U3.5+2H_U3.5+HU3.5+AU3.5",
@@ -1017,7 +1013,7 @@ for idx, row in fixtures_clean.iterrows():
                 prob_h_c, h_th, h_tl, h_sm = get_weighted_stats(h_dom_c_dict, 'Total_Corners', lambda x: pd.notna(x) and x < line, prior_prob=0.70)
                 prob_a_c, a_th, a_tl, a_sm = get_weighted_stats(a_wyj_c_dict, 'Total_Corners', lambda x: pd.notna(x) and x < line, prior_prob=0.70)
                 _, ht_th, ht_tl, _ = get_weighted_stats(h_tot_all_c_dict, 'Total_Corners', lambda x: pd.notna(x) and x < line)
-                _, at_th, at_tl, _ = get_weighted_stats(a_tot_all_c_dict, 'Total_Corners', lambda x: pd.notna(x) and x < line)
+                _, at_th, at_tl, _ = get_weighted_stats(a_tot_all_dict, 'Total_Corners', lambda x: pd.notna(x) and x < line)
                 
                 avg_p = (prob_h_c + prob_a_c) / 2
                 
@@ -1247,18 +1243,11 @@ for idx, row in fixtures_clean.iterrows():
             arg = f"Anomalia underowa. Średnia sezonu obu ekip: {round(season_avg, 2)}. Ost. 2 mecze: tylko {round(last_2_avg, 2)} goli. Oczekiwane przełamanie."
             add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Anomalies", "O1.5", 85.0, round(est_odd, 2), arg)
 
-
 # ==========================================================
 # 7. SYSTEM ŚLEDZENIA SKUTECZNOŚCI I YIELDU (BACKTESTER)
 # ==========================================================
 print("Inicjalizacja Modułu Backtestingu (Śledzenie Skuteczności)...")
 
-scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-creds = Credentials.from_service_account_file("credentials.json", scopes=scope) if os.path.exists("credentials.json") else Credentials.from_service_account_info(json.loads(os.environ["GOOGLE_CREDENTIALS"]), scopes=scope)
-client = gspread.authorize(creds)
-spreadsheet = client.open("BetExplorer")
-
-# CZYSZCZENIE ZBĘDNYCH KOLUMN 
 cols_all_pred = ["Match_ID", "Zagrane", "Wyslij_AKO", "Kupon_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status"]
 cols_historia = ["Match_ID", "Zagrane", "Kupon_ID", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 
@@ -1318,16 +1307,14 @@ if not df_all_predictions.empty:
     pula_predykcji = df_all_predictions.copy()
     pula_predykcji['Data_DT'] = pd.to_datetime(pula_predykcji['Data'], errors='coerce').dt.date
     
-    # Funkcja mapująca datę meczu na odpowiednią pulę (i limit kuponów)
     def get_ako_group(date_obj):
         if pd.isna(date_obj): return None, 0
         wd = date_obj.weekday()
-        # wd: 0=Pon, 1=Wt, 2=Śr, 3=Czw, 4=Pt, 5=Sob, 6=Niedz
         if wd in [0, 1, 2]: 
-            target = date_obj - timedelta(days=wd) # Grupujemy wszystko do poniedziałku
+            target = date_obj - timedelta(days=wd) 
             return target.strftime('%Y%m%d'), 1
         elif wd in [3, 4]: 
-            target = date_obj + timedelta(days=(4-wd)) # Grupujemy czw/pt do piątku
+            target = date_obj + timedelta(days=(4-wd)) 
             return target.strftime('%Y%m%d'), 1
         elif wd == 5: 
             return date_obj.strftime('%Y%m%d'), 4
@@ -1339,12 +1326,8 @@ if not df_all_predictions.empty:
     pula_predykcji['Group_Date'] = [x[0] for x in grupy_info]
     pula_predykcji['Max_Coupons'] = [x[1] for x in grupy_info]
     
-    # Filtrujemy mecze od dziś w przód, które nie mają jeszcze przypisanego kuponu
     pula_aktywna = pula_predykcji[(pula_predykcji['Data_DT'] >= dzis_dt) & (pula_predykcji['Kupon_ID'] == "")].sort_values(by=['Szansa'], ascending=False)
-    
-    # Pobieramy wszystkie stworzone dotychczas kupony, by nie przekroczyć tygodniowych limitów
     istniejace_kupony = df_all_predictions['Kupon_ID'].dropna().unique()
-    
     unikalne_grupy = pula_aktywna[['Group_Date', 'Max_Coupons']].drop_duplicates().dropna()
     
     for _, grp in unikalne_grupy.iterrows():
@@ -1356,11 +1339,9 @@ if not df_all_predictions.empty:
         wygenerowane_w_grupie = [k for k in istniejace_kupony if str(k).startswith(prefiks)]
         aktualna_liczba = len(wygenerowane_w_grupie)
         
-        if aktualna_liczba >= max_c:
-            continue
+        if aktualna_liczba >= max_c: continue
             
         mecze_grupy = pula_aktywna[pula_aktywna['Group_Date'] == g_date].drop_duplicates(subset=['Match_ID'])
-        
         zebrane_typy = []
         biezacy_kurs = 1.0
         
@@ -1372,7 +1353,6 @@ if not df_all_predictions.empty:
                 zebrane_typy.append(typ_row)
                 biezacy_kurs *= k
                 
-                # Gdy mamy minimum 2.30 dla grupy
                 if biezacy_kurs >= 2.30:
                     aktualna_liczba += 1
                     nowe_id_ako = f"{prefiks}_{aktualna_liczba:02d}"
@@ -1388,15 +1368,46 @@ if not df_all_predictions.empty:
                     zebrane_typy = []
                     biezacy_kurs = 1.0
                     
-                    if aktualna_liczba >= max_c:
-                        break # Przejście do kolejnego dnia po osiągnięciu limitu
+                    if aktualna_liczba >= max_c: break
+
+# ==========================================
+# 7d. OBSŁUGA KUPONU SPECJALISTY (10j)
+# ==========================================
+try:
+    ws_ekspert = spreadsheet.worksheet("Kupon_Specjalisty")
+    ekspert_dane = ws_ekspert.get_all_records()
+    df_ekspert = pd.DataFrame(ekspert_dane)
+except gspread.exceptions.WorksheetNotFound:
+    spreadsheet.add_worksheet(title="Kupon_Specjalisty", rows=100, cols=3)
+    ws_ekspert = spreadsheet.worksheet("Kupon_Specjalisty")
+    ws_ekspert.update(values=[["Match_ID", "Engine", "Typ"]], range_name='A1')
+    df_ekspert = pd.DataFrame()
+
+nowe_id_ekspert = None
+if not df_ekspert.empty and "Match_ID" in df_ekspert.columns:
+    df_ekspert = df_ekspert[df_ekspert["Match_ID"].astype(str).str.strip() != ""]
+    if not df_ekspert.empty:
+        print("Wykryto ręczne zgłoszenie w Kupon_Specjalisty. Przetwarzam pakiet Eksperta...")
+        nowe_id_ekspert = f"AKO_EXPERT_{datetime.now().strftime('%y%m%d_%H%M')}"
+        
+        for _, row_ekspert in df_ekspert.iterrows():
+            k_match = str(row_ekspert.get("Match_ID", "")).strip()
+            k_eng = str(row_ekspert.get("Engine", "")).strip()
+            k_typ = str(row_ekspert.get("Typ", "")).strip()
+
+            mask_pred = (df_all_predictions['Match_ID'] == k_match) & (df_all_predictions['Engine'] == k_eng) & (df_all_predictions['Typ'] == k_typ)
+            df_all_predictions.loc[mask_pred, 'Kupon_ID'] = nowe_id_ekspert
+            df_all_predictions.loc[mask_pred, 'Zagrane'] = "TRUE"
+            df_all_predictions.loc[mask_pred, 'Wyslij_AKO'] = "TRUE"
+
+        # Czysty arkusz po pobraniu typów (brak zapętlenia)
+        ws_ekspert.clear()
+        ws_ekspert.update(values=[["Match_ID", "Engine", "Typ"]], range_name='A1')
 
 if not df_all_predictions.empty:
     nowe_typy_df = df_all_predictions.copy()
-    if 'Termin' in nowe_typy_df.columns: nowe_typy_df = nowe_typy_df.drop(columns=['Termin'])
-    if 'Wyslij_AKO' in nowe_typy_df.columns: nowe_typy_df = nowe_typy_df.drop(columns=['Wyslij_AKO'])
-    if 'Group_Date' in nowe_typy_df.columns: nowe_typy_df = nowe_typy_df.drop(columns=['Group_Date'])
-    if 'Max_Coupons' in nowe_typy_df.columns: nowe_typy_df = nowe_typy_df.drop(columns=['Max_Coupons'])
+    for col in ['Termin', 'Wyslij_AKO', 'Group_Date', 'Max_Coupons']:
+        if col in nowe_typy_df.columns: nowe_typy_df = nowe_typy_df.drop(columns=[col])
     
     nowe_typy_df['Profit'] = ""
     nowe_typy_df['Yield_Wplyw'] = ""
@@ -1549,11 +1560,18 @@ if not df_historia.empty:
         else: status_ako = "ZWRÓCONY"
         
         stawka_str = str(user_stakes.get(k_id, "100")).replace(',', '.')
-        if stawka_str.strip() == "": stawka_str = "100"
+        
+        # Twarda integracja 10j dla Kuponu Eksperta
+        if str(k_id).startswith("AKO_EXPERT"):
+            stawka_str = "1000"
+            jednostki_str = "10j"
+        else:
+            if stawka_str.strip() == "": stawka_str = "100"
+            jednostki_str = str(user_units.get(k_id, "1j"))
+            
         try: stawka = float(stawka_str)
         except: stawka = 100.0
         
-        jednostki_str = str(user_units.get(k_id, "1j"))
         wyslij_pod = str(user_pods.get(k_id, ""))
         tel_status = str(user_tel_stat.get(k_id, ""))
         
@@ -1582,33 +1600,39 @@ if not df_all_predictions.empty:
     df_all_predictions = df_all_predictions.sort_values(by=["Data_Sort", "Szansa"], ascending=[True, False]).drop(columns=['Data_Sort', 'Unikalny_Klucz', 'Group_Date', 'Max_Coupons'], errors='ignore')
 
 # ==========================================
-# 8. WYSYŁKA GOOGLE SHEETS (ZOPTYMALIZOWANA)
+# 8. WYSYŁKA GOOGLE SHEETS
 # ==========================================
-all_sheets = ["Summary", "Fixtures", "Results", "League_Tables", "H2H_Mecze", "Historia_Typow", "All_Predictions", "Kupony_AKO"]
+all_sheets = ["Summary", "Fixtures", "Results", "League_Tables", "Historia_Typow", "All_Predictions", "Kupony_AKO"]
 
 for sheet_name in all_sheets:
     try: spreadsheet.worksheet(sheet_name)
     except: spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=30)
 
 def safe_batch_update(ws_name, df_data):
-    if df_data.empty:
-        return
+    if df_data.empty: return
     ws = spreadsheet.worksheet(ws_name)
-    time.sleep(1.5) # Wydłużony odstęp chroniący przed limitami API
+    time.sleep(1.0)
     ws.clear()
-    
-    data_to_write = prepare_for_gsheets(df_data)
-    # Jawne wskazanie parametrów optymalizuje czas przetwarzania po stronie serwerów Google
-    ws.update(values=data_to_write, range_name='A1')
+    ws.update(values=prepare_for_gsheets(df_data), range_name='A1')
 
-print("Zapisywanie danych do Google Sheets (Tryb: Safe Batch)...")
+print("Zapisywanie danych do Google Sheets...")
 safe_batch_update("Fixtures", fixtures_clean)
 safe_batch_update("Results", results_clean)
 safe_batch_update("League_Tables", league_tables)
-if 'df_h2h' in locals() and not df_h2h.empty: safe_batch_update("H2H_Mecze", df_h2h)
 safe_batch_update("Historia_Typow", df_historia)
 safe_batch_update("Kupony_AKO", df_ako)
 safe_batch_update("All_Predictions", df_all_predictions)
+
+# EKSPORT LEKKIEGO WIDOKU TOP WYBORY (Dla Ciebie, bez lagów)
+if not df_all_predictions.empty:
+    print("Generowanie lekkiego widoku Top Wybory dla Eksperta...")
+    try: spreadsheet.worksheet("Top_Wybory")
+    except: spreadsheet.add_worksheet(title="Top_Wybory", rows=100, cols=15)
+    
+    top_wybory_df = df_all_predictions[df_all_predictions['Status'] == 'W OCZEKIWANIU'].sort_values(by=['Szansa'], ascending=False).head(40)
+    cols_wybory = ["Match_ID", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Argumentacja"]
+    top_wybory_df = top_wybory_df[[c for c in cols_wybory if c in top_wybory_df.columns]]
+    safe_batch_update("Top_Wybory", top_wybory_df)
 
 summary_data = [
     ["==== PODSUMOWANIE OGÓLNE ====", "", ""],
@@ -1621,16 +1645,13 @@ summary_data = [
 summary_data.extend([["", "", ""], ["==== RAPORT POBIERANIA (LOGI) ====", "", ""], ["Źródło", "URL / Plik", "Status"]])
 summary_data.extend(scrape_report)
 
-try:
-    ws_sum = spreadsheet.worksheet("Summary")
-except:
-    ws_sum = spreadsheet.add_worksheet(title="Summary", rows=1000, cols=10)
-
-time.sleep(1.5)
+try: ws_sum = spreadsheet.worksheet("Summary")
+except: ws_sum = spreadsheet.add_worksheet(title="Summary", rows=1000, cols=10)
+time.sleep(1.0)
 ws_sum.clear()
 ws_sum.update(values=summary_data, range_name='A1')
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Zaktualizowano arkusz i wdrożono optymalizację GSheets API.")
+print("Zaktualizowano arkusz i wdrożono architekturę dla Kuponu Specjalisty.")
 print("=" * 60)
