@@ -1562,6 +1562,40 @@ if not df_all_predictions.empty:
     df_all_predictions = df_all_predictions.sort_values(by=["Data_Sort", "Szansa"], ascending=[True, False]).drop(columns=['Data_Sort', 'Unikalny_Klucz'], errors='ignore')
 
 # ==========================================
+# 7c. AUTO-KREATOR PAKIETÓW AKO (StatLab Presets)
+# ==========================================
+print("Generowanie zautomatyzowanych pakietów AKO dnia...")
+
+presets_ako = []
+if not df_all_predictions.empty:
+    dzis_str = datetime.now().strftime('%Y-%m-%d')
+    typy_dzis = df_all_predictions[df_all_predictions['Data'] >= dzis_str].copy()
+    
+    # 1. Bezpieczny Dubel (2 zdarzenia 95%+)
+    safe_picks = typy_dzis[typy_dzis['Szansa'] >= 95.0].drop_duplicates(subset=['Match_ID']).head(2)
+    if len(safe_picks) == 2:
+        k_id = f"PRESET_SAFE_{datetime.now().strftime('%y%m%d')}"
+        kurs = round(float(safe_picks.iloc[0]['Kurs_Szac']) * float(safe_picks.iloc[1]['Kurs_Szac']), 2)
+        skrot = " | ".join(safe_picks['Gospodarz'].str[:3] + "-" + safe_picks['Gość'].str[:3])
+        presets_ako.append([k_id, dzis_str, skrot, 2, kurs, 100, "1j", "W OCZEKIWANIU", round(kurs*100*0.88, 2), 0.0, "FALSE", ""])
+
+    # 2. Taśma BetBuilder Pro (Kombinacja szablonów korelacyjnych)
+    bb_picks = typy_dzis[typy_dzis['Engine'] == 'BetBuilder Pro'].drop_duplicates(subset=['Match_ID']).head(3)
+    if len(bb_picks) >= 2:
+        k_id = f"PRESET_BB_{datetime.now().strftime('%y%m%d')}"
+        kurs_bb = 1.0
+        for _, r in bb_picks.iterrows():
+            kurs_bb *= float(r['Kurs_Szac'])
+        kurs_bb = round(kurs_bb, 2)
+        skrot_bb = " | ".join(bb_picks['Gospodarz'].str[:3] + "-" + bb_picks['Gość'].str[:3])
+        presets_ako.append([k_id, dzis_str, skrot_bb, len(bb_picks), kurs_bb, 50, "0.5j", "W OCZEKIWANIU", round(kurs_bb*50*0.88, 2), 0.0, "FALSE", ""])
+
+if presets_ako:
+    df_presets = pd.DataFrame(presets_ako, columns=cols_ako)
+    # Scalamy z istniejącą tabelą AKO, unikając duplikatów
+    df_ako = pd.concat([df_presets, df_ako]).drop_duplicates(subset=['Kupon_ID'], keep='last')
+
+# ==========================================
 # 8. WYSYŁKA GOOGLE SHEETS
 # ==========================================
 all_sheets = ["Summary", "Fixtures", "Results", "League_Tables", "Historia_Typow", "All_Predictions", "Kupony_AKO"]
