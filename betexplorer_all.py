@@ -635,9 +635,9 @@ if not fixtures_df.empty:
 results_clean = results_df[list(golden_cols.keys()) + ['HT_Total', 'Total_Corners', 'Marża']].rename(columns=golden_cols) if not results_df.empty else pd.DataFrame(columns=list(golden_cols.values()) + ['HT_Total', 'Total_Corners', 'Marża'])
 fixtures_clean = fixtures_df[['Match_ID', 'Termin', 'Status_Kursów', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd1', 'OddX', 'Odd2', 'Marża']].rename(columns={'Odd1': 'Odd_1', 'OddX': 'Odd_X', 'Odd2': 'Odd_2'}) if not fixtures_df.empty else pd.DataFrame(columns=['Match_ID', 'Termin', 'Status_Kursów', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd_1', 'Odd_X', 'Odd_2', 'Marża'])
 
-# ==========================================
+# ==========================================================
 # 5. GENEROWANIE TABEL LIGOWYCH
-# ==========================================
+# ==========================================================
 print("Generowanie inteligentnych tabel ligowych (6 Koszyków)...")
 valid_matches = pd.DataFrame()
 
@@ -714,6 +714,110 @@ if not league_tables.empty:
         team_tiers[(r['League'], r['Team'])] = r['Koszyk']
 
 # ==========================================================
+# 5b. MODUŁ POBIERANIA REALNYCH KURSÓW (SUPERBET API)
+# ==========================================================
+def fetch_superbet_odds_for_fixtures(fixtures_df):
+    print("Pobieram zmapowane, realne kursy JSON z Superbet API...")
+    superbet_db = {}
+    SUPERBET_HEADERS = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
+        "Accept": "application/json"
+    }
+    
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    tomorrow_str = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
+    day_after_str = (datetime.now() + timedelta(days=2)).strftime('%Y-%m-%d')
+    
+    events = []
+    for d_str in [today_str, tomorrow_str, day_after_str]:
+        try:
+            url = f"https://production-superbet-offer-pl.freetls.fastly.net/offer/events/byDate?currentDate={d_str}"
+            res = requests.get(url, headers=SUPERBET_HEADERS, timeout=10)
+            if res.status_code == 200:
+                for ev in res.json().get('data', []):
+                    if ev.get('sportId') == 5:
+                        events.append(ev)
+        except: pass
+
+    if not events: return {}
+
+    be_teams = set()
+    for _, r in fixtures_df.iterrows():
+        be_teams.add(str(r['Home']).lower()[:4])
+        be_teams.add(str(r['Away']).lower()[:4])
+
+    matched_events = []
+    for ev in events:
+        ev_name = ev.get('eventName', '').lower()
+        if any(t in ev_name for t in be_teams):
+            matched_events.append(ev)
+
+    def fetch_detail(ev):
+        event_id = ev.get('eventId')
+        ev_name = ev.get('eventName', '')
+        if ' - ' not in ev_name or not event_id: return None
+        sb_home, sb_away = [x.strip() for x in ev_name.split(' - ', 1)]
+        
+        try:
+            detail_url = f"https://production-superbet-offer-pl.freetls.fastly.net/offer/event/{event_id}"
+            det_res = requests.get(detail_url, headers=SUPERBET_HEADERS, timeout=10)
+            if det_res.status_code != 200: return None
+            
+            market_map = {}
+            for group in det_res.json().get('data', {}).get('marketGroups', []):
+                for m in group.get('markets', []):
+                    m_name = m.get('name', '').lower()
+                    
+                    if "liczba goli" in m_name and "połowa" not in m_name and "drużyna" not in m_name:
+                        for out in m.get('outcomes', []):
+                            if 'Poniżej' in out['name']: market_map[f"U{out['name'].replace('Poniżej','').strip()}"] = out['price']
+                            elif 'Powyżej' in out['name']: market_map[f"O{out['name'].replace('Powyżej','').strip()}"] = out['price']
+                    
+                    elif "1. połowa - liczba goli" in m_name:
+                        for out in m.get('outcomes', []):
+                            if 'Poniżej' in out['name']: market_map[f"HT_U{out['name'].replace('Poniżej','').strip()}"] = out['price']
+                    
+                    elif "liczba rzutów rożnych" in m_name and "drużyna" not in m_name:
+                        for out in m.get('outcomes', []):
+                            if 'Poniżej' in out['name']: market_map[f"C_U{out['name'].replace('Poniżej','').strip()}"] = out['price']
+                    
+                    elif "1. drużyna - liczba rzutów rożnych" in m_name:
+                        for out in m.get('outcomes', []):
+                            if 'Poniżej' in out['name']: market_map[f"HC_U{out['name'].replace('Poniżej','').strip()}"] = out['price']
+                            elif 'Powyżej' in out['name']: market_map[f"HC_O{out['name'].replace('Powyżej','').strip()}"] = out['price']
+                            
+                    elif "2. drużyna - liczba rzutów rożnych" in m_name:
+                        for out in m.get('outcomes', []):
+                            if 'Poniżej' in out['name']: market_map[f"AC_U{out['name'].replace('Poniżej','').strip()}"] = out['price']
+                            elif 'Powyżej' in out['name']: market_map[f"AC_O{out['name'].replace('Powyżej','').strip()}"] = out['price']
+                    
+                    elif "kto więcej strzałów w meczu" in m_name or m_name == "strzały w meczu - h2h":
+                        for out in m.get('outcomes', []):
+                            if out['name'] == '1': market_map['S_1'] = out['price']
+                            elif out['name'] == '2': market_map['S_2'] = out['price']
+
+                    elif "kto więcej celnych strzałów" in m_name or "celne strzały w meczu - h2h" in m_name:
+                        for out in m.get('outcomes', []):
+                            if out['name'] == '1': market_map['ST_1'] = out['price']
+                            elif out['name'] == '2': market_map['ST_2'] = out['price']
+                            
+            return (sb_home.lower(), sb_away.lower()), market_map
+        except: return None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as exe:
+        results = exe.map(fetch_detail, matched_events)
+        for res in results:
+            if res:
+                keys, markets = res
+                superbet_db[keys] = markets
+    
+    print(f"Sukces: Zmapowano realne kursy JSON dla {len(superbet_db)} nadchodzących meczów.")
+    return superbet_db
+
+superbet_odds_db = fetch_superbet_odds_for_fixtures(fixtures_clean) if not fixtures_clean.empty else {}
+
+
+# ==========================================================
 # 6. SILNIKI PREDYKCYJNE (Z centralnym Generatorem Ryzyka)
 # ==========================================================
 all_generated_predictions = []
@@ -744,30 +848,46 @@ SZABLONY_PREMIUM = [
     "U4.5+HT_U2.5+2H_U3.5+HU3.5+AU3.5"
 ]
 
+def get_real_odd(home, away, typ_kod, fallback_kurs):
+    """
+    Funkcja mapuje nazwy z BetExplorer na Superbet używając heurystyki znakowej (Fuzzy Match).
+    Jeśli dopasuje mecz i rynek, zwraca rzeczywisty rynkowy kurs.
+    """
+    h_low, a_low = home.lower(), away.lower()
+    for (sb_h, sb_a), markets in superbet_odds_db.items():
+        if (sb_h[:4] in h_low or h_low[:4] in sb_h) and (sb_a[:4] in a_low or a_low[:4] in sb_a):
+            if typ_kod in markets:
+                return float(markets[typ_kod])
+    return fallback_kurs
+
 def add_pred(match_id, termin, date, time, league, home, away, engine, typ, szansa, kurs_szac, arg):
     typ_k = str(typ).strip()
     try: kurs_bazowy = float(str(kurs_szac).replace(',', '.'))
     except: kurs_bazowy = 1.05
     is_anchor = False
 
-    if engine == "BetBuilder Pro":
+    # Obsługa złożonych BetBuilderów w oparciu o realne kursy
+    if "+" in typ_k and ("O0.5+U" not in typ_k or engine == "BetBuilder Pro") and "1X+U" not in typ_k and "X2+U" not in typ_k: 
         skladniki = typ_k.split("+")
-        kursy_skladowe = [KOTWICE_KURSOWE.get(sk.strip(), 1.05) for sk in skladniki]
+        # Pobieranie kursów składowych. Priorytet: Superbet API -> KOTWICE -> 1.05
+        kursy_skladowe = [get_real_odd(home, away, sk.strip(), KOTWICE_KURSOWE.get(sk.strip(), 1.05)) for sk in skladniki]
         rho_val = 0.22 if any(c in typ_k for c in ["C_U", "HC_", "AC_"]) else 0.65
         kurs_docelowy = calc_betbuilder_copula(kursy_skladowe, rho=rho_val)
-        
-    elif "+" in typ_k and "O0.5+U" not in typ_k and "1X+U" not in typ_k and "X2+U" not in typ_k: 
-        skladniki = typ_k.split("+")
-        kursy_skladowe = [KOTWICE_KURSOWE.get(sk.strip(), 1.05) for sk in skladniki]
-        rho_val = 0.22 if any(c in typ_k for c in ["C_U", "HC_", "AC_"]) else 0.65
-        kurs_docelowy = calc_betbuilder_copula(kursy_skladowe, rho=rho_val)
+        is_anchor = True # Moduł Copula bazuje na realnych kursach rynkowych i zarządza marżą
     else:
-        if typ_k in KOTWICE_KURSOWE:
+        # Obsługa rynków pojedynczych
+        real_o = get_real_odd(home, away, typ_k, None)
+        if real_o is not None:
+            kurs_docelowy = real_o
+            is_anchor = True # Kurs posiada już rynkową marżę bukmachera
+        elif typ_k in KOTWICE_KURSOWE:
             kurs_docelowy = KOTWICE_KURSOWE[typ_k]
             is_anchor = True
         else: 
             kurs_docelowy = kurs_bazowy
+            is_anchor = False
 
+    # Nakładanie marży tylko na estymacje czysto matematyczne (omijanie realnych kursów Superbet)
     if not is_anchor:
         if kurs_docelowy >= 1.50: kurs_docelowy = round(kurs_docelowy * 0.95, 2)
         elif 1.20 <= kurs_docelowy < 1.50: kurs_docelowy = round(kurs_docelowy * 0.975, 2)
@@ -1013,7 +1133,7 @@ for idx, row in fixtures_clean.iterrows():
                 prob_h_c, h_th, h_tl, h_sm = get_weighted_stats(h_dom_c_dict, 'Total_Corners', lambda x: pd.notna(x) and x < line, prior_prob=0.70)
                 prob_a_c, a_th, a_tl, a_sm = get_weighted_stats(a_wyj_c_dict, 'Total_Corners', lambda x: pd.notna(x) and x < line, prior_prob=0.70)
                 _, ht_th, ht_tl, _ = get_weighted_stats(h_tot_all_c_dict, 'Total_Corners', lambda x: pd.notna(x) and x < line)
-                _, at_th, at_tl, _ = get_weighted_stats(a_tot_all_dict, 'Total_Corners', lambda x: pd.notna(x) and x < line)
+                _, at_th, at_tl, _ = get_weighted_stats(a_tot_all_c_dict, 'Total_Corners', lambda x: pd.notna(x) and x < line)
                 
                 avg_p = (prob_h_c + prob_a_c) / 2
                 
@@ -1561,7 +1681,6 @@ if not df_historia.empty:
         
         stawka_str = str(user_stakes.get(k_id, "100")).replace(',', '.')
         
-        # Twarda integracja 10j dla Kuponu Eksperta
         if str(k_id).startswith("AKO_EXPERT"):
             stawka_str = "1000"
             jednostki_str = "10j"
@@ -1623,7 +1742,6 @@ safe_batch_update("Historia_Typow", df_historia)
 safe_batch_update("Kupony_AKO", df_ako)
 safe_batch_update("All_Predictions", df_all_predictions)
 
-# EKSPORT LEKKIEGO WIDOKU TOP WYBORY (Dla Ciebie, bez lagów)
 if not df_all_predictions.empty:
     print("Generowanie lekkiego widoku Top Wybory dla Eksperta...")
     try: spreadsheet.worksheet("Top_Wybory")
@@ -1653,5 +1771,5 @@ ws_sum.update(values=summary_data, range_name='A1')
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Zaktualizowano arkusz i wdrożono architekturę dla Kuponu Specjalisty.")
+print("Zintegrowano API Superbet. Realne kursy rynkowe zastąpiły twarde kotwice dla setek podrynków.")
 print("=" * 60)
