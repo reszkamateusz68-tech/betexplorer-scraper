@@ -818,10 +818,11 @@ superbet_odds_db = fetch_superbet_odds_for_fixtures(fixtures_clean) if not fixtu
 
 
 # ==========================================================
-# 6. SILNIKI PREDYKCYJNE (Z centralnym Generatorem Ryzyka)
+# 6. SILNIKI PREDYKCYJNE (Z DYNAMICZNĄ KALIBRACJĄ KURSÓW)
 # ==========================================================
 all_generated_predictions = []
 
+# Stary statyczny słownik staje się bazą zapasową dla kalibracji
 KOTWICE_KURSOWE = {
     'O0.5': 1.03, 'U3.5': 1.31, 'U4.5': 1.10, 'U5.5': 1.015, 'U6.5': 1.01,
     'HT_U1.5': 1.42, 'HT_U2.5': 1.09, 'HT_U3.5': 1.01, 'HT_U4.5': 1.01,
@@ -848,6 +849,87 @@ SZABLONY_PREMIUM = [
     "U4.5+HT_U2.5+2H_U3.5+HU3.5+AU3.5"
 ]
 
+def get_tier_num(tier_str):
+    try: return int(str(tier_str).replace("Koszyk", "").replace("K", "").strip())
+    except: return 3
+
+def get_dynamic_anchors(h_tier_str, a_tier_str, odd_1_val):
+    t_h = get_tier_num(h_tier_str)
+    t_a = get_tier_num(a_tier_str)
+    delta_tier = t_a - t_h
+
+    try:
+        o1 = float(str(odd_1_val).replace(',', '.'))
+        p1 = 1.0 / o1 if o1 > 0 else 0.45
+    except:
+        p1 = 0.45
+
+    lam_ft = 2.6741 + (0.08 * delta_tier)
+    lam_ht = 1.2033 + (0.04 * delta_tier)
+
+    lam_hc = max(2.5, 5.5 + (0.40 * delta_tier))
+    lam_ac = max(1.5, 4.5 - (0.40 * delta_tier))
+    lam_corners_tot = lam_hc + lam_ac
+
+    mu_h_s = max(6.0, 14.0 * (1 + 0.07 * delta_tier) * ((p1 / 0.45) ** 0.35))
+    mu_a_s = max(4.0, 11.0 * (1 - 0.07 * delta_tier) * (((1 - p1) / 0.55) ** 0.35))
+    mu_h_st = max(2.5, 5.0 * (1 + 0.08 * delta_tier) * ((p1 / 0.45) ** 0.40))
+    mu_a_st = max(1.5, 4.0 * (1 - 0.08 * delta_tier) * (((1 - p1) / 0.55) ** 0.40))
+
+    def apply_margin_add(prob, margin=0.0405):
+        q = min(0.985, prob + margin)
+        return max(1.015, round(1.0 / q, 2))
+
+    def apply_margin_mult(prob, mult=0.925):
+        if prob <= 0: return 99.0
+        return max(1.010, round(1.0 / (prob * mult), 2))
+
+    prob_s1, _, _ = get_poisson_match_prob(mu_h_s, mu_a_s, max_val=40)
+    prob_st1, _, _ = get_poisson_match_prob(mu_h_st, mu_a_st, max_val=25)
+    
+    anchors = KOTWICE_KURSOWE.copy()
+    anchors.update({
+        'O0.5': apply_margin_add(get_poisson_prob(lam_ft, 0, "over")),
+        'U3.5': apply_margin_add(get_poisson_prob(lam_ft, 3, "under")),
+        'U4.5': apply_margin_add(get_poisson_prob(lam_ft, 4, "under")),
+        'U5.5': apply_margin_add(get_poisson_prob(lam_ft, 5, "under")),
+        'U6.5': apply_margin_add(get_poisson_prob(lam_ft, 6, "under")),
+        'HT_U1.5': apply_margin_add(get_poisson_prob(lam_ht, 1, "under")),
+        'HT_U2.5': apply_margin_add(get_poisson_prob(lam_ht, 2, "under")),
+        'HT_U3.5': apply_margin_add(get_poisson_prob(lam_ht, 3, "under")),
+        'HU2.5': apply_margin_add(get_poisson_prob(lam_ft * p1, 2, "under")),
+        'HU3.5': apply_margin_add(get_poisson_prob(lam_ft * p1, 3, "under")),
+        'AU2.5': apply_margin_add(get_poisson_prob(lam_ft * (1 - p1), 2, "under")),
+        'AU3.5': apply_margin_add(get_poisson_prob(lam_ft * (1 - p1), 3, "under")),
+        'C_U8.5': apply_margin_mult(get_poisson_prob(lam_corners_tot, 8, "under")),
+        'C_U9.5': apply_margin_mult(get_poisson_prob(lam_corners_tot, 9, "under")),
+        'C_U10.5': apply_margin_mult(get_poisson_prob(lam_corners_tot, 10, "under")),
+        'C_U11.5': apply_margin_mult(get_poisson_prob(lam_corners_tot, 11, "under")),
+        'C_U12.5': apply_margin_mult(get_poisson_prob(lam_corners_tot, 12, "under")),
+        'C_U13.5': apply_margin_mult(get_poisson_prob(lam_corners_tot, 13, "under")),
+        'C_U14.5': apply_margin_mult(get_poisson_prob(lam_corners_tot, 14, "under")),
+        'HC_U4.5': apply_margin_mult(get_poisson_prob(lam_hc, 4, "under")),
+        'HC_U5.5': apply_margin_mult(get_poisson_prob(lam_hc, 5, "under")),
+        'HC_U6.5': apply_margin_mult(get_poisson_prob(lam_hc, 6, "under")),
+        'HC_U7.5': apply_margin_mult(get_poisson_prob(lam_hc, 7, "under")),
+        'HC_U8.5': apply_margin_mult(get_poisson_prob(lam_hc, 8, "under")),
+        'AC_U4.5': apply_margin_mult(get_poisson_prob(lam_ac, 4, "under")),
+        'AC_U5.5': apply_margin_mult(get_poisson_prob(lam_ac, 5, "under")),
+        'AC_U6.5': apply_margin_mult(get_poisson_prob(lam_ac, 6, "under")),
+        'AC_U7.5': apply_margin_mult(get_poisson_prob(lam_ac, 7, "under")),
+        'AC_U8.5': apply_margin_mult(get_poisson_prob(lam_ac, 8, "under")),
+        'HC_O4.5': apply_margin_mult(get_poisson_prob(lam_hc, 4, "over")),
+        'AC_O4.5': apply_margin_mult(get_poisson_prob(lam_ac, 4, "over")),
+        'S_1': apply_margin_add(prob_s1),
+        'ST_1': apply_margin_add(prob_st1),
+        'H_ST_O2.5': apply_margin_add(get_poisson_prob(mu_h_st, 2, "over")),
+        'H_S_O11.5': apply_margin_add(get_poisson_prob(mu_h_s, 11, "over")),
+        'A_ST_U4.5': apply_margin_add(get_poisson_prob(mu_a_st, 4, "under")),
+        'O0.5+U5.5': apply_margin_add(get_poisson_prob(lam_ft, 5, "under") - get_poisson_prob(lam_ft, 0, "exact")),
+        'O0.5+U6.5': apply_margin_add(get_poisson_prob(lam_ft, 6, "under") - get_poisson_prob(lam_ft, 0, "exact"))
+    })
+    return anchors
+
 def get_real_odd(home, away, typ_kod, fallback_kurs):
     """
     Funkcja mapuje nazwy z BetExplorer na Superbet używając heurystyki znakowej (Fuzzy Match).
@@ -860,7 +942,8 @@ def get_real_odd(home, away, typ_kod, fallback_kurs):
                 return float(markets[typ_kod])
     return fallback_kurs
 
-def add_pred(match_id, termin, date, time, league, home, away, engine, typ, szansa, kurs_szac, arg):
+def add_pred(match_id, termin, date, time, league, home, away, engine, typ, szansa, kurs_szac, arg, dyn_anchors=None):
+    if dyn_anchors is None: dyn_anchors = KOTWICE_KURSOWE
     typ_k = str(typ).strip()
     try: kurs_bazowy = float(str(kurs_szac).replace(',', '.'))
     except: kurs_bazowy = 1.05
@@ -869,8 +952,8 @@ def add_pred(match_id, termin, date, time, league, home, away, engine, typ, szan
     # Obsługa złożonych BetBuilderów w oparciu o realne kursy
     if "+" in typ_k and ("O0.5+U" not in typ_k or engine == "BetBuilder Pro") and "1X+U" not in typ_k and "X2+U" not in typ_k: 
         skladniki = typ_k.split("+")
-        # Pobieranie kursów składowych. Priorytet: Superbet API -> KOTWICE -> 1.05
-        kursy_skladowe = [get_real_odd(home, away, sk.strip(), KOTWICE_KURSOWE.get(sk.strip(), 1.05)) for sk in skladniki]
+        # Pobieranie kursów składowych. Priorytet: Superbet API -> Dynamiczne Kotwice -> 1.05
+        kursy_skladowe = [get_real_odd(home, away, sk.strip(), dyn_anchors.get(sk.strip(), 1.05)) for sk in skladniki]
         rho_val = 0.22 if any(c in typ_k for c in ["C_U", "HC_", "AC_"]) else 0.65
         kurs_docelowy = calc_betbuilder_copula(kursy_skladowe, rho=rho_val)
         is_anchor = True # Moduł Copula bazuje na realnych kursach rynkowych i zarządza marżą
@@ -880,8 +963,8 @@ def add_pred(match_id, termin, date, time, league, home, away, engine, typ, szan
         if real_o is not None:
             kurs_docelowy = real_o
             is_anchor = True # Kurs posiada już rynkową marżę bukmachera
-        elif typ_k in KOTWICE_KURSOWE:
-            kurs_docelowy = KOTWICE_KURSOWE[typ_k]
+        elif typ_k in dyn_anchors:
+            kurs_docelowy = dyn_anchors[typ_k]
             is_anchor = True
         else: 
             kurs_docelowy = kurs_bazowy
@@ -926,7 +1009,7 @@ def add_pred(match_id, termin, date, time, league, home, away, engine, typ, szan
         "Szansa": szansa, "Kurs_Szac": kurs_docelowy, "Argumentacja": arg_final
     })
 
-print("Uruchamiam Modele Predykcyjne...")
+print("Uruchamiam Modele Predykcyjne z Kalibracją Wariancji...")
 
 for idx, row in fixtures_clean.iterrows():
     league, home, away = row['League'], row['Home'], row['Away']
@@ -934,14 +1017,17 @@ for idx, row in fixtures_clean.iterrows():
     match_id, d_termin, d_date, d_time = row['Match_ID'], row['Termin'], row['Date'], row['Time']
     
     o1_raw, ox_raw, o2_raw = row['Odd_1'], row['Odd_X'], row['Odd_2']
+    
+    h_tier = team_tiers.get((league, home), 'Koszyk 3')
+    a_tier = team_tiers.get((league, away), 'Koszyk 3')
+
+    # Przeliczenie matematycznych parametrów przed każdym spotkaniem
+    dyn_anchors = get_dynamic_anchors(h_tier, a_tier, o1_raw)
 
     h_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == home) | (valid_matches['Away'] == home))].copy()
     a_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == away) | (valid_matches['Away'] == away))].copy()
     h_dom = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Home'] == home)].copy()
     a_wyj = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Away'] == away)].copy()
-    
-    h_tier = team_tiers.get((league, home), 'Koszyk 3')
-    a_tier = team_tiers.get((league, away), 'Koszyk 3')
 
     if len(h_dom) > 0:
         h_dom['HT_Total'] = pd.to_numeric(h_dom['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(h_dom['HTAG'], errors='coerce').fillna(0)
@@ -1021,7 +1107,7 @@ for idx, row in fixtures_clean.iterrows():
 
                 arg = f"Gość ({a_tier}) wyjazd bez porażki {a_x2_c}/{len(a_wyj)} (Ogółem: {a_x2_tot}/{len(a_tot_all)}). Gość przegrywał z: [{a_ls_txt}]. Gosp ({h_tier}) dom wygrał {h_win_c}/{len(h_dom)} (Ogółem: {h_win_tot}/{len(h_tot_all)}). Gosp wygrywał z: [{h_ws_txt}]."
                 
-            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "1X Pro", typ_kod, round(final_prob*100, 1), round(fair_odd, 2), arg)
+            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "1X Pro", typ_kod, round(final_prob*100, 1), round(fair_odd, 2), arg, dyn_anchors)
 
     # 6b. GOAL LINE PRO
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
@@ -1040,7 +1126,7 @@ for idx, row in fixtures_clean.iterrows():
             if avg_prob_u >= 0.70:
                 arg = f"U{line} | Ważone szanse: Gosp {round(prob_h_u*100)}%, Gość {round(prob_a_u*100)}%. Trafienia (dom/wyj): Gosp {h_th}/{h_tl}, Gość {a_th}/{a_tl}. Ogółem (wszystkie mecze): Gosp {ht_th}/{ht_tl}, Gość {at_th}/{at_tl}."
                 if h_sm or a_sm: arg += " | ⚠️ Wygładzenie Bayesowskie"
-                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Line Pro", f"U{line}", round(avg_prob_u*100, 1), KOTWICE_KURSOWE.get(f"U{line}", 1.10), arg)
+                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Line Pro", f"U{line}", round(avg_prob_u*100, 1), dyn_anchors.get(f"U{line}", 1.10), arg, dyn_anchors)
 
         for line in [0.5, 1.5, 2.5]:
             prob_h_o, h_th, h_tl, h_sm = get_weighted_stats(h_dom_dict, 'Total_Goals', lambda x: pd.notna(x) and x > line, prior_prob=0.30)
@@ -1052,7 +1138,7 @@ for idx, row in fixtures_clean.iterrows():
             if avg_prob_o >= 0.70: 
                 arg = f"O{line} | Ważone szanse: Gosp {round(prob_h_o*100)}%, Gość {round(prob_a_o*100)}%. Trafienia (dom/wyj): Gosp {h_th}/{h_tl}, Gość {a_th}/{a_tl}. Ogółem (wszystkie mecze): Gosp {ht_th}/{ht_tl}, Gość {at_th}/{at_tl}."
                 if h_sm or a_sm: arg += " | ⚠️ Wygładzenie Bayesowskie"
-                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Line Pro", f"O{line}", round(avg_prob_o*100, 1), KOTWICE_KURSOWE.get(f"O{line}", 1.10), arg)
+                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Line Pro", f"O{line}", round(avg_prob_o*100, 1), dyn_anchors.get(f"O{line}", 1.10), arg, dyn_anchors)
 
     # 6c. BETBUILDER PRO Z SZABLONAMI PREMIUM
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
@@ -1064,13 +1150,13 @@ for idx, row in fixtures_clean.iterrows():
             avg_p = (p_h + p_a) / 2
             
             if avg_p >= 0.85:
-                kursy_skl = [KOTWICE_KURSOWE.get(sk.strip(), 1.05) for sk in tpl.split("+")]
+                kursy_skl = [dyn_anchors.get(sk.strip(), 1.05) for sk in tpl.split("+")]
                 est_odd = calc_betbuilder_copula(kursy_skl, rho=0.45)
                 if est_odd < 1.15: est_odd = 1.15
                 
                 arg = f"Szablon Premium | Szansa bazowa układu: {round(avg_p*100)}% | Trafienia D/W: Gosp {h_th}/{h_tl}, Gość {a_th}/{a_tl}"
                 if h_sm or a_sm: arg += " | ⚠️ Bayes"
-                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "BetBuilder Pro", tpl, round(avg_p*100, 1), round(est_odd, 2), arg)
+                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "BetBuilder Pro", tpl, round(avg_p*100, 1), round(est_odd, 2), arg, dyn_anchors)
 
     # 6d. MULTIGOL
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
@@ -1104,7 +1190,7 @@ for idx, row in fixtures_clean.iterrows():
                 
                 arg = f"Regresja po anomalii (Wyniki Gosp ost. 3: {h_scores} | Gość ost. 3: {a_scores}). Trafienia D/W: Gosp {hc}/{hc_tl}, Gość {ac}/{ac_tl}. Ogółem: {htc}/{htc_tl}, {atc}/{atc_tl}."
                 if was_sm: arg += " | ⚠️ Wygładzenie Bayesowskie"
-                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Multigol", typ_kod, round(pewnosc*100, 1), round(est_odd, 2), arg)
+                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Multigol", typ_kod, round(pewnosc*100, 1), round(est_odd, 2), arg, dyn_anchors)
 
     # 6e. CORNERS PRO
     valid_corners = valid_matches.dropna(subset=['Corners_H', 'Corners_A']).copy()
@@ -1139,7 +1225,7 @@ for idx, row in fixtures_clean.iterrows():
                 
                 if avg_p >= 0.90:
                     if h_sm or a_sm: any_smoothed = True
-                    c_blocks_code.append(f"C_U{line}"); c_probs.append(avg_p); c_odds.append(round(1/(avg_p*0.90), 2))
+                    c_blocks_code.append(f"C_U{line}"); c_probs.append(avg_p); c_odds.append(dyn_anchors.get(f"C_U{line}", round(1/(avg_p*0.90), 2)))
                     arg_c.append(f"C_U{line} (D: {h_th}/{h_tl}, W: {a_th}/{a_tl} | Ogół: {ht_th}/{ht_tl}, {at_th}/{at_tl})")
                     break
 
@@ -1150,7 +1236,7 @@ for idx, row in fixtures_clean.iterrows():
                 
                 if prob_hc >= 0.92:
                     if h_sm: any_smoothed = True
-                    c_blocks_code.append(f"HC_U{line}"); c_probs.append(prob_hc); c_odds.append(round(1/(prob_hc*0.90), 2))
+                    c_blocks_code.append(f"HC_U{line}"); c_probs.append(prob_hc); c_odds.append(dyn_anchors.get(f"HC_U{line}", round(1/(prob_hc*0.90), 2)))
                     arg_c.append(f"HC_U{line} (D: {h_th}/{h_tl} | Ogół: {ht_th}/{ht_tl})")
                     break
 
@@ -1161,7 +1247,7 @@ for idx, row in fixtures_clean.iterrows():
                 
                 if prob_ac >= 0.92:
                     if a_sm: any_smoothed = True
-                    c_blocks_code.append(f"AC_U{line}"); c_probs.append(prob_ac); c_odds.append(round(1/(prob_ac*0.90), 2))
+                    c_blocks_code.append(f"AC_U{line}"); c_probs.append(prob_ac); c_odds.append(dyn_anchors.get(f"AC_U{line}", round(1/(prob_ac*0.90), 2)))
                     arg_c.append(f"AC_U{line} (W: {a_th}/{a_tl} | Ogół: {at_th}/{at_tl})")
                     break
 
@@ -1170,7 +1256,7 @@ for idx, row in fixtures_clean.iterrows():
             if est_odd < 1.05: est_odd = 1.05
             uzasadnienie = " | ".join(arg_c)
             if any_smoothed: uzasadnienie += " | ⚠️ Wygładzenie Bayesowskie"
-            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Corners Pro", "+".join(c_blocks_code), round(np.mean(c_probs)*100, 1), round(est_odd, 2), uzasadnienie)
+            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Corners Pro", "+".join(c_blocks_code), round(np.mean(c_probs)*100, 1), round(est_odd, 2), uzasadnienie, dyn_anchors)
 
     # 6f. SHOTS PRO
     valid_shots = valid_matches.dropna(subset=['Shots_H', 'Shots_A', 'ShotsTarget_H', 'ShotsTarget_A']).copy()
@@ -1226,13 +1312,13 @@ for idx, row in fixtures_clean.iterrows():
                 est_odd_s = round(1.0 + (((1/prob_h_s) - 1.0) / 1.5), 2) if prob_h_s < 1.0 else 1.01
                 arg = f"Strzały Ogółem: Gosp win u siebie {h_s_win}/{h_len} (Ogółem: {h_tot_s_win}/{len(h_tot_all_s)}). Gość lose wyjazd {a_s_lose}/{a_len} (Ogółem: {a_tot_s_lose}/{len(a_tot_all_s)})."
                 if any_sm: arg += " | ⚠️ Wygładzenie Bayesowskie"
-                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Shots Pro", "S_1", round(prob_h_s*100, 1), round(est_odd_s, 2), arg)
+                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Shots Pro", "S_1", round(prob_h_s*100, 1), dyn_anchors.get("S_1", round(est_odd_s, 2)), arg, dyn_anchors)
             
             if prob_h_st > 0.80:
                 est_odd_st = round(1.0 + (((1/prob_h_st) - 1.0) / 1.5), 2) if prob_h_st < 1.0 else 1.01
                 arg = f"Strzały Celne: Gosp win u siebie {h_st_win}/{h_len} (Ogółem: {h_tot_st_win}/{len(h_tot_all_s)}). Gość lose wyjazd {a_st_lose}/{a_len} (Ogółem: {a_tot_st_lose}/{len(a_tot_all_s)})."
                 if any_sm: arg += " | ⚠️ Wygładzenie Bayesowskie"
-                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Shots Pro", "ST_1", round(prob_h_st*100, 1), round(est_odd_st, 2), arg)
+                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Shots Pro", "ST_1", round(prob_h_st*100, 1), dyn_anchors.get("ST_1", round(est_odd_st, 2)), arg, dyn_anchors)
 
     # 6k. OPTA SHOTS FLOOR
     if 'valid_shots' in locals() and not valid_shots.empty:
@@ -1244,19 +1330,19 @@ for idx, row in fixtures_clean.iterrows():
             if prob_h_s11 >= 0.82:
                 arg = f"Strzały Gosp u siebie 12+: {h_th_s}/{h_tl_s} meczów (śr. dom: {round(h_dom_s['Shots_H'].mean(), 1)})."
                 if h_sm_s: arg += " | ⚠️ Wygładzenie Bayesowskie"
-                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Opta Shots Floor", "H_S_O11.5", round(prob_h_s11*100, 1), KOTWICE_KURSOWE.get("H_S_O11.5", 1.40), arg)
+                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Opta Shots Floor", "H_S_O11.5", round(prob_h_s11*100, 1), dyn_anchors.get("H_S_O11.5", 1.40), arg, dyn_anchors)
 
             prob_h_st3, h_th_st, h_tl_st, h_sm_st = get_weighted_stats(h_dom_s_dict, 'ShotsTarget_H', lambda x: pd.notna(x) and x >= 2.5, prior_prob=0.85)
             if prob_h_st3 >= 0.85:
                 arg = f"Celne Gosp u siebie 3+: {h_th_st}/{h_tl_st} meczów (śr. celnych: {round(h_dom_s['ShotsTarget_H'].mean(), 1)})."
                 if h_sm_st: arg += " | ⚠️ Wygładzenie Bayesowskie"
-                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Opta Shots Floor", "H_ST_O2.5", round(prob_h_st3*100, 1), KOTWICE_KURSOWE.get("H_ST_O2.5", 1.22), arg)
+                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Opta Shots Floor", "H_ST_O2.5", round(prob_h_st3*100, 1), dyn_anchors.get("H_ST_O2.5", 1.22), arg, dyn_anchors)
 
             prob_a_stu4, a_th_stu, a_tl_stu, a_sm_stu = get_weighted_stats(a_wyj_s_dict, 'ShotsTarget_A', lambda x: pd.notna(x) and x <= 4.5, prior_prob=0.80)
             if prob_a_stu4 >= 0.82:
                 arg = f"Gość wyjazd SOT under 4.5: {a_th_stu}/{a_tl_stu} meczów (śr. wyjazd: {round(a_wyj_s['ShotsTarget_A'].mean(), 1)})."
                 if a_sm_stu: arg += " | ⚠️ Wygładzenie Bayesowskie"
-                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Opta Shots Floor", "A_ST_U4.5", round(prob_a_stu4*100, 1), KOTWICE_KURSOWE.get("A_ST_U4.5", 1.25), arg)
+                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Opta Shots Floor", "A_ST_U4.5", round(prob_a_stu4*100, 1), dyn_anchors.get("A_ST_U4.5", 1.25), arg, dyn_anchors)
 
     # 6l. COMBO DC+UNDER
     if len(h_dom) >= 5 and len(a_wyj) >= 5:
@@ -1266,7 +1352,7 @@ for idx, row in fixtures_clean.iterrows():
         
         if prob_1x_u35 >= 0.78 and h_tier in ['Koszyk 1', 'Koszyk 2', 'Koszyk 3']:
             arg = f"Combo 1X + U3.5 | Dom Gosp trafione: {h_dom_eval_1x_u35}/{len(h_dom)}, Wyjazd Gość bez wygranej i U3.5: {a_wyj_eval_1x_u35}/{len(a_wyj)}."
-            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Combo DC & Goals", "1X+U3.5", round(prob_1x_u35*100, 1), KOTWICE_KURSOWE.get("1X+U3.5", 1.52), arg)
+            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Combo DC & Goals", "1X+U3.5", round(prob_1x_u35*100, 1), dyn_anchors.get("1X+U3.5", 1.52), arg, dyn_anchors)
 
         h_dom_eval_1x_u45 = sum((h_dom['FTHG'] >= h_dom['FTAG']) & (h_dom['Total_Goals'] < 4.5))
         a_wyj_eval_1x_u45 = sum((a_wyj['FTAG'] <= a_wyj['FTHG']) & (a_wyj['Total_Goals'] < 4.5))
@@ -1274,7 +1360,7 @@ for idx, row in fixtures_clean.iterrows():
         
         if prob_1x_u45 >= 0.85:
             arg = f"Combo 1X + U4.5 | Dom Gosp trafione: {h_dom_eval_1x_u45}/{len(h_dom)}, Wyjazd Gość bez wygranej i U4.5: {a_wyj_eval_1x_u45}/{len(a_wyj)}."
-            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Combo DC & Goals", "1X+U4.5", round(prob_1x_u45*100, 1), KOTWICE_KURSOWE.get("1X+U4.5", 1.35), arg)
+            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Combo DC & Goals", "1X+U4.5", round(prob_1x_u45*100, 1), dyn_anchors.get("1X+U4.5", 1.35), arg, dyn_anchors)
 
     # 6m. HALFTIME DEFENSE
     if len(h_dom) >= 5 and len(a_wyj) >= 5:
@@ -1287,7 +1373,7 @@ for idx, row in fixtures_clean.iterrows():
         if avg_ht_u15 >= 0.80:
             arg = f"1. Połowa U1.5 | Gosp u siebie U1.5 HT: {h_th_ht}/{h_tl_ht}, Gość wyjazd U1.5 HT: {a_th_ht}/{a_tl_ht}."
             if h_sm_ht or a_sm_ht: arg += " | ⚠️ Bayes"
-            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Halftime Defense", "HT_U1.5", round(avg_ht_u15*100, 1), KOTWICE_KURSOWE.get("HT_U1.5", 1.23), arg)
+            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Halftime Defense", "HT_U1.5", round(avg_ht_u15*100, 1), dyn_anchors.get("HT_U1.5", 1.23), arg, dyn_anchors)
 
     # 6n. UNDERDOG HANDICAP PRO
     if len(h_dom) >= 5 and len(a_wyj) >= 5 and a_tier in ['Koszyk 4', 'Koszyk 5', 'Koszyk 6']:
@@ -1299,7 +1385,7 @@ for idx, row in fixtures_clean.iterrows():
         
         if avg_hc_prob >= 0.85:
             arg = f"Handicap Gość +1.5 | Gosp wygrywa 2+ golami tylko w {h_blowouts}/{len(h_dom)} meczów. Gość przegrywa 2+ golami tylko w {a_blowouts}/{len(a_wyj)}."
-            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Underdog Handicap", "2 (+1.5)", round(avg_hc_prob*100, 1), KOTWICE_KURSOWE.get("2 (+1.5)", 1.18), arg)
+            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Underdog Handicap", "2 (+1.5)", round(avg_hc_prob*100, 1), dyn_anchors.get("2 (+1.5)", 1.18), arg, dyn_anchors)
 
     # 6g. ZIMNY PRYSZNIC
     if h_tier in ['Koszyk 1', 'Koszyk 2'] and len(h_tot_all) > 0:
@@ -1309,7 +1395,7 @@ for idx, row in fixtures_clean.iterrows():
             if opp_tier in ['Koszyk 4', 'Koszyk 5', 'Koszyk 6']:
                 est_odd = round(1.0 + (((1/0.85) - 1.0) / 1.5), 2)
                 arg = f"Gospodarz ({h_tier}) szuka rewanżu u siebie po stracie punktów na wyjeździe z dużo słabszym rywalem ({opp_tier})."
-                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Cold Shower", "1", 85.0, round(est_odd, 2), arg)
+                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Cold Shower", "1", 85.0, dyn_anchors.get("1", round(est_odd, 2)), arg, dyn_anchors)
 
     # 6h. UKRYTA FORMA (Proxy xG)
     for team, is_home in [(home, True), (away, False)]:
@@ -1332,7 +1418,7 @@ for idx, row in fixtures_clean.iterrows():
                     typ_kod = "1X" if is_home else "X2"
                     est_odd = round(1.0 + (((1/0.80) - 1.0) / 1.5), 2)
                     arg = f"Wysokie xG. W 3 ost. meczach zespół oddał {int(st_for)} celnych strzałów, ale zdobył tylko {int(g_for)} goli."
-                    add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Hidden Form", typ_kod, 80.0, round(est_odd, 2), arg)
+                    add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Hidden Form", typ_kod, 80.0, dyn_anchors.get(typ_kod, round(est_odd, 2)), arg, dyn_anchors)
 
     # 6i. ANOMALIE ROŻNYCH
     valid_corners_all = valid_matches.dropna(subset=['Corners_H', 'Corners_A']).copy()
@@ -1347,7 +1433,7 @@ for idx, row in fixtures_clean.iterrows():
                 typ_kod = "HC_O4.5" if is_home else "AC_O4.5"
                 est_odd = round(1.0 + (((1/0.82) - 1.0) / 1.5), 2)
                 arg = f"Pęknięta seria. Średnia sezonu zespołu: {round(season_avg, 2)}. Średnia 2 ost. meczów: tylko {round(last_2_avg, 2)}."
-                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Corner Anomalies", typ_kod, 82.0, round(est_odd, 2), arg)
+                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Corner Anomalies", typ_kod, 82.0, dyn_anchors.get(typ_kod, round(est_odd, 2)), arg, dyn_anchors)
 
     # 6j. ANOMALIE BRAMKOWE
     t_past = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == home) | (valid_matches['Away'] == away))]
@@ -1357,11 +1443,11 @@ for idx, row in fixtures_clean.iterrows():
         if season_avg <= 2.8 and last_2_avg >= 4.5:
             est_odd = round(1.0 + (((1/0.85) - 1.0) / 1.5), 2)
             arg = f"Anomalia overowa. Średnia sezonu obu ekip: {round(season_avg, 2)}. Ost. 2 mecze: aż {round(last_2_avg, 2)} goli. Oczekiwany powrót undera."
-            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Anomalies", "U3.5", 85.0, round(est_odd, 2), arg)
+            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Anomalies", "U3.5", 85.0, dyn_anchors.get("U3.5", round(est_odd, 2)), arg, dyn_anchors)
         elif season_avg >= 2.5 and last_2_avg <= 0.5:
             est_odd = round(1.0 + (((1/0.85) - 1.0) / 1.5), 2)
             arg = f"Anomalia underowa. Średnia sezonu obu ekip: {round(season_avg, 2)}. Ost. 2 mecze: tylko {round(last_2_avg, 2)} goli. Oczekiwane przełamanie."
-            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Anomalies", "O1.5", 85.0, round(est_odd, 2), arg)
+            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Anomalies", "O1.5", 85.0, dyn_anchors.get("O1.5", round(est_odd, 2)), arg, dyn_anchors)
 
 # ==========================================================
 # 7. SYSTEM ŚLEDZENIA SKUTECZNOŚCI I YIELDU (BACKTESTER)
@@ -1771,5 +1857,5 @@ ws_sum.update(values=summary_data, range_name='A1')
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Zintegrowano API Superbet. Realne kursy rynkowe zastąpiły twarde kotwice dla setek podrynków.")
+print("Zintegrowano API Superbet i Kalibrację Wariancji. Realne kursy rynkowe zastąpiły twarde kotwice dla setek podrynków.")
 print("=" * 60)
