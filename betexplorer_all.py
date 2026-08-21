@@ -1157,8 +1157,8 @@ print("Inicjalizacja Modułu Backtestingu (Śledzenie Skuteczności)...")
 
 # Zaktualizowane kolumny o "Kurs_Bukmachera"
 cols_all_pred = ["Match_ID", "Zagrane", "Wyslij_AKO", "Kupon_ID", "Termin", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Kurs_Bukmachera", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status"]
-cols_historia = ["Match_ID", "Zagrane", "Kupon_ID", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Kurs_Bukmachera", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 
+cols_historia = ["Match_ID", "Zagrane", "Kupon_ID", "Data", "Godzina", "Liga", "Gospodarz", "Gość", "Engine", "Typ", "Szansa", "Kurs_Szac", "Kurs_Bukmachera", "Argumentacja", "Przedzial_Kursowy", "Consensus_Score", "Status", "Profit", "Yield_Wplyw"]
 df_all_predictions = pd.DataFrame(all_generated_predictions)
 
 if not df_all_predictions.empty:
