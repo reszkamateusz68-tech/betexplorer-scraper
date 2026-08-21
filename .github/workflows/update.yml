@@ -2,7 +2,6 @@ name: StatLab Analytics Engine
 
 on:
   schedule:
-    # Skrypt odpala się o 08:00 i 14:00 (możesz dostosować godziny)
     - cron: '0 8,14 * * *'
   workflow_dispatch:
 
@@ -21,12 +20,16 @@ jobs:
       - name: Instalacja zależności
         run: pip install -r requirements.txt
 
-      - name: 1. Uruchomienie Silnika (Pobieranie, modele i tworzenie pakietów AKO)
+      - name: 1. Pobranie kursów bukmachera (Superbet)
+        run: python superbet_scraper.py
+        continue-on-error: true
+
+      - name: 2. Uruchomienie Głównego Silnika Analitycznego
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
         run: python betexplorer_all.py
 
-      - name: 2. Natychmiastowa wysyłka gotowych AKO na Telegram
+      - name: 3. Natychmiastowa wysyłka gotowych AKO na Telegram
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
