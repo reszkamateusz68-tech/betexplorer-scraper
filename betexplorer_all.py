@@ -18,7 +18,7 @@ import concurrent.futures
 today = datetime.now()
 
 # ==========================================================
-# 0. INICJALIZACJA GOOGLE SHEETS (Z ZABEZPIECZENIEM 503)
+# 0. INICJALIZACJA GOOGLE SHEETS
 # ==========================================================
 scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 if os.path.exists("credentials.json"):
@@ -573,7 +573,7 @@ if not fixtures_df.empty:
     fixtures_df['Match_ID'] = fixtures_df['Date_str'] + "_" + fixtures_df['Home'].str[:3].str.upper() + "_" + fixtures_df['Away'].str[:3].str.upper()
     fixtures_df['Termin'] = fixtures_df['Date'].apply(categorize_date)
     
-    dozwolone_terminy = ["Dziś", "Jutro", "Następne 2 dni", "Następne 3 dni", "Następny tydzień"]
+    dozwolone_terminy = ["Dziś", "Jutro", "Za 2 dni", "Za 3 dni", "Za 4 dni", "Za 5 dni", "Za 6 dni", "Za 7 dni"]
     fixtures_df = fixtures_df[fixtures_df['Termin'].isin(dozwolone_terminy)].copy()
 
     fixtures_df['Status_Kursów'] = np.where(fixtures_df['Odd1'].astype(str).str.strip().isin(["", "-", "nan"]), "Brak Kursów", "Są Kursy")
@@ -682,7 +682,6 @@ def get_real_odd(home, away, typ_kod, fallback_kurs=None):
     for key, markets in superbet_odds_db.items():
         if "___" in key:
             sb_h, sb_a = key.split("___", 1)
-            # Fuzzy match
             if (sb_h[:5] in h_low or h_low[:5] in sb_h) and (sb_a[:5] in a_low or a_low[:5] in sb_a):
                 val = markets.get(typ_kod)
                 if val: return float(val)
