@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
@@ -7,19 +8,20 @@ import pandas as pd
 from datetime import datetime, timezone, timedelta
 
 # ==========================================================
-# 1. POBIERANIE KALENDARZA (DYNAMICZNE DATY)
+# 1. POBIERANIE KALENDARZA (DYNAMICZNE DATY - PEŁNE GODZINY UTC)
 # ==========================================================
 base_url = "https://production-superbet-offer-pl.freetls.fastly.net/v3/pl-PL/events"
 
 now = datetime.now(timezone.utc)
+# Zaokrąglenie do pełnych godzin (wymóg API Superbet)
 start_iso = now.strftime("%Y-%m-%dT00:00:00.000Z")
-end_iso = (now + timedelta(days=2)).strftime("%Y-%m-%dT23:59:59.000Z")
+end_iso = (now + timedelta(days=2)).strftime("%Y-%m-%dT00:00:00.000Z")
 
 params = {
     "startDate": start_iso,
     "endDate": end_iso,
     "index": "active-prematch",
-    "sports": "5"  # 5 = Piłka nożna
+    "sports": "5"  # 5 = Piłka nożna w Superbet
 }
 
 headers = {
@@ -36,7 +38,7 @@ session = requests.Session()
 try:
     res = session.get(base_url, headers=headers, params=params, timeout=12)
     if res.status_code != 200:
-        print(f"Błąd pobierania listy: {res.status_code}")
+        print(f"Błąd pobierania listy: {res.status_code} | {res.text[:200]}")
         exit()
     raw_data = res.json()
 except Exception as e:
@@ -73,7 +75,8 @@ if os.path.exists("slownik_druzyn.json"):
             slownik = json.load(f)
             map_be_to_sb = slownik.get("BetExplorer_To_Superbet", {})
             mapowanie_sb = {v.strip().lower(): k for k, v in map_be_to_sb.items() if v.strip() != ""}
-    except Exception: pass
+    except Exception as e:
+        print(f"Uwaga: Nie wczytano slownik_druzyn.json: {e}")
 
 print("3. Uruchamiam szybkie pobieranie wielowątkowe (12 wątków)...")
 
@@ -117,14 +120,16 @@ def fetch_single_event(event_id):
                     market_list = list(raw_markets.values()) if isinstance(raw_markets, dict) else raw_markets
 
                     for m in market_list:
-                        if not isinstance(m, dict): continue
+                        if not isinstance(m, dict):
+                            continue
                         market_name = m.get("name") or m.get("market_name", "")
 
                         raw_odds = m.get("odds", [])
                         odds_list = list(raw_odds.values()) if isinstance(raw_odds, dict) else raw_odds
 
                         for o in odds_list:
-                            if not isinstance(o, dict): continue
+                            if not isinstance(o, dict):
+                                continue
                             meta = o.get("metadata", {}) if isinstance(o.get("metadata"), dict) else {}
 
                             odd_type = (meta.get("name") or o.get("name") or o.get("code") or o.get("outcome_name") or "")
@@ -141,8 +146,8 @@ def fetch_single_event(event_id):
                                 "Rynek": market_name,
                                 "Typ": odd_type,
                                 "Opis_Zdarzenia": full_info,
-                                "Kurs_Float": float(price_raw), # Wartość liczbowa dla JSON
-                                "Kurs": price_str               # Wartość tekstowa dla CSV
+                                "Kurs_Float": float(price_raw) if price_raw else 1.0,
+                                "Kurs": price_str
                             })
         return match_rows, match_name, None
     except Exception as e:
@@ -166,10 +171,15 @@ with ThreadPoolExecutor(max_workers=12) as executor:
 
 elapsed = round(time.time() - start_time, 2)
 
+def extract_line_number(text):
+    """Pomocnicza funkcja wyciągająca samą liczbę linii (np. '2.5' z 'powyżej 2.5')."""
+    match = re.search(r'\d+(\.\d+)?', str(text))
+    return match.group(0) if match else ""
+
 if all_rows:
     df = pd.DataFrame(all_rows)
     
-    # 1. Zapis klasycznego CSV w folderze głównym akcji
+    # 1. Zapis klasycznego CSV
     df_csv = df.drop(columns=["Kurs_Float"])
     csv_file = "superbet_baza_kursow.csv"
     df_csv.to_csv(csv_file, sep=";", index=False, encoding="utf-8-sig")
@@ -181,55 +191,75 @@ if all_rows:
     superbet_db = {}
     
     for row in all_rows:
-        sb_h = row["Gospodarz"].lower()
-        sb_a = row["Gosc"].lower()
-        be_h = mapowanie_sb.get(sb_h, sb_h)
-        be_a = mapowanie_sb.get(sb_a, sb_a)
-        key = f"{be_h}___{be_a}"
+        sb_h = row["Gospodarz"].strip()
+        sb_a = row["Gosc"].strip()
+        
+        # Pobieranie zmapowanej nazwy lub nazwy oryginalnej
+        be_h = mapowanie_sb.get(sb_h.lower(), sb_h)
+        be_a = mapowanie_sb.get(sb_a.lower(), sb_a)
+        key = f"{be_h.lower()}___{be_a.lower()}"
         
         if key not in superbet_db:
             superbet_db[key] = {}
             
         rynek = str(row["Rynek"]).lower()
-        typ = str(row["Typ"])
-        opis = str(row["Opis_Zdarzenia"])
+        typ = str(row["Typ"]).strip()
+        opis = str(row["Opis_Zdarzenia"]).strip()
         kurs = row["Kurs_Float"]
         
-        if kurs <= 1.0: continue
+        if kurs <= 1.0:
+            continue
 
-        # Mapowanie na kody silnika
+        # Wyciągnięcie czystej linii liczbowej (np. 0.5, 1.5, 2.5, 11.5)
+        linia = extract_line_number(typ) or extract_line_number(opis)
+
+        # Precyzyjne mapowanie na kody silnika analitycznego
         if rynek == "mecz" and typ in ["1", "X", "2"]:
             superbet_db[key][typ] = kurs
         elif rynek == "podwójna szansa" and typ in ["1X", "X2", "12"]:
             superbet_db[key][typ] = kurs
-        elif "liczba goli" in rynek and "połowa" not in rynek and "drużyna" not in rynek:
-            if "poniżej" in typ.lower(): superbet_db[key][f"U{opis.strip()}"] = kurs
-            elif "powyżej" in typ.lower(): superbet_db[key][f"O{opis.strip()}"] = kurs
+        elif "liczba goli" in rynek and "połowa" not in rynek and "drużyna" not in rynek and "handicap" not in rynek:
+            if "poniżej" in typ.lower() and linia:
+                superbet_db[key][f"U{linia}"] = kurs
+            elif "powyżej" in typ.lower() and linia:
+                superbet_db[key][f"O{linia}"] = kurs
         elif "1. połowa - liczba goli" in rynek:
-            if "poniżej" in typ.lower(): superbet_db[key][f"HT_U{opis.strip()}"] = kurs
+            if "poniżej" in typ.lower() and linia:
+                superbet_db[key][f"HT_U{linia}"] = kurs
         elif "2. połowa - liczba goli" in rynek:
-            if "poniżej" in typ.lower(): superbet_db[key][f"2H_U{opis.strip()}"] = kurs
+            if "poniżej" in typ.lower() and linia:
+                superbet_db[key][f"2H_U{linia}"] = kurs
         elif "liczba rzutów rożnych" in rynek and "drużyna" not in rynek:
-            if "poniżej" in typ.lower(): superbet_db[key][f"C_U{opis.strip()}"] = kurs
-            elif "powyżej" in typ.lower(): superbet_db[key][f"C_O{opis.strip()}"] = kurs
+            if "poniżej" in typ.lower() and linia:
+                superbet_db[key][f"C_U{linia}"] = kurs
+            elif "powyżej" in typ.lower() and linia:
+                superbet_db[key][f"C_O{linia}"] = kurs
         elif "1. drużyna - liczba rzutów rożnych" in rynek:
-            if "poniżej" in typ.lower(): superbet_db[key][f"HC_U{opis.strip()}"] = kurs
-            elif "powyżej" in typ.lower(): superbet_db[key][f"HC_O{opis.strip()}"] = kurs
+            if "poniżej" in typ.lower() and linia:
+                superbet_db[key][f"HC_U{linia}"] = kurs
+            elif "powyżej" in typ.lower() and linia:
+                superbet_db[key][f"HC_O{linia}"] = kurs
         elif "2. drużyna - liczba rzutów rożnych" in rynek:
-            if "poniżej" in typ.lower(): superbet_db[key][f"AC_U{opis.strip()}"] = kurs
-            elif "powyżej" in typ.lower(): superbet_db[key][f"AC_O{opis.strip()}"] = kurs
+            if "poniżej" in typ.lower() and linia:
+                superbet_db[key][f"AC_U{linia}"] = kurs
+            elif "powyżej" in typ.lower() and linia:
+                superbet_db[key][f"AC_O{linia}"] = kurs
         elif "kto więcej strzałów w meczu" in rynek or rynek == "strzały w meczu - h2h":
-            if typ == "1": superbet_db[key]["S_1"] = kurs
-            elif typ == "2": superbet_db[key]["S_2"] = kurs
+            if typ == "1":
+                superbet_db[key]["S_1"] = kurs
+            elif typ == "2":
+                superbet_db[key]["S_2"] = kurs
         elif "kto więcej celnych strzałów" in rynek or "celne strzały w meczu - h2h" in rynek:
-            if typ == "1": superbet_db[key]["ST_1"] = kurs
-            elif typ == "2": superbet_db[key]["ST_2"] = kurs
-        elif "1. drużyna - liczba strzałów" in rynek and "powyżej" in typ.lower():
-            superbet_db[key][f"H_S_O{opis.strip()}"] = kurs
-        elif "1. drużyna - liczba celnych strzałów" in rynek and "powyżej" in typ.lower():
-            superbet_db[key][f"H_ST_O{opis.strip()}"] = kurs
-        elif "2. drużyna - liczba celnych strzałów" in rynek and "poniżej" in typ.lower():
-            superbet_db[key][f"A_ST_U{opis.strip()}"] = kurs
+            if typ == "1":
+                superbet_db[key]["ST_1"] = kurs
+            elif typ == "2":
+                superbet_db[key]["ST_2"] = kurs
+        elif "1. drużyna - liczba strzałów" in rynek and "powyżej" in typ.lower() and linia:
+            superbet_db[key][f"H_S_O{linia}"] = kurs
+        elif "1. drużyna - liczba celnych strzałów" in rynek and "powyżej" in typ.lower() and linia:
+            superbet_db[key][f"H_ST_O{linia}"] = kurs
+        elif "2. drużyna - liczba celnych strzałów" in rynek and "poniżej" in typ.lower() and linia:
+            superbet_db[key][f"A_ST_U{linia}"] = kurs
 
     json_file = "superbet_baza.json"
     with open(json_file, "w", encoding="utf-8") as f:
@@ -239,5 +269,5 @@ if all_rows:
     print(f"SUKCES! Pomyślnie pobrano {len(all_rows)} kursów dla {total_events} meczów.")
     print(f"Całkowity czas wykonania: {elapsed} s (~{round(elapsed/60, 1)} min).")
     print(f"Plik CSV: {csv_file}")
-    print(f"Plik JSON (dla silnika): {json_file} - spakowano {len(superbet_db)} unikalnych zdarzeń.")
+    print(f"Plik JSON (dla silnika): {json_file} - spakowano {len(superbet_db)} unikalnych meczów.")
     print(f"=======================================================")
