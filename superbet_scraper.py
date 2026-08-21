@@ -7,7 +7,7 @@ import pandas as pd
 from datetime import datetime, timezone, timedelta
 
 # ==========================================================
-# 1. POBIERANIE KALENDARZA
+# 1. POBIERANIE KALENDARZA (DYNAMICZNE DATY)
 # ==========================================================
 base_url = "https://production-superbet-offer-pl.freetls.fastly.net/v3/pl-PL/events"
 
@@ -169,7 +169,7 @@ elapsed = round(time.time() - start_time, 2)
 if all_rows:
     df = pd.DataFrame(all_rows)
     
-    # Zapis klasycznego CSV (dla Twojego widoku, bez kolumny Float)
+    # 1. Zapis klasycznego CSV w folderze głównym akcji
     df_csv = df.drop(columns=["Kurs_Float"])
     csv_file = "superbet_baza_kursow.csv"
     df_csv.to_csv(csv_file, sep=";", index=False, encoding="utf-8-sig")
