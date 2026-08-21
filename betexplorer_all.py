@@ -347,9 +347,13 @@ try:
         slownik = json.load(f)
         mapowanie_fd = slownik.get("FootballData_To_BetExplorer", {})
         mapowanie_ss = slownik.get("SoccerStats_To_BetExplorer", {})
-        mapowanie_sb = slownik.get("Superbet_To_BetExplorer", {}) # Dodałem mapowanie Superbet
+        
+        # Automatyczne odwrócenie i załadowanie słownika (ignoruje puste pola "")
+        map_be_to_sb = slownik.get("BetExplorer_To_Superbet", {})
+        mapowanie_sb = {v: k for k, v in map_be_to_sb.items() if v.strip() != ""}
+        
 except Exception: mapowanie_fd, mapowanie_ss, mapowanie_sb = {}, {}, {}
-
+    
 # ==========================================
 # 1. WIELOWĄTKOWE POBIERANIE Z BETEXPLORER 
 # ==========================================
