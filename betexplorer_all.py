@@ -347,7 +347,8 @@ try:
         slownik = json.load(f)
         mapowanie_fd = slownik.get("FootballData_To_BetExplorer", {})
         mapowanie_ss = slownik.get("SoccerStats_To_BetExplorer", {})
-except Exception: mapowanie_fd, mapowanie_ss = {}, {}
+        mapowanie_sb = slownik.get("Superbet_To_BetExplorer", {}) # Dodałem mapowanie Superbet
+except Exception: mapowanie_fd, mapowanie_ss, mapowanie_sb = {}, {}, {}
 
 # ==========================================
 # 1. WIELOWĄTKOWE POBIERANIE Z BETEXPLORER 
@@ -714,107 +715,170 @@ if not league_tables.empty:
         team_tiers[(r['League'], r['Team'])] = r['Koszyk']
 
 # ==========================================================
-# 5b. MODUŁ POBIERANIA REALNYCH KURSÓW (SUPERBET API)
+# 5b. MODUŁ POBIERANIA REALNYCH KURSÓW (SUPERBET V3)
 # ==========================================================
-def fetch_superbet_odds_for_fixtures(fixtures_df):
-    print("Pobieram zmapowane, realne kursy JSON z Superbet API...")
+def fetch_superbet_odds_for_fixtures():
+    print("Pobieram pełną, realną ofertę kursową z Superbet API (Wielowątkowo, Endpoint V3)...")
     superbet_db = {}
+    
+    now = datetime.now(timezone.utc) if 'timezone' in globals() else datetime.utcnow()
+    start_iso = now.strftime("%Y-%m-%dT00:00:00.000Z")
+    end_iso = (now + timedelta(days=3)).strftime("%Y-%m-%dT00:00:00.000Z")
+    
     SUPERBET_HEADERS = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
-        "Accept": "application/json"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json, text/plain, */*"
     }
     
-    today_str = datetime.now().strftime('%Y-%m-%d')
-    tomorrow_str = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
-    day_after_str = (datetime.now() + timedelta(days=2)).strftime('%Y-%m-%d')
+    list_url = f"https://production-superbet-offer-pl.freetls.fastly.net/v3/pl-PL/events?startDate={start_iso}&endDate={end_iso}&index=active-prematch&sports=5"
     
-    events = []
-    for d_str in [today_str, tomorrow_str, day_after_str]:
+    session = requests.Session()
+    res = session.get(list_url, headers=SUPERBET_HEADERS, timeout=12)
+    if res.status_code != 200: return {}
+    
+    raw_data = res.json()
+    event_ids = []
+    d = raw_data.get("data", raw_data.get("events", []))
+    if isinstance(d, list):
+        for item in d:
+            if isinstance(item, (int, str)): event_ids.append(str(item))
+            elif isinstance(item, dict):
+                eid = item.get("eventId") or item.get("event_id") or item.get("id")
+                if eid: event_ids.append(str(eid))
+
+    if not event_ids: return {}
+
+    def fetch_detail(event_id):
+        detail_url = f"https://production-superbet-offer-pl.freetls.fastly.net/v3/subscription/pl-PL/events?events={event_id}"
         try:
-            url = f"https://production-superbet-offer-pl.freetls.fastly.net/offer/events/byDate?currentDate={d_str}"
-            res = requests.get(url, headers=SUPERBET_HEADERS, timeout=10)
-            if res.status_code == 200:
-                for ev in res.json().get('data', []):
-                    if ev.get('sportId') == 5:
-                        events.append(ev)
-        except: pass
-
-    if not events: return {}
-
-    be_teams = set()
-    for _, r in fixtures_df.iterrows():
-        be_teams.add(str(r['Home']).lower()[:4])
-        be_teams.add(str(r['Away']).lower()[:4])
-
-    matched_events = []
-    for ev in events:
-        ev_name = ev.get('eventName', '').lower()
-        if any(t in ev_name for t in be_teams):
-            matched_events.append(ev)
-
-    def fetch_detail(ev):
-        event_id = ev.get('eventId')
-        ev_name = ev.get('eventName', '')
-        if ' - ' not in ev_name or not event_id: return None
-        sb_home, sb_away = [x.strip() for x in ev_name.split(' - ', 1)]
-        
-        try:
-            detail_url = f"https://production-superbet-offer-pl.freetls.fastly.net/offer/event/{event_id}"
-            det_res = requests.get(detail_url, headers=SUPERBET_HEADERS, timeout=10)
-            if det_res.status_code != 200: return None
-            
-            market_map = {}
-            for group in det_res.json().get('data', {}).get('marketGroups', []):
-                for m in group.get('markets', []):
-                    m_name = m.get('name', '').lower()
-                    
-                    if "liczba goli" in m_name and "połowa" not in m_name and "drużyna" not in m_name:
-                        for out in m.get('outcomes', []):
-                            if 'Poniżej' in out['name']: market_map[f"U{out['name'].replace('Poniżej','').strip()}"] = out['price']
-                            elif 'Powyżej' in out['name']: market_map[f"O{out['name'].replace('Powyżej','').strip()}"] = out['price']
-                    
-                    elif "1. połowa - liczba goli" in m_name:
-                        for out in m.get('outcomes', []):
-                            if 'Poniżej' in out['name']: market_map[f"HT_U{out['name'].replace('Poniżej','').strip()}"] = out['price']
-                    
-                    elif "liczba rzutów rożnych" in m_name and "drużyna" not in m_name:
-                        for out in m.get('outcomes', []):
-                            if 'Poniżej' in out['name']: market_map[f"C_U{out['name'].replace('Poniżej','').strip()}"] = out['price']
-                    
-                    elif "1. drużyna - liczba rzutów rożnych" in m_name:
-                        for out in m.get('outcomes', []):
-                            if 'Poniżej' in out['name']: market_map[f"HC_U{out['name'].replace('Poniżej','').strip()}"] = out['price']
-                            elif 'Powyżej' in out['name']: market_map[f"HC_O{out['name'].replace('Powyżej','').strip()}"] = out['price']
+            with requests.get(detail_url, headers=SUPERBET_HEADERS, stream=True, timeout=8) as r:
+                for line in r.iter_lines(decode_unicode=True):
+                    if line and line.startswith("data:"):
+                        match_data = json.loads(line[5:].strip())
+                        if isinstance(match_data, dict): match_data = match_data.get("data", [])
+                        
+                        for m_ev in match_data:
+                            fixture = m_ev.get("fixture", {}) if isinstance(m_ev, dict) else {}
+                            ev_name = m_ev.get("event_name") or fixture.get("event_name", "")
                             
-                    elif "2. drużyna - liczba rzutów rożnych" in m_name:
-                        for out in m.get('outcomes', []):
-                            if 'Poniżej' in out['name']: market_map[f"AC_U{out['name'].replace('Poniżej','').strip()}"] = out['price']
-                            elif 'Powyżej' in out['name']: market_map[f"AC_O{out['name'].replace('Powyżej','').strip()}"] = out['price']
-                    
-                    elif "kto więcej strzałów w meczu" in m_name or m_name == "strzały w meczu - h2h":
-                        for out in m.get('outcomes', []):
-                            if out['name'] == '1': market_map['S_1'] = out['price']
-                            elif out['name'] == '2': market_map['S_2'] = out['price']
-
-                    elif "kto więcej celnych strzałów" in m_name or "celne strzały w meczu - h2h" in m_name:
-                        for out in m.get('outcomes', []):
-                            if out['name'] == '1': market_map['ST_1'] = out['price']
-                            elif out['name'] == '2': market_map['ST_2'] = out['price']
+                            # Rozbicie meczu
+                            if "·" in ev_name: sb_h, sb_a = [x.strip() for x in ev_name.split("·", 1)]
+                            elif "-" in ev_name: sb_h, sb_a = [x.strip() for x in ev_name.split("-", 1)]
+                            else: continue
                             
-            return (sb_home.lower(), sb_away.lower()), market_map
-        except: return None
+                            # Normalizacja do nazw z BetExplorera
+                            be_home = mapowanie_sb.get(sb_h, sb_h).lower()
+                            be_away = mapowanie_sb.get(sb_a, sb_a).lower()
+                            
+                            market_map = {}
+                            raw_markets = m_ev.get("markets", [])
+                            market_list = list(raw_markets.values()) if isinstance(raw_markets, dict) else raw_markets
+                            
+                            for m in market_list:
+                                if not isinstance(m, dict): continue
+                                m_name = m.get("name", "").lower()
+                                
+                                raw_odds = m.get("odds", [])
+                                odds_list = list(raw_odds.values()) if isinstance(raw_odds, dict) else raw_odds
+                                
+                                # -- Mapowanie Rynków pod logikę Twojego silnika --
+                                if m_name == "mecz":
+                                    for o in odds_list:
+                                        if o.get("name") in ["1", "X", "2"]: market_map[o["name"]] = o.get("price")
+                                elif m_name == "podwójna szansa":
+                                    for o in odds_list:
+                                        if o.get("name") in ["1X", "X2", "12"]: market_map[o["name"]] = o.get("price")
+                                elif "liczba goli" in m_name and "połowa" not in m_name and "drużyna" not in m_name and "handicap" not in m_name:
+                                    for o in odds_list:
+                                        meta = o.get("metadata", {}).get("info", "") or o.get("special_bet_value", "") or (o.get("specifiers", {}).get("total", "") if isinstance(o.get("specifiers"), dict) else "")
+                                        if "Poniżej" in o.get("name", ""): market_map[f"U{meta}"] = o.get("price")
+                                        elif "Powyżej" in o.get("name", ""): market_map[f"O{meta}"] = o.get("price")
+                                elif "1. połowa - liczba goli" in m_name:
+                                    for o in odds_list:
+                                        meta = o.get("special_bet_value", "") or (o.get("specifiers", {}).get("total", "") if isinstance(o.get("specifiers"), dict) else "")
+                                        if "Poniżej" in o.get("name", ""): market_map[f"HT_U{meta}"] = o.get("price")
+                                elif "2. połowa - liczba goli" in m_name:
+                                    for o in odds_list:
+                                        meta = o.get("special_bet_value", "") or (o.get("specifiers", {}).get("total", "") if isinstance(o.get("specifiers"), dict) else "")
+                                        if "Poniżej" in o.get("name", ""): market_map[f"2H_U{meta}"] = o.get("price")
+                                elif "liczba rzutów rożnych" in m_name and "drużyna" not in m_name:
+                                    for o in odds_list:
+                                        meta = o.get("special_bet_value", "") or (o.get("specifiers", {}).get("total", "") if isinstance(o.get("specifiers"), dict) else "")
+                                        if "Poniżej" in o.get("name", ""): market_map[f"C_U{meta}"] = o.get("price")
+                                        elif "Powyżej" in o.get("name", ""): market_map[f"C_O{meta}"] = o.get("price")
+                                elif "1. drużyna - liczba rzutów rożnych" in m_name:
+                                    for o in odds_list:
+                                        meta = o.get("special_bet_value", "") or (o.get("specifiers", {}).get("total", "") if isinstance(o.get("specifiers"), dict) else "")
+                                        if "Poniżej" in o.get("name", ""): market_map[f"HC_U{meta}"] = o.get("price")
+                                        elif "Powyżej" in o.get("name", ""): market_map[f"HC_O{meta}"] = o.get("price")
+                                elif "2. drużyna - liczba rzutów rożnych" in m_name:
+                                    for o in odds_list:
+                                        meta = o.get("special_bet_value", "") or (o.get("specifiers", {}).get("total", "") if isinstance(o.get("specifiers"), dict) else "")
+                                        if "Poniżej" in o.get("name", ""): market_map[f"AC_U{meta}"] = o.get("price")
+                                        elif "Powyżej" in o.get("name", ""): market_map[f"AC_O{meta}"] = o.get("price")
+                                elif "kto więcej strzałów w meczu" in m_name or m_name == "strzały w meczu - h2h":
+                                    for o in odds_list:
+                                        if o.get("name") == "1": market_map["S_1"] = o.get("price")
+                                        elif o.get("name") == "2": market_map["S_2"] = o.get("price")
+                                elif "kto więcej celnych strzałów" in m_name or "celne strzały w meczu - h2h" in m_name:
+                                    for o in odds_list:
+                                        if o.get("name") == "1": market_map["ST_1"] = o.get("price")
+                                        elif o.get("name") == "2": market_map["ST_2"] = o.get("price")
+                                elif "1. drużyna - liczba strzałów" in m_name:
+                                    for o in odds_list:
+                                        meta = o.get("special_bet_value", "") or (o.get("specifiers", {}).get("total", "") if isinstance(o.get("specifiers"), dict) else "")
+                                        if "Powyżej" in o.get("name", ""): market_map[f"H_S_O{meta}"] = o.get("price")
+                                elif "1. drużyna - liczba celnych strzałów" in m_name:
+                                    for o in odds_list:
+                                        meta = o.get("special_bet_value", "") or (o.get("specifiers", {}).get("total", "") if isinstance(o.get("specifiers"), dict) else "")
+                                        if "Powyżej" in o.get("name", ""): market_map[f"H_ST_O{meta}"] = o.get("price")
+                                elif "2. drużyna - liczba celnych strzałów" in m_name:
+                                    for o in odds_list:
+                                        meta = o.get("special_bet_value", "") or (o.get("specifiers", {}).get("total", "") if isinstance(o.get("specifiers"), dict) else "")
+                                        if "Poniżej" in o.get("name", ""): market_map[f"A_ST_U{meta}"] = o.get("price")
+                                elif "handicap" in m_name and "mecz" in m_name:
+                                    for o in odds_list:
+                                        meta = o.get("special_bet_value", "") or (o.get("specifiers", {}).get("hcp", "") if isinstance(o.get("specifiers"), dict) else "")
+                                        market_map[f"{o.get('name')} ({meta})"] = o.get("price")
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as exe:
-        results = exe.map(fetch_detail, matched_events)
+                            return (be_home, be_away), market_map
+                        break
+        except Exception: pass
+        return None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as exe:
+        results = exe.map(fetch_detail, event_ids)
         for res in results:
             if res:
                 keys, markets = res
                 superbet_db[keys] = markets
     
-    print(f"Sukces: Zmapowano realne kursy JSON dla {len(superbet_db)} nadchodzących meczów.")
+    print(f"Sukces: Pobrano i zmapowano rynki dla {len(superbet_db)} meczów z API V3.")
     return superbet_db
 
-superbet_odds_db = fetch_superbet_odds_for_fixtures(fixtures_clean) if not fixtures_clean.empty else {}
+# Odpalamy pobieranie na starcie
+superbet_odds_db = fetch_superbet_odds_for_fixtures()
+
+
+# Zaktualizowana funkcja do precyzyjnego wyciągania kursu dla danego typu
+def get_real_odd(home, away, typ_kod, fallback_kurs):
+    """
+    Funkcja szuka bezpośredniego dopasowania (już zmapowanych nazw BetExplorer) w słowniku.
+    """
+    h_low, a_low = home.lower(), away.lower()
+    
+    # 1. Dokładne trafienie w zmapowanym słowniku
+    if (h_low, a_low) in superbet_odds_db:
+        if typ_kod in superbet_odds_db[(h_low, a_low)]:
+            return float(superbet_odds_db[(h_low, a_low)][typ_kod])
+            
+    # 2. Awaryjne przeszukanie częściowych słów (Fuzzy match), gdy brakuje ścisłego mapowania
+    for (sb_h, sb_a), markets in superbet_odds_db.items():
+        if (sb_h[:5] in h_low or h_low[:5] in sb_h) and (sb_a[:5] in a_low or a_low[:5] in sb_a):
+            if typ_kod in markets:
+                return float(markets[typ_kod])
+                
+    return fallback_kurs
 
 
 # ==========================================================
