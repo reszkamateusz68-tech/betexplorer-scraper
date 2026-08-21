@@ -20,18 +20,17 @@ jobs:
       - name: Instalacja zależności
         run: pip install -r requirements.txt
 
-      - name: 1. Pobieranie bazy Superbet (Scraper)
-        # Zapisze plik "superbet_baza.json" w tymczasowym katalogu roboczym akcji
+      - name: 1. Pobieranie bazy kursów (Superbet Scraper)
+        # Pobiera dane i zapisuje csv i json w pamięci podręcznej Actions
         run: python superbet_scraper.py
         continue-on-error: true
 
-      - name: 2. Uruchomienie Silnika (Wyliczenia matematyczne i łączenie z kursami)
-        # Ten plik automatycznie znajdzie "superbet_baza.json" zapisany wyżej
+      - name: 2. Silnik Analityczny (Modele, AKO, integracja kursów)
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
         run: python betexplorer_all.py
 
-      - name: 3. Natychmiastowa wysyłka gotowych AKO na Telegram
+      - name: 3. Wysyłka gotowych AKO na Telegram
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
