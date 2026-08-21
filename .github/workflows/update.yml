@@ -20,11 +20,13 @@ jobs:
       - name: Instalacja zależności
         run: pip install -r requirements.txt
 
-      - name: 1. Pobranie kursów bukmachera (Superbet)
+      - name: 1. Pobieranie bazy Superbet (Scraper)
+        # Zapisze plik "superbet_baza.json" w tymczasowym katalogu roboczym akcji
         run: python superbet_scraper.py
         continue-on-error: true
 
-      - name: 2. Uruchomienie Głównego Silnika Analitycznego
+      - name: 2. Uruchomienie Silnika (Wyliczenia matematyczne i łączenie z kursami)
+        # Ten plik automatycznie znajdzie "superbet_baza.json" zapisany wyżej
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
         run: python betexplorer_all.py
