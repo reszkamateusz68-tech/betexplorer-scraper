@@ -1,132 +1,150 @@
-import datetime
+import os
 import json
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
-import pandas as pd
+from datetime import datetime, timedelta, timezone
+import concurrent.futures
 
-# 1. Pobranie kalendarza (dziś i jutro)
-now = datetime.datetime.now(datetime.timezone.utc)
-start_iso = now.strftime("%Y-%m-%dT00:00:00.000Z")
-end_iso = (now + datetime.timedelta(days=1)).strftime("%Y-%m-%dT23:59:59.000Z")
+def scrape_superbet():
+    print("1. Pobieranie listy zdarzeń z Superbet API...")
+    now = datetime.now(timezone.utc)
+    start_iso = now.strftime("%Y-%m-%dT00:00:00.000Z")
+    end_iso = (now + timedelta(days=3)).strftime("%Y-%m-%dT23:59:59.000Z")
 
-base_url = "https://production-superbet-offer-pl.freetls.fastly.net/v3/pl-PL/events"
-params = {
-    "startDate": start_iso,
-    "endDate": end_iso,
-    "index": "active-prematch",
-    "sports": "5"  # 5 = Piłka nożna w Superbet
-}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json"
+    }
 
-headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Referer": "https://www.superbet.pl/",
-    "Origin": "https://www.superbet.pl"
-}
+    list_url = f"https://production-superbet-offer-pl.freetls.fastly.net/v3/pl-PL/events?startDate={start_iso}&endDate={end_iso}&index=active-prematch&sports=5"
 
-print("1. Pobieram kalendarz meczów piłkarskich z Superbet...")
-start_time = time.time()
-session = requests.Session()
-
-res = session.get(base_url, headers=headers, params=params, timeout=12)
-if res.status_code != 200:
-    print(f"Błąd pobierania kalendarza: {res.status_code}")
-    exit()
-
-raw_data = res.json()
-event_ids = []
-d = raw_data.get("data", raw_data.get("events", []))
-if isinstance(d, list):
-    for item in d:
-        if isinstance(item, (int, str)):
-            event_ids.append(str(item))
-        elif isinstance(item, dict):
-            eid = item.get("eventId") or item.get("event_id") or item.get("id")
-            if eid:
-                event_ids.append(str(eid))
-
-total_events = len(event_ids)
-print(f"2. Znaleziono {total_events} meczów piłkarskich. Pobieram kursy (12 wątków)...")
-
-def fetch_single_event(event_id):
-    detail_url = f"https://production-superbet-offer-pl.freetls.fastly.net/v3/subscription/pl-PL/events?events={event_id}"
-    match_rows = []
-    match_name = f"Mecz ID {event_id}"
-    
     try:
-        with requests.get(detail_url, headers=headers, stream=True, timeout=8) as r:
-            for line in r.iter_lines(decode_unicode=True):
-                if line and line.startswith("data:"):
-                    match_data = json.loads(line[5:].strip())
-                    if isinstance(match_data, dict):
-                        match_data = match_data.get("data", [])
-
-                    for m_ev in match_data:
-                        fixture = m_ev.get("fixture", {}) if isinstance(m_ev, dict) else {}
-                        match_name = m_ev.get("event_name") or fixture.get("event_name", match_name)
-                        event_date = m_ev.get("event_date") or fixture.get("event_date", "")
-
-                        # Rozbicie meczu na gospodarza i gościa
-                        if "·" in match_name:
-                            parts = match_name.split("·")
-                            home_team, away_team = parts[0].strip(), parts[1].strip()
-                        elif " - " in match_name:
-                            parts = match_name.split(" - ")
-                            home_team, away_team = parts[0].strip(), parts[1].strip()
-                        else:
-                            home_team, away_team = match_name.strip(), ""
-
-                        raw_markets = m_ev.get("markets", [])
-                        market_list = list(raw_markets.values()) if isinstance(raw_markets, dict) else raw_markets
-
-                        for m in market_list:
-                            if not isinstance(m, dict): continue
-                            market_name = m.get("name") or m.get("market_name", "")
-
-                            raw_odds = m.get("odds", [])
-                            odds_list = list(raw_odds.values()) if isinstance(raw_odds, dict) else raw_odds
-
-                            for o in odds_list:
-                                if not isinstance(o, dict): continue
-                                meta = o.get("metadata", {}) if isinstance(o.get("metadata"), dict) else {}
-
-                                odd_type = meta.get("name") or o.get("name") or o.get("code") or ""
-                                full_info = meta.get("info") or o.get("info") or o.get("special_bet_value") or ""
-                                price = str(o.get("price", "")).replace(".", ",")
-
-                                match_rows.append({
-                                    "Event_ID": event_id,
-                                    "Data": event_date,
-                                    "Gospodarz": home_team,
-                                    "Gosc": away_team,
-                                    "Mecz": match_name,
-                                    "Rynek": market_name,
-                                    "Typ": odd_type,
-                                    "Opis_Zdarzenia": full_info,
-                                    "Kurs": price
-                                })
-                    break
-        return match_rows, match_name, None
+        res = requests.get(list_url, headers=headers, timeout=12)
+        if res.status_code != 200:
+            print(f"Błąd pobierania listy: {res.status_code}")
+            return
+        data = res.json()
     except Exception as e:
-        return [], match_name, str(e)
+        print(f"Błąd połączenia z Superbet: {e}")
+        return
 
-all_rows = []
-completed_count = 0
+    raw_events = data.get("data", data.get("events", []))
+    event_ids = []
+    if isinstance(raw_events, list):
+        for item in raw_events:
+            if isinstance(item, (int, str)): event_ids.append(str(item))
+            elif isinstance(item, dict):
+                eid = item.get("eventId") or item.get("event_id") or item.get("id")
+                if eid: event_ids.append(str(eid))
 
-with ThreadPoolExecutor(max_workers=12) as executor:
-    futures = {executor.submit(fetch_single_event, eid): eid for eid in event_ids}
-    for future in as_completed(futures):
-        completed_count += 1
-        rows, m_name, err = future.result()
-        if rows:
-            all_rows.extend(rows)
-            print(f"[{completed_count:03d}/{total_events}] Pobrano: {m_name}")
+    if not event_ids:
+        print("Brak aktywnych zdarzeń.")
+        return
 
-elapsed = round(time.time() - start_time, 2)
+    mapowanie_sb = {}
+    if os.path.exists("slownik_druzyn.json"):
+        try:
+            with open("slownik_druzyn.json", "r", encoding="utf-8") as f:
+                slownik = json.load(f)
+                map_be_to_sb = slownik.get("BetExplorer_To_Superbet", {})
+                mapowanie_sb = {v.strip().lower(): k for k, v in map_be_to_sb.items() if v.strip() != ""}
+        except Exception: pass
 
-if all_rows:
-    df = pd.DataFrame(all_rows)
-    file_name = "superbet_baza_kursow.csv"
-    df.to_csv(file_name, sep=";", index=False, encoding="utf-8-sig")
-    print(f"\nSUKCES! Zapisano {len(all_rows)} kursów dla {total_events} spotkań w {elapsed} s.")
+    batch_size = 50
+    batches = [event_ids[i:i + batch_size] for i in range(0, len(event_ids), batch_size)]
+    superbet_db = {}
+
+    def fetch_batch(batch_ids):
+        url = f"https://production-superbet-offer-pl.freetls.fastly.net/v3/pl-PL/events?events={','.join(batch_ids)}"
+        batch_res = {}
+        try:
+            r = requests.get(url, headers=headers, timeout=10)
+            if r.status_code == 200:
+                for m_ev in r.json().get("data", []):
+                    fixture = m_ev.get("fixture", {}) if isinstance(m_ev, dict) else {}
+                    ev_name = m_ev.get("event_name") or fixture.get("event_name", "")
+                    
+                    if "·" in ev_name: parts = ev_name.split("·", 1)
+                    elif " - " in ev_name: parts = ev_name.split(" - ", 1)
+                    else: continue
+
+                    sb_h, sb_a = parts[0].strip().lower(), parts[1].strip().lower()
+                    be_h = mapowanie_sb.get(sb_h, sb_h).lower()
+                    be_a = mapowanie_sb.get(sb_a, sb_a).lower()
+
+                    market_map = {}
+                    raw_markets = m_ev.get("markets", [])
+                    market_list = list(raw_markets.values()) if isinstance(raw_markets, dict) else raw_markets
+
+                    for m in market_list:
+                        if not isinstance(m, dict): continue
+                        m_name = m.get("name", "").lower()
+                        raw_odds = m.get("odds", [])
+                        odds_list = list(raw_odds.values()) if isinstance(raw_odds, dict) else raw_odds
+
+                        if m_name == "mecz":
+                            for o in odds_list:
+                                if o.get("name") in ["1", "X", "2"]: market_map[o["name"]] = float(o.get("price", 1.0))
+                        elif m_name == "podwójna szansa":
+                            for o in odds_list:
+                                if o.get("name") in ["1X", "X2", "12"]: market_map[o["name"]] = float(o.get("price", 1.0))
+                        elif "liczba goli" in m_name and "połowa" not in m_name and "drużyna" not in m_name and "handicap" not in m_name:
+                            for o in odds_list:
+                                meta = o.get("metadata", {}).get("info", "") or o.get("special_bet_value", "") or (o.get("specifiers", {}).get("total", "") if isinstance(o.get("specifiers"), dict) else "")
+                                if "Poniżej" in o.get("name", ""): market_map[f"U{meta}"] = float(o.get("price", 1.0))
+                                elif "Powyżej" in o.get("name", ""): market_map[f"O{meta}"] = float(o.get("price", 1.0))
+                        elif "1. połowa - liczba goli" in m_name:
+                            for o in odds_list:
+                                meta = o.get("special_bet_value", "") or (o.get("specifiers", {}).get("total", "") if isinstance(o.get("specifiers"), dict) else "")
+                                if "Poniżej" in o.get("name", ""): market_map[f"HT_U{meta}"] = float(o.get("price", 1.0))
+                        elif "2. połowa - liczba goli" in m_name:
+                            for o in odds_list:
+                                meta = o.get("special_bet_value", "") or (o.get("specifiers", {}).get("total", "") if isinstance(o.get("specifiers"), dict) else "")
+                                if "Poniżej" in o.get("name", ""): market_map[f"2H_U{meta}"] = float(o.get("price", 1.0))
+                        elif "liczba rzutów rożnych" in m_name and "drużyna" not in m_name:
+                            for o in odds_list:
+                                meta = o.get("special_bet_value", "") or (o.get("specifiers", {}).get("total", "") if isinstance(o.get("specifiers"), dict) else "")
+                                if "Poniżej" in o.get("name", ""): market_map[f"C_U{meta}"] = float(o.get("price", 1.0))
+                                elif "Powyżej" in o.get("name", ""): market_map[f"C_O{meta}"] = float(o.get("price", 1.0))
+                        elif "1. drużyna - liczba rzutów rożnych" in m_name:
+                            for o in odds_list:
+                                meta = o.get("special_bet_value", "") or (o.get("specifiers", {}).get("total", "") if isinstance(o.get("specifiers"), dict) else "")
+                                if "Poniżej" in o.get("name", ""): market_map[f"HC_U{meta}"] = float(o.get("price", 1.0))
+                        elif "2. drużyna - liczba rzutów rożnych" in m_name:
+                            for o in odds_list:
+                                meta = o.get("special_bet_value", "") or (o.get("specifiers", {}).get("total", "") if isinstance(o.get("specifiers"), dict) else "")
+                                if "Poniżej" in o.get("name", ""): market_map[f"AC_U{meta}"] = float(o.get("price", 1.0))
+                        elif "kto więcej celnych strzałów" in m_name or "celne strzały w meczu - h2h" in m_name:
+                            for o in odds_list:
+                                if o.get("name") == "1": market_map["ST_1"] = float(o.get("price", 1.0))
+                                elif o.get("name") == "2": market_map["ST_2"] = float(o.get("price", 1.0))
+                        elif "1. drużyna - liczba strzałów" in m_name:
+                            for o in odds_list:
+                                meta = o.get("special_bet_value", "") or (o.get("specifiers", {}).get("total", "") if isinstance(o.get("specifiers"), dict) else "")
+                                if "Powyżej" in o.get("name", ""): market_map[f"H_S_O{meta}"] = float(o.get("price", 1.0))
+                        elif "1. drużyna - liczba celnych strzałów" in m_name:
+                            for o in odds_list:
+                                meta = o.get("special_bet_value", "") or (o.get("specifiers", {}).get("total", "") if isinstance(o.get("specifiers"), dict) else "")
+                                if "Powyżej" in o.get("name", ""): market_map[f"H_ST_O{meta}"] = float(o.get("price", 1.0))
+                        elif "2. drużyna - liczba celnych strzałów" in m_name:
+                            for o in odds_list:
+                                meta = o.get("special_bet_value", "") or (o.get("specifiers", {}).get("total", "") if isinstance(o.get("specifiers"), dict) else "")
+                                if "Poniżej" in o.get("name", ""): market_map[f"A_ST_U{meta}"] = float(o.get("price", 1.0))
+
+                    if market_map:
+                        key = f"{be_h}___{be_a}"
+                        batch_res[key] = market_map
+        except Exception: pass
+        return batch_res
+
+    print(f"2. Pobieranie szczegółów dla {len(event_ids)} spotkań ({len(batches)} paczek)...")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as exe:
+        for res_batch in exe.map(fetch_batch, batches):
+            superbet_db.update(res_batch)
+
+    with open("superbet_baza.json", "w", encoding="utf-8") as f:
+        json.dump(superbet_db, f, ensure_ascii=False, indent=2)
+
+    print(f"Sukces: Zapisano rynki dla {len(superbet_db)} meczów do superbet_baza.json.")
+
+if __name__ == "__main__":
+    scrape_superbet()
