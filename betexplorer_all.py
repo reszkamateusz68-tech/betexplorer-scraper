@@ -695,6 +695,31 @@ def get_real_odd(home, away, typ_kod, fallback_kurs=None):
 # ==========================================================
 # 6. SILNIKI PREDYKCYJNE (Z centralnym Generatorem Ryzyka)
 # ==========================================================
+
+print("Ładowanie bazy kursów bukmachera z pliku JSON...")
+superbet_odds_db = {}
+if os.path.exists("superbet_baza.json"):
+    try:
+        with open("superbet_baza.json", "r", encoding="utf-8") as f:
+            superbet_odds_db = json.load(f)
+        print(f"Pomyślnie załadowano realne kursy ({len(superbet_odds_db)} meczów).")
+    except Exception as e:
+        print(f"Błąd odczytu bazy Superbet: {e}")
+
+def get_real_odd(home, away, typ_kod):
+    """Przeszukuje lokalny plik z kursami z użyciem dopasowania słownikowego i częściowego."""
+    h_low, a_low = str(home).strip().lower(), str(away).strip().lower()
+    exact_key = f"{h_low}___{a_low}"
+    if exact_key in superbet_odds_db:
+        return superbet_odds_db[exact_key].get(typ_kod)
+        
+    for key, markets in superbet_odds_db.items():
+        if "___" in key:
+            sb_h, sb_a = key.split("___", 1)
+            if (sb_h[:5] in h_low or h_low[:5] in sb_h) and (sb_a[:5] in a_low or a_low[:5] in sb_a):
+                return markets.get(typ_kod)
+    return None
+
 all_generated_predictions = []
 
 KOTWICE_KURSOWE = {
@@ -712,7 +737,6 @@ KOTWICE_KURSOWE = {
     'S_1': 1.34, 'ST_1': 1.64
 }
 
-# NOWE SZABLONY PREMIUM ZGODNIE Z ZALECENIEM
 SZABLONY_PREMIUM = [
     "O0.5+U5.5+HT_U3.5+2H_U3.5+HU3.5+AU3.5",
     "O0.5+U4.5+HT_U3.5+2H_U3.5+HU3.5+AU3.5",
@@ -727,17 +751,11 @@ def add_pred(match_id, termin, date, time, league, home, away, engine, typ, szan
     except: kurs_bazowy = 1.05
     is_anchor = False
 
-    # POBIERANIE KURSU Z JSONA BUKMACHERA 
-    real_o = get_real_odd(home, away, typ_k, None)
-    kurs_bukmachera_str = str(real_o) if real_o is not None else ""
+    # Sprawdzenie kursu z Superbet
+    kurs_realny_val = get_real_odd(home, away, typ_k)
+    kurs_bukmachera_str = str(kurs_realny_val) if kurs_realny_val is not None else ""
 
-    if engine == "BetBuilder Pro":
-        skladniki = typ_k.split("+")
-        kursy_skladowe = [KOTWICE_KURSOWE.get(sk.strip(), 1.05) for sk in skladniki]
-        rho_val = 0.22 if any(c in typ_k for c in ["C_U", "HC_", "AC_"]) else 0.65
-        kurs_docelowy = calc_betbuilder_copula(kursy_skladowe, rho=rho_val)
-        
-    elif "+" in typ_k and "O0.5+U" not in typ_k: 
+    if engine == "BetBuilder Pro" or ("+" in typ_k and "O0.5+U" not in typ_k):
         skladniki = typ_k.split("+")
         kursy_skladowe = [KOTWICE_KURSOWE.get(sk.strip(), 1.05) for sk in skladniki]
         rho_val = 0.22 if any(c in typ_k for c in ["C_U", "HC_", "AC_"]) else 0.65
@@ -753,18 +771,16 @@ def add_pred(match_id, termin, date, time, league, home, away, engine, typ, szan
         if kurs_docelowy >= 1.50: kurs_docelowy = round(kurs_docelowy * 0.95, 2)
         elif 1.20 <= kurs_docelowy < 1.50: kurs_docelowy = round(kurs_docelowy * 0.975, 2)
         
-    # Absolutny próg bezpieczeństwa
     if kurs_docelowy < 1.015: 
         kurs_docelowy = 1.01
 
-    # GARBAGE COLLECTOR W LOCIE - POMIJANIE SŁABYCH TYPÓW SOLO
     if engine != "BetBuilder Pro" and "+" not in typ_k and kurs_docelowy < 1.05:
         return
 
-    # Oceniamy tag na podstawie kursu u bukmachera (jeśli go pobrało), jak brak to szacunkowego
-    kurs_oceny = real_o if real_o is not None else kurs_docelowy
+    # Ewaluacja medali bazuje teraz na realnym kursie bukmachera (jeśli istnieje), a nie szacunkowym
+    kurs_oceny = kurs_realny_val if kurs_realny_val is not None else kurs_docelowy
     prob_decimal = float(szansa) / 100.0
-    
+
     if prob_decimal >= 0.95 and kurs_oceny >= 1.20:
         risk_tag = "🥇 1. ZŁOTY TYP"
     elif prob_decimal >= 0.95 and kurs_oceny >= 1.15:
@@ -791,39 +807,6 @@ def add_pred(match_id, termin, date, time, league, home, away, engine, typ, szan
         "Gospodarz": home, "Gość": away, "Engine": engine, "Typ": typ, 
         "Szansa": szansa, "Kurs_Szac": kurs_docelowy, "Kurs_Bukmachera": kurs_bukmachera_str, "Argumentacja": arg_final
     })
-
-print("Uruchamiam Modele Predykcyjne...")
-
-for idx, row in fixtures_clean.iterrows():
-    league, home, away = row['League'], row['Home'], row['Away']
-    fixture_base = get_base_league(league)
-    match_id, d_termin, d_date, d_time = row['Match_ID'], row['Termin'], row['Date'], row['Time']
-    
-    o1_raw, ox_raw, o2_raw = row['Odd_1'], row['Odd_X'], row['Odd_2']
-
-    # --- WSPÓLNE BAZY DO ANALIZ ---
-    h_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == home) | (valid_matches['Away'] == home))].copy()
-    a_tot_all = valid_matches[(valid_matches['Base_League'] == fixture_base) & ((valid_matches['Home'] == away) | (valid_matches['Away'] == away))].copy()
-    h_dom = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Home'] == home)].copy()
-    a_wyj = valid_matches[(valid_matches['Base_League'] == fixture_base) & (valid_matches['Away'] == away)].copy()
-    
-    h_tier = team_tiers.get((league, home), 'Koszyk 3')
-    a_tier = team_tiers.get((league, away), 'Koszyk 3')
-
-    # PRZYGOTOWANIE BAZY POD EVALUATE_BET DLA SZABLONÓW PREMIUM
-    if len(h_dom) > 0:
-        h_dom['HT_Total'] = pd.to_numeric(h_dom['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(h_dom['HTAG'], errors='coerce').fillna(0)
-        h_dom['2H_Total'] = pd.to_numeric(h_dom['Total_Goals'], errors='coerce').fillna(0) - h_dom['HT_Total']
-    if len(a_wyj) > 0:
-        a_wyj['HT_Total'] = pd.to_numeric(a_wyj['HTHG'], errors='coerce').fillna(0) + pd.to_numeric(a_wyj['HTAG'], errors='coerce').fillna(0)
-        a_wyj['2H_Total'] = pd.to_numeric(a_wyj['Total_Goals'], errors='coerce').fillna(0) - a_wyj['HT_Total']
-
-    if len(h_tot_all) > 0:
-        h_tot_all['Team_GF'] = np.where(h_tot_all['Home'] == home, h_tot_all['FTHG'], h_tot_all['FTAG'])
-        h_tot_all['Team_GA'] = np.where(h_tot_all['Home'] == home, h_tot_all['FTAG'], h_tot_all['FTHG'])
-    if len(a_tot_all) > 0:
-        a_tot_all['Team_GF'] = np.where(a_tot_all['Home'] == away, a_tot_all['FTHG'], a_tot_all['FTAG'])
-        a_tot_all['Team_GA'] = np.where(a_tot_all['Home'] == away, a_tot_all['FTAG'], a_tot_all['FTHG'])
 
     # ----------------------------------------------------
     # 6a. 1X PRO
