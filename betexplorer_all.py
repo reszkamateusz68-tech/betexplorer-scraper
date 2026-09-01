@@ -1043,9 +1043,12 @@ for idx, row in fixtures_clean.iterrows():
         a_tot_all['Team_GF'] = np.where(a_tot_all['Home'] == away, a_tot_all['FTHG'], a_tot_all['FTAG'])
         a_tot_all['Team_GA'] = np.where(a_tot_all['Home'] == away, a_tot_all['FTAG'], a_tot_all['FTHG'])
 
-    # 6a. 1X PRO
+# ----------------------------------------------------
+    # 6a. 1X PRO (Double Chance & Tier Matcher)
+    # ----------------------------------------------------
     lg_matches = valid_matches[valid_matches['Base_League'] == fixture_base]
-    if len(lg_matches) >= 20 and len(h_tot_all) >= 5 and len(a_tot_all) >= 5 and len(h_dom) > 0 and len(a_wyj) > 0:
+    
+    if len(lg_matches) >= 20 and len(h_tot_all) > 0 and len(a_tot_all) > 0 and len(h_dom) > 0 and len(a_wyj) > 0:
         lg_home_goals, lg_away_goals = lg_matches['FTHG'].mean(), lg_matches['FTAG'].mean()
         lg_avg_goals = lg_home_goals + lg_away_goals
 
@@ -1062,53 +1065,106 @@ for idx, row in fixtures_clean.iterrows():
         lam_h = h_att * a_def * lg_home_goals
         lam_a = a_att * h_def * lg_away_goals
         p1_g, px_g, p2_g = get_poisson_match_prob(lam_h, lam_a, max_val=15)
-        
-        prob_1x, prob_x2 = p1_g + px_g, px_g + p2_g
-        if prob_1x >= prob_x2: typ_kod, final_prob = "1X", min(prob_1x, 0.95)
-        else: typ_kod, final_prob = "X2", min(prob_x2, 0.95)
 
-        if final_prob >= 0.70:
-            try:
-                o1 = float(str(o1_raw).replace(',','.'))
-                ox = float(str(ox_raw).replace(',','.'))
-                o2 = float(str(o2_raw).replace(',','.'))
-                if typ_kod == "1X": fair_odd = round((o1 * ox) / (o1 + ox), 2)
-                else: fair_odd = round((o2 * ox) / (o2 + ox), 2)
-            except: fair_odd = round(1 / final_prob, 2)
+        # 1. Wskaźniki Siły (Punkty)
+        def calc_pts_power(df_matches, is_home):
+            if len(df_matches) == 0: return 0.0
+            pts = sum(3 if r['FTHG'] > r['FTAG'] else (1 if r['FTHG'] == r['FTAG'] else 0) for _, r in df_matches.iterrows()) if is_home else sum(3 if r['FTAG'] > r['FTHG'] else (1 if r['FTAG'] == r['FTHG'] else 0) for _, r in df_matches.iterrows())
+            return (pts / (len(df_matches) * 3)) * 100
+
+        s_h_dom = calc_pts_power(h_dom, True)
+        s_a_wyj = calc_pts_power(a_wyj, False)
+
+        # 2. Statystyki Empiryczne
+        emp_1x_dom = sum(h_dom['FTHG'] >= h_dom['FTAG']) / len(h_dom)
+        emp_no2_wyj = sum(a_wyj['FTAG'] <= a_wyj['FTHG']) / len(a_wyj) # Gość nie wygrał
+        
+        emp_x2_wyj = sum(a_wyj['FTAG'] >= a_wyj['FTHG']) / len(a_wyj)
+        emp_no1_dom = sum(h_dom['FTHG'] <= h_dom['FTAG']) / len(h_dom) # Gospodarz nie wygrał
+
+        poisson_1x = p1_g + px_g
+        poisson_x2 = px_g + p2_g
+
+        # 3. Szacowanie Prawdopodobieństwa (Wagi: 40% Poisson, 35% Dom, 25% Wyjazd)
+        p_1x_final = 0.40 * poisson_1x + 0.35 * emp_1x_dom + 0.25 * emp_no2_wyj
+        p_x2_final = 0.40 * poisson_x2 + 0.35 * emp_x2_wyj + 0.25 * emp_no1_dom
+
+        if p_1x_final >= p_x2_final:
+            typ_kod, final_prob = "1X", min(p_1x_final, 0.95)
+        else:
+            typ_kod, final_prob = "X2", min(p_x2_final, 0.95)
+
+        # 4. Tier-Matching Engine (Weryfikacja Koszykowa)
+        t_h = get_tier_num(h_tier)
+        t_a = get_tier_num(a_tier)
+        
+        is_valid = True
+        risk_flag = False
+
+        if typ_kod == "1X":
+            h_losses = h_dom[h_dom['FTHG'] < h_dom['FTAG']]
+            h_ls_tiers = [get_tier_num(team_tiers.get((r['League'], r['Away']), 'Koszyk 3')) for _, r in h_losses.iterrows()]
+            if any(t >= t_a for t in h_ls_tiers): is_valid = False # Gosp przegrał z koszykiem <= Gościa
+
+            a_wins = a_wyj[a_wyj['FTAG'] > a_wyj['FTHG']]
+            a_ws_tiers = [get_tier_num(team_tiers.get((r['League'], r['Home']), 'Koszyk 3')) for _, r in a_wins.iterrows()]
+            if any(t <= t_h for t in a_ws_tiers): is_valid = False # Gość wygrał z koszykiem >= Gospodarza
+        else:
+            a_losses = a_wyj[a_wyj['FTAG'] < a_wyj['FTHG']]
+            a_ls_tiers = [get_tier_num(team_tiers.get((r['League'], r['Home']), 'Koszyk 3')) for _, r in a_losses.iterrows()]
+            if any(t >= t_h for t in a_ls_tiers): is_valid = False # Gość przegrał z koszykiem <= Gospodarza
+
+            h_wins = h_dom[h_dom['FTHG'] > h_dom['FTAG']]
+            h_ws_tiers = [get_tier_num(team_tiers.get((r['League'], r['Away']), 'Koszyk 3')) for _, r in h_wins.iterrows()]
+            if any(t <= t_a for t in h_ws_tiers): is_valid = False # Gosp wygrał z koszykiem >= Gościa
+
+        if len(h_dom) < 5 or len(a_wyj) < 5:
+            risk_flag = True
+
+        # 5. Wyliczanie Kursu Sprawiedliwego
+        try:
+            o1 = float(str(o1_raw).replace(',','.'))
+            ox = float(str(ox_raw).replace(',','.'))
+            o2 = float(str(o2_raw).replace(',','.'))
+            if typ_kod == "1X": fair_odd = round((o1 * ox) / (o1 + ox), 2)
+            else: fair_odd = round((o2 * ox) / (o2 + ox), 2)
+        except: 
+            fair_odd = round(1 / final_prob, 2) if final_prob > 0 else 1.01
+
+        # 6. Weryfikacja kryterium Value i dodanie do predykcji
+        if is_valid and final_prob >= 0.75 and fair_odd >= 1.15:
             
+            def format_tier_list(tiers):
+                if not tiers: return "Brak"
+                counts = {1:0, 2:0, 3:0, 4:0, 5:0, 6:0}
+                for t in tiers: counts[t] += 1
+                return f"K1:{counts[1]}x, K2:{counts[2]}x, K3-K6:{counts[3]+counts[4]+counts[5]+counts[6]}x"
+
             if typ_kod == "1X":
                 h_1x_c = sum(h_dom['FTHG'] >= h_dom['FTAG'])
                 a_win_c = sum(a_wyj['FTAG'] > a_wyj['FTHG'])
                 h_1x_tot = sum(h_tot_all['Team_GF'] >= h_tot_all['Team_GA'])
                 a_win_tot = sum(a_tot_all['Team_GF'] > a_tot_all['Team_GA'])
                 
-                h_losses = h_dom[h_dom['FTHG'] < h_dom['FTAG']]
-                h_ls_tiers = [team_tiers.get((r['League'], r['Away']), 'Koszyk 3') for _, r in h_losses.iterrows()]
-                h_ls_txt = ", ".join([f"{k.replace('Koszyk ', 'K')}:{v}x" for k, v in dict(Counter(h_ls_tiers)).items()]) if h_ls_tiers else "Brak"
+                h_ls_txt = format_tier_list(h_ls_tiers)
+                a_ws_txt = format_tier_list(a_ws_tiers)
 
-                a_wins = a_wyj[a_wyj['FTAG'] > a_wyj['FTHG']]
-                a_ws_tiers = [team_tiers.get((r['League'], r['Home']), 'Koszyk 3') for _, r in a_wins.iterrows()]
-                a_ws_txt = ", ".join([f"{k.replace('Koszyk ', 'K')}:{v}x" for k, v in dict(Counter(a_ws_tiers)).items()]) if a_ws_tiers else "Brak"
-
-                arg = f"Gosp ({h_tier}) dom bez porażki {h_1x_c}/{len(h_dom)} (Ogółem: {h_1x_tot}/{len(h_tot_all)}). Gosp przegrywał z: [{h_ls_txt}]. Gość ({a_tier}) wyjazd wygrał {a_win_c}/{len(a_wyj)} (Ogółem: {a_win_tot}/{len(a_tot_all)}). Gość wygrywał z: [{a_ws_txt}]."
+                arg = f"Gosp (K{t_h} | Siła Dom: {round(s_h_dom)}%) dom bez porażki {h_1x_c}/{len(h_dom)} (Ogółem: {h_1x_tot}/{len(h_tot_all)}). Porażki domowe: [{h_ls_txt}]. Gość (K{t_a} | Siła Wyjazd: {round(s_a_wyj)}%) wygrane wyjazd {a_win_c}/{len(a_wyj)} (Ogółem: {a_win_tot}/{len(a_tot_all)}). Wygrane wyjazdowe: [{a_ws_txt}]."
             else:
                 a_x2_c = sum(a_wyj['FTAG'] >= a_wyj['FTHG'])
                 h_win_c = sum(h_dom['FTHG'] > h_dom['FTAG'])
                 a_x2_tot = sum(a_tot_all['Team_GF'] >= a_tot_all['Team_GA'])
                 h_win_tot = sum(h_tot_all['Team_GF'] > h_tot_all['Team_GA'])
 
-                a_losses = a_wyj[a_wyj['FTAG'] < a_wyj['FTHG']]
-                a_ls_tiers = [team_tiers.get((r['League'], r['Home']), 'Koszyk 3') for _, r in a_losses.iterrows()]
-                a_ls_txt = ", ".join([f"{k.replace('Koszyk ', 'K')}:{v}x" for k, v in dict(Counter(a_ls_tiers)).items()]) if a_ls_tiers else "Brak"
+                a_ls_txt = format_tier_list(a_ls_tiers)
+                h_ws_txt = format_tier_list(h_ws_tiers)
 
-                h_wins = h_dom[h_dom['FTHG'] > h_dom['FTAG']]
-                h_ws_tiers = [team_tiers.get((r['League'], r['Away']), 'Koszyk 3') for _, r in h_wins.iterrows()]
-                h_ws_txt = ", ".join([f"{k.replace('Koszyk ', 'K')}:{v}x" for k, v in dict(Counter(h_ws_tiers)).items()]) if h_ws_tiers else "Brak"
+                arg = f"Gość (K{t_a} | Siła Wyjazd: {round(s_a_wyj)}%) wyjazd bez porażki {a_x2_c}/{len(a_wyj)} (Ogółem: {a_x2_tot}/{len(a_tot_all)}). Porażki wyjazdowe: [{a_ls_txt}]. Gosp (K{t_h} | Siła Dom: {round(s_h_dom)}%) wygrane dom {h_win_c}/{len(h_dom)} (Ogółem: {h_win_tot}/{len(h_tot_all)}). Wygrane domowe: [{h_ws_txt}]."
 
-                arg = f"Gość ({a_tier}) wyjazd bez porażki {a_x2_c}/{len(a_wyj)} (Ogółem: {a_x2_tot}/{len(a_tot_all)}). Gość przegrywał z: [{a_ls_txt}]. Gosp ({h_tier}) dom wygrał {h_win_c}/{len(h_dom)} (Ogółem: {h_win_tot}/{len(h_tot_all)}). Gosp wygrywał z: [{h_ws_txt}]."
-                
+            if risk_flag:
+                arg += " | ⚠️ Bayes (Mała próba)"
+
             add_pred(match_id, d_termin, d_date, d_time, league, home, away, "1X Pro", typ_kod, round(final_prob*100, 1), round(fair_odd, 2), arg, dyn_anchors)
-
     # 6b. GOAL LINE PRO
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
         h_dom_dict = h_dom.to_dict('records')
