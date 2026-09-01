@@ -1009,6 +1009,14 @@ def add_pred(match_id, termin, date, time, league, home, away, engine, typ, szan
         "Szansa": szansa, "Kurs_Szac": kurs_docelowy, "Argumentacja": arg_final
     })
 
+# ==========================================================
+# TYMCZASOWY ZRZUT DANYCH DO SZYBKICH TESTÓW LOKALNYCH
+# ==========================================================
+fixtures_clean.to_pickle("cache_fixtures.pkl")
+valid_matches.to_pickle("cache_valid_matches.pkl")
+pd.Series(team_tiers).to_pickle("cache_team_tiers.pkl")
+print(">>> [CACHE ZAPISANY] Pliki .pkl gotowe do testów lokalnych! <<<")
+
 print("Uruchamiam Modele Predykcyjne z Kalibracją Wariancji...")
 
 for idx, row in fixtures_clean.iterrows():
