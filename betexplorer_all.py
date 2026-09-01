@@ -1052,23 +1052,24 @@ for idx, row in fixtures_clean.iterrows():
         a_tot_all['Team_GA'] = np.where(a_tot_all['Home'] == away, a_tot_all['FTAG'], a_tot_all['FTHG'])
 
 # ----------------------------------------------------
-    # 6a. 1X PRO - WERSJA Z OBSŁUGĄ BENIAMINKÓW
+    # 6a. 1X PRO - REGUŁA 10 MECZÓW I BENIAMINKI
     # ----------------------------------------------------
     lg_matches = valid_matches[valid_matches['Base_League'] == fixture_base]
-
+    
     h_is_promoted = len(h_tot_all) <= 4
     a_is_promoted = len(a_tot_all) <= 4
 
-    h_tier_str = 'Koszyk 6' if h_is_promoted else team_tiers.get((league, home), 'Koszyk 3')
-    a_tier_str = 'Koszyk 6' if a_is_promoted else team_tiers.get((league, away), 'Koszyk 3')
+    h_tier_str = 'Koszyk 6' if h_is_promoted else h_tier
+    a_tier_str = 'Koszyk 6' if a_is_promoted else a_tier
     
     t_h = int(str(h_tier_str).replace("Koszyk ", "")) if "Koszyk" in str(h_tier_str) else 3
     t_a = int(str(a_tier_str).replace("Koszyk ", "")) if "Koszyk" in str(a_tier_str) else 3
 
-    is_promoted_clash = (t_h <= 2 and a_is_promoted and len(h_tot_all) >= 5) or (t_a <= 2 and h_is_promoted and len(a_tot_all) >= 5)
-    has_min_sample = len(lg_matches) >= 8 and len(h_tot_all) >= 2 and len(a_tot_all) >= 2
+    normal_match = len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5
+    fav_vs_prom_home = (t_h <= 2 and a_is_promoted and len(h_tot_all) >= 10 and len(h_dom) >= 5)
+    fav_vs_prom_away = (t_a <= 2 and h_is_promoted and len(a_tot_all) >= 10 and len(a_wyj) >= 5)
 
-    if has_min_sample or is_promoted_clash:
+    if normal_match or fav_vs_prom_home or fav_vs_prom_away:
         lg_home_goals = lg_matches['FTHG'].mean() if len(lg_matches) > 0 else 1.50
         lg_away_goals = lg_matches['FTAG'].mean() if len(lg_matches) > 0 else 1.15
         lg_avg_goals = lg_home_goals + lg_away_goals
@@ -1090,22 +1091,24 @@ for idx, row in fixtures_clean.iterrows():
         prob_1x_poisson = p1_g + px_g
         prob_x2_poisson = px_g + p2_g
 
-        h_1x_dom_pct = sum(h_dom['FTHG'] >= h_dom['FTAG']) / len(h_dom) if len(h_dom) > 0 else (0.85 if t_h <= 2 else 0.60)
-        a_1x_wyj_pct = sum(a_wyj['FTAG'] <= a_wyj['FTHG']) / len(a_wyj) if len(a_wyj) > 0 else (0.80 if a_is_promoted else 0.60)
+        h_1x_dom_pct = sum(h_dom['FTHG'] >= h_dom['FTAG']) / len(h_dom) if len(h_dom) >= 5 else 0.5
+        a_1x_wyj_pct = sum(a_wyj['FTAG'] <= a_wyj['FTHG']) / len(a_wyj) if len(a_wyj) >= 5 else (0.90 if a_is_promoted else 0.5)
         emp_1x = (h_1x_dom_pct + a_1x_wyj_pct) / 2.0
 
-        a_x2_wyj_pct = sum(a_wyj['FTAG'] >= a_wyj['FTHG']) / len(a_wyj) if len(a_wyj) > 0 else (0.85 if t_a <= 2 else 0.60)
-        h_x2_dom_pct = sum(h_dom['FTHG'] <= h_dom['FTAG']) / len(h_dom) if len(h_dom) > 0 else (0.80 if h_is_promoted else 0.60)
+        a_x2_wyj_pct = sum(a_wyj['FTAG'] >= a_wyj['FTHG']) / len(a_wyj) if len(a_wyj) >= 5 else 0.5
+        h_x2_dom_pct = sum(h_dom['FTHG'] <= h_dom['FTAG']) / len(h_dom) if len(h_dom) >= 5 else (0.85 if h_is_promoted else 0.5)
         emp_x2 = (a_x2_wyj_pct + h_x2_dom_pct) / 2.0
 
         blend_1x = (prob_1x_poisson * 0.35) + (emp_1x * 0.65)
         blend_x2 = (prob_x2_poisson * 0.35) + (emp_x2 * 0.65)
 
-        if t_h <= 2 and a_is_promoted: blend_1x = max(blend_1x, 0.89)
-        if t_a <= 2 and h_is_promoted: blend_x2 = max(blend_x2, 0.86)
+        if fav_vs_prom_home: blend_1x = max(blend_1x, 0.89)
+        if fav_vs_prom_away: blend_x2 = max(blend_x2, 0.86)
 
-        if blend_1x >= blend_x2: typ_kod, final_prob, emp_gosp, emp_gosc = "1X", blend_1x, h_1x_dom_pct, a_1x_wyj_pct
-        else: typ_kod, final_prob, emp_gosp, emp_gosc = "X2", blend_x2, a_x2_wyj_pct, h_x2_dom_pct
+        if blend_1x >= blend_x2:
+            typ_kod, final_prob = "1X", blend_1x
+        else:
+            typ_kod, final_prob = "X2", blend_x2
 
         try:
             o1, ox, o2 = float(str(o1_raw).replace(',','.')), float(str(ox_raw).replace(',','.')), float(str(o2_raw).replace(',','.'))
@@ -1119,21 +1122,23 @@ for idx, row in fixtures_clean.iterrows():
 
         is_fav = (typ_kod == "1X" and t_h <= 3) or (typ_kod == "X2" and t_a <= 3)
 
-        if (is_logical or is_fav or is_promoted_clash) and final_prob >= 0.70 and fair_odd >= 1.04:
+        if (is_logical or is_fav or fav_vs_prom_home or fav_vs_prom_away) and final_prob >= 0.70 and fair_odd >= 1.04:
             if typ_kod == "1X":
-                if a_is_promoted:
-                    arg = f"Gosp ({h_tier_str}) podejmuje beniaminka ligi. Stabilność domowa gosp: {round(emp_gosp*100)}%. Oczekiwana dominacja stałego bywalca."
+                if fav_vs_prom_home:
+                    h_wins = sum(h_dom['FTHG'] >= h_dom['FTAG'])
+                    arg = f"Gosp ({h_tier_str}) podejmuje beniaminka (Koszyk 6). Punktowanie dom: {round(h_1x_dom_pct*100)}% (1X w {h_wins}/{len(h_dom)}). Przewaga klasy rozgrywkowej."
                 else:
-                    h_wins = sum(h_dom['FTHG'] > h_dom['FTAG']) if len(h_dom) > 0 else 0
-                    a_loss = sum(a_wyj['FTHG'] > a_wyj['FTAG']) if len(a_wyj) > 0 else 0
-                    arg = f"Gosp ({h_tier_str}) punktuje dom: {round(emp_gosp*100)}% (W: {h_wins}/{len(h_dom)}). Gość ({a_tier_str}) gubi pkt wyjazd: {round(emp_gosc*100)}% (L: {a_loss}/{len(a_wyj)})."
+                    h_wins = sum(h_dom['FTHG'] >= h_dom['FTAG'])
+                    a_loss = sum(a_wyj['FTHG'] >= a_wyj['FTAG'])
+                    arg = f"Gosp ({h_tier_str}) punktuje dom: {round(h_1x_dom_pct*100)}% (1X w {h_wins}/{len(h_dom)}). Gość ({a_tier_str}) gubi pkt wyjazd: {round(a_1x_wyj_pct*100)}% (Bez wygranej: {a_loss}/{len(a_wyj)})."
             else:
-                if h_is_promoted:
-                    arg = f"Faworyt ({a_tier_str}) na wyjeździe z beniaminkiem ligi. Skuteczność wyjazdowa faworyta: {round(emp_gosp*100)}%. Przewaga doświadczenia."
+                if fav_vs_prom_away:
+                    a_wins = sum(a_wyj['FTAG'] >= a_wyj['FTHG'])
+                    arg = f"Faworyt ({a_tier_str}) wyjazd z beniaminkiem (Koszyk 6). Skuteczność faworyta: {round(a_x2_wyj_pct*100)}% (X2 w {a_wins}/{len(a_wyj)}). Przewaga doświadczenia."
                 else:
-                    a_wins = sum(a_wyj['FTAG'] > a_wyj['FTHG']) if len(a_wyj) > 0 else 0
-                    h_loss = sum(h_dom['FTAG'] > h_dom['FTHG']) if len(h_dom) > 0 else 0
-                    arg = f"Gość ({a_tier_str}) punktuje wyjazd: {round(emp_gosp*100)}% (W: {a_wins}/{len(a_wyj)}). Gosp ({h_tier_str}) gubi pkt dom: {round(emp_gosc*100)}% (L: {h_loss}/{len(h_dom)})."
+                    a_wins = sum(a_wyj['FTAG'] >= a_wyj['FTHG'])
+                    h_loss = sum(h_dom['FTAG'] >= h_dom['FTHG'])
+                    arg = f"Gość ({a_tier_str}) punktuje wyjazd: {round(a_x2_wyj_pct*100)}% (X2 w {a_wins}/{len(a_wyj)}). Gosp ({h_tier_str}) gubi pkt dom: {round(h_x2_dom_pct*100)}% (Bez wygranej: {h_loss}/{len(h_dom)})."
 
             add_pred(match_id, d_termin, d_date, d_time, league, home, away, "1X Pro", typ_kod, round(final_prob*100, 1), round(fair_odd, 2), arg)
                 
