@@ -594,16 +594,19 @@ if not results_df.empty:
 
     if 'HTHG' not in results_df.columns: results_df['HTHG'] = np.nan
     if 'HTAG' not in results_df.columns: results_df['HTAG'] = np.nan
+
+    # --- FIX: Zabezpieczenie kolumn statystycznych PRZED obliczeniami ---
+    fd_expected_cols = ['HS', 'AS', 'HST', 'AST', 'HC', 'AC']
+    for col in fd_expected_cols:
+        if col not in results_df.columns: results_df[col] = np.nan
+    # ---------------------------------------------------------------------
+
     if 'Gole_Gosp_1H' in results_df.columns:
         results_df['HTHG'] = results_df['HTHG'].combine_first(pd.to_numeric(results_df['Gole_Gosp_1H'], errors='coerce'))
         results_df['HTAG'] = results_df['HTAG'].combine_first(pd.to_numeric(results_df['Gole_Gosc_1H'], errors='coerce'))
 
     results_df['HT_Total'] = pd.to_numeric(results_df['HTHG'], errors='coerce') + pd.to_numeric(results_df['HTAG'], errors='coerce')
     results_df['Total_Corners'] = pd.to_numeric(results_df['HC'], errors='coerce') + pd.to_numeric(results_df['AC'], errors='coerce')
-
-    fd_expected_cols = ['HS', 'AS', 'HST', 'AST', 'HC', 'AC']
-    for col in fd_expected_cols:
-        if col not in results_df.columns: results_df[col] = np.nan
 
     results_df['Date_str'] = pd.to_datetime(results_df['Date'], errors='coerce').dt.strftime('%Y%m%d').fillna('99999999')
     results_df['Match_ID'] = results_df['Date_str'] + "_" + results_df['Home'].str[:3].str.upper() + "_" + results_df['Away'].str[:3].str.upper()
