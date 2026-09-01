@@ -1094,11 +1094,11 @@ for idx, row in fixtures_clean.iterrows():
         prob_1x_poisson = p1_g + px_g
         prob_x2_poisson = px_g + p2_g
 
-        h_1x_dom_pct = sum(h_dom['FTHG'] >= h_dom['FTAG']) / len(h_dom) if len(h_dom) >= 5 else 0.5
+        h_1x_dom_pct = sum(h_dom['FTHG'] >= h_dom['FTAG']) / len(h_dom) if len(h_dom) >= 5 else (sum(h_tot_all['FTHG'] >= h_tot_all['FTAG']) / len(h_tot_all) if len(h_tot_all) >= 5 else 0.5)
         a_1x_wyj_pct = sum(a_wyj['FTAG'] <= a_wyj['FTHG']) / len(a_wyj) if len(a_wyj) >= 5 else (0.90 if a_is_promoted else 0.5)
         emp_1x = (h_1x_dom_pct + a_1x_wyj_pct) / 2.0
 
-        a_x2_wyj_pct = sum(a_wyj['FTAG'] >= a_wyj['FTHG']) / len(a_wyj) if len(a_wyj) >= 5 else 0.5
+        a_x2_wyj_pct = sum(a_wyj['FTAG'] >= a_wyj['FTHG']) / len(a_wyj) if len(a_wyj) >= 5 else (sum(a_tot_all['FTAG'] >= a_tot_all['FTHG']) / len(a_tot_all) if len(a_tot_all) >= 5 else 0.5)
         h_x2_dom_pct = sum(h_dom['FTHG'] <= h_dom['FTAG']) / len(h_dom) if len(h_dom) >= 5 else (0.85 if h_is_promoted else 0.5)
         emp_x2 = (a_x2_wyj_pct + h_x2_dom_pct) / 2.0
 
@@ -1143,7 +1143,7 @@ for idx, row in fixtures_clean.iterrows():
                     h_loss = sum(h_dom['FTAG'] >= h_dom['FTHG'])
                     arg = f"Gość ({a_tier_str}) punktuje wyjazd: {round(a_x2_wyj_pct*100)}% (X2 w {a_wins}/{len(a_wyj)}). Gosp ({h_tier_str}) gubi pkt dom: {round(h_x2_dom_pct*100)}% (Bez wygranej: {h_loss}/{len(h_dom)})."
 
-            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "1X Pro", typ_kod, round(final_prob*100, 1), round(fair_odd, 2), arg)
+            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "1X Pro", typ_kod, round(final_prob*100, 1), round(fair_odd, 2), arg, dyn_anchors)
                 
     # 6b. GOAL LINE PRO
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
