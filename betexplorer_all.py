@@ -1052,85 +1052,90 @@ for idx, row in fixtures_clean.iterrows():
         a_tot_all['Team_GA'] = np.where(a_tot_all['Home'] == away, a_tot_all['FTAG'], a_tot_all['FTHG'])
 
 # ----------------------------------------------------
-    # 6a. 1X PRO - WERSJA HYBRYDOWA DLA AKO
+    # 6a. 1X PRO - WERSJA Z OBSŁUGĄ BENIAMINKÓW
     # ----------------------------------------------------
     lg_matches = valid_matches[valid_matches['Base_League'] == fixture_base]
-    if len(lg_matches) >= 20 and len(h_tot_all) >= 5 and len(a_tot_all) >= 5 and len(h_dom) >= 3 and len(a_wyj) >= 3:
-        lg_home_goals, lg_away_goals = lg_matches['FTHG'].mean(), lg_matches['FTAG'].mean()
+
+    h_is_promoted = len(h_tot_all) <= 4
+    a_is_promoted = len(a_tot_all) <= 4
+
+    h_tier_str = 'Koszyk 6' if h_is_promoted else team_tiers.get((league, home), 'Koszyk 3')
+    a_tier_str = 'Koszyk 6' if a_is_promoted else team_tiers.get((league, away), 'Koszyk 3')
+    
+    t_h = int(str(h_tier_str).replace("Koszyk ", "")) if "Koszyk" in str(h_tier_str) else 3
+    t_a = int(str(a_tier_str).replace("Koszyk ", "")) if "Koszyk" in str(a_tier_str) else 3
+
+    is_promoted_clash = (t_h <= 2 and a_is_promoted and len(h_tot_all) >= 5) or (t_a <= 2 and h_is_promoted and len(a_tot_all) >= 5)
+    has_min_sample = len(lg_matches) >= 8 and len(h_tot_all) >= 2 and len(a_tot_all) >= 2
+
+    if has_min_sample or is_promoted_clash:
+        lg_home_goals = lg_matches['FTHG'].mean() if len(lg_matches) > 0 else 1.50
+        lg_away_goals = lg_matches['FTAG'].mean() if len(lg_matches) > 0 else 1.15
         lg_avg_goals = lg_home_goals + lg_away_goals
 
-        h_gf_avg = np.where(h_tot_all.head(15)['Home'] == home, h_tot_all.head(15)['FTHG'], h_tot_all.head(15)['FTAG']).mean()
-        h_ga_avg = np.where(h_tot_all.head(15)['Home'] == home, h_tot_all.head(15)['FTAG'], h_tot_all.head(15)['FTHG']).mean()
-        a_gf_avg = np.where(a_tot_all.head(15)['Home'] == away, a_tot_all.head(15)['FTHG'], a_tot_all.head(15)['FTAG']).mean()
-        a_ga_avg = np.where(a_tot_all.head(15)['Home'] == away, a_tot_all.head(15)['FTAG'], a_tot_all.head(15)['FTHG']).mean()
+        h_gf_avg = np.where(h_tot_all.head(15)['Home'] == home, h_tot_all.head(15)['FTHG'], h_tot_all.head(15)['FTAG']).mean() if len(h_tot_all) > 0 else 1.5
+        h_ga_avg = np.where(h_tot_all.head(15)['Home'] == home, h_tot_all.head(15)['FTAG'], h_tot_all.head(15)['FTHG']).mean() if len(h_tot_all) > 0 else 1.5
+        a_gf_avg = np.where(a_tot_all.head(15)['Home'] == away, a_tot_all.head(15)['FTHG'], a_tot_all.head(15)['FTAG']).mean() if len(a_tot_all) > 0 else 1.0
+        a_ga_avg = np.where(a_tot_all.head(15)['Home'] == away, a_tot_all.head(15)['FTAG'], a_tot_all.head(15)['FTHG']).mean() if len(a_tot_all) > 0 else 1.8
 
         h_att = h_gf_avg / (lg_avg_goals / 2) if lg_avg_goals > 0 else 1.0
         h_def = h_ga_avg / (lg_avg_goals / 2) if lg_avg_goals > 0 else 1.0
         a_att = a_gf_avg / (lg_avg_goals / 2) if lg_avg_goals > 0 else 1.0
         a_def = a_ga_avg / (lg_avg_goals / 2) if lg_avg_goals > 0 else 1.0
 
-        lam_h = h_att * a_def * lg_home_goals
-        lam_a = a_att * h_def * lg_away_goals
+        lam_h = max(0.4, h_att * a_def * lg_home_goals)
+        lam_a = max(0.2, a_att * h_def * lg_away_goals)
         p1_g, px_g, p2_g = get_poisson_match_prob(lam_h, lam_a, max_val=15)
         
-        # 1. Baza Teoretyczna (Poisson)
         prob_1x_poisson = p1_g + px_g
         prob_x2_poisson = px_g + p2_g
 
-        # 2. Baza Empiryczna (Realne wyniki z boiska)
-        h_1x_dom_pct = sum(h_dom['FTHG'] >= h_dom['FTAG']) / len(h_dom)
-        a_1x_wyj_pct = sum(a_wyj['FTAG'] <= a_wyj['FTHG']) / len(a_wyj)
+        h_1x_dom_pct = sum(h_dom['FTHG'] >= h_dom['FTAG']) / len(h_dom) if len(h_dom) > 0 else (0.85 if t_h <= 2 else 0.60)
+        a_1x_wyj_pct = sum(a_wyj['FTAG'] <= a_wyj['FTHG']) / len(a_wyj) if len(a_wyj) > 0 else (0.80 if a_is_promoted else 0.60)
         emp_1x = (h_1x_dom_pct + a_1x_wyj_pct) / 2.0
 
-        a_x2_wyj_pct = sum(a_wyj['FTAG'] >= a_wyj['FTHG']) / len(a_wyj)
-        h_x2_dom_pct = sum(h_dom['FTHG'] <= h_dom['FTAG']) / len(h_dom)
+        a_x2_wyj_pct = sum(a_wyj['FTAG'] >= a_wyj['FTHG']) / len(a_wyj) if len(a_wyj) > 0 else (0.85 if t_a <= 2 else 0.60)
+        h_x2_dom_pct = sum(h_dom['FTHG'] <= h_dom['FTAG']) / len(h_dom) if len(h_dom) > 0 else (0.80 if h_is_promoted else 0.60)
         emp_x2 = (a_x2_wyj_pct + h_x2_dom_pct) / 2.0
 
-        # 3. Fuzja Prawdopodobieństwa (40% Matematyka / 60% Historia)
-        blend_1x = (prob_1x_poisson * 0.40) + (emp_1x * 0.60)
-        blend_x2 = (prob_x2_poisson * 0.40) + (emp_x2 * 0.60)
+        blend_1x = (prob_1x_poisson * 0.35) + (emp_1x * 0.65)
+        blend_x2 = (prob_x2_poisson * 0.35) + (emp_x2 * 0.65)
 
-        if blend_1x >= blend_x2:
-            typ_kod, final_prob, emp_gosp, emp_gosc = "1X", blend_1x, h_1x_dom_pct, a_1x_wyj_pct
-        else:
-            typ_kod, final_prob, emp_gosp, emp_gosc = "X2", blend_x2, a_x2_wyj_pct, h_x2_dom_pct
+        if t_h <= 2 and a_is_promoted: blend_1x = max(blend_1x, 0.89)
+        if t_a <= 2 and h_is_promoted: blend_x2 = max(blend_x2, 0.86)
 
-        # Obniżony i ustabilizowany próg akceptacji (78% w modelu hybrydowym)
-        if final_prob >= 0.78:
-            try:
-                o1 = float(str(o1_raw).replace(',','.'))
-                ox = float(str(ox_raw).replace(',','.'))
-                o2 = float(str(o2_raw).replace(',','.'))
-                if typ_kod == "1X": fair_odd = round((o1 * ox) / (o1 + ox), 2)
-                else: fair_odd = round((o2 * ox) / (o2 + ox), 2)
-            except:
-                fair_odd = round(1 / final_prob, 2)
-                
-            # 4. Inteligentny Filtr Koszykowy
-            t_h = int(str(h_tier).replace("Koszyk ", "")) if "Koszyk" in str(h_tier) else 3
-            t_a = int(str(a_tier).replace("Koszyk ", "")) if "Koszyk" in str(a_tier) else 3
+        if blend_1x >= blend_x2: typ_kod, final_prob, emp_gosp, emp_gosc = "1X", blend_1x, h_1x_dom_pct, a_1x_wyj_pct
+        else: typ_kod, final_prob, emp_gosp, emp_gosc = "X2", blend_x2, a_x2_wyj_pct, h_x2_dom_pct
 
-            # Zabezpieczenie przed graniem na wyraźnie słabszych
-            is_logical = True
-            if typ_kod == "1X" and t_h > t_a + 1: is_logical = False 
-            if typ_kod == "X2" and t_a > t_h + 1: is_logical = False 
-            
-            # 5. Promocja Absolutnych Faworytów (Nadpisuje ewentualne wątpliwości)
-            is_massive_favorite = False
-            if typ_kod == "1X" and t_h <= 2 and t_a >= 4: is_massive_favorite = True
-            if typ_kod == "X2" and t_a <= 2 and t_h >= 4: is_massive_favorite = True
+        try:
+            o1, ox, o2 = float(str(o1_raw).replace(',','.')), float(str(ox_raw).replace(',','.')), float(str(o2_raw).replace(',','.'))
+            if typ_kod == "1X": fair_odd = round((o1 * ox) / (o1 + ox), 2)
+            else: fair_odd = round((o2 * ox) / (o2 + ox), 2)
+        except: fair_odd = round(1 / final_prob, 2) if final_prob > 0 else 1.08
 
-            if (is_logical or is_massive_favorite) and fair_odd >= 1.05:
-                if typ_kod == "1X":
-                    h_wins = sum(h_dom['FTHG'] > h_dom['FTAG'])
-                    a_loss = sum(a_wyj['FTHG'] > a_wyj['FTAG'])
-                    arg = f"Gosp ({h_tier}) u siebie punktuje w {round(emp_gosp*100)}% spotkań (Wygrane: {h_wins}). Gość ({a_tier}) gubi punkty wyjazdowe w {round(emp_gosc*100)}% (Porażki: {a_loss}). Szansa układu hybrydowego: {round(final_prob*100, 1)}%."
+        is_logical = True
+        if typ_kod == "1X" and t_h > t_a + 2 and not a_is_promoted: is_logical = False
+        if typ_kod == "X2" and t_a > t_h + 2 and not h_is_promoted: is_logical = False
+
+        is_fav = (typ_kod == "1X" and t_h <= 3) or (typ_kod == "X2" and t_a <= 3)
+
+        if (is_logical or is_fav or is_promoted_clash) and final_prob >= 0.70 and fair_odd >= 1.04:
+            if typ_kod == "1X":
+                if a_is_promoted:
+                    arg = f"Gosp ({h_tier_str}) podejmuje beniaminka ligi. Stabilność domowa gosp: {round(emp_gosp*100)}%. Oczekiwana dominacja stałego bywalca."
                 else:
-                    a_wins = sum(a_wyj['FTAG'] > a_wyj['FTHG'])
-                    h_loss = sum(h_dom['FTAG'] > h_dom['FTHG'])
-                    arg = f"Gość ({a_tier}) wyjazd punktuje w {round(emp_gosp*100)}% spotkań (Wygrane: {a_wins}). Gosp ({h_tier}) gubi punkty domowe w {round(emp_gosc*100)}% (Porażki: {h_loss}). Szansa układu hybrydowego: {round(final_prob*100, 1)}%."
-                    
-                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "1X Pro", typ_kod, round(final_prob*100, 1), round(fair_odd, 2), arg)
+                    h_wins = sum(h_dom['FTHG'] > h_dom['FTAG']) if len(h_dom) > 0 else 0
+                    a_loss = sum(a_wyj['FTHG'] > a_wyj['FTAG']) if len(a_wyj) > 0 else 0
+                    arg = f"Gosp ({h_tier_str}) punktuje dom: {round(emp_gosp*100)}% (W: {h_wins}/{len(h_dom)}). Gość ({a_tier_str}) gubi pkt wyjazd: {round(emp_gosc*100)}% (L: {a_loss}/{len(a_wyj)})."
+            else:
+                if h_is_promoted:
+                    arg = f"Faworyt ({a_tier_str}) na wyjeździe z beniaminkiem ligi. Skuteczność wyjazdowa faworyta: {round(emp_gosp*100)}%. Przewaga doświadczenia."
+                else:
+                    a_wins = sum(a_wyj['FTAG'] > a_wyj['FTHG']) if len(a_wyj) > 0 else 0
+                    h_loss = sum(h_dom['FTAG'] > h_dom['FTHG']) if len(h_dom) > 0 else 0
+                    arg = f"Gość ({a_tier_str}) punktuje wyjazd: {round(emp_gosp*100)}% (W: {a_wins}/{len(a_wyj)}). Gosp ({h_tier_str}) gubi pkt dom: {round(emp_gosc*100)}% (L: {h_loss}/{len(h_dom)})."
+
+            add_pred(match_id, d_termin, d_date, d_time, league, home, away, "1X Pro", typ_kod, round(final_prob*100, 1), round(fair_odd, 2), arg)
                 
     # 6b. GOAL LINE PRO
     if len(h_tot_all) >= 10 and len(a_tot_all) >= 10 and len(h_dom) >= 5 and len(a_wyj) >= 5:
