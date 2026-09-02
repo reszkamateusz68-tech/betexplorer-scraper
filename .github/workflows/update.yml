@@ -21,8 +21,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: 1. Pobieranie bazy kursów (Superbet Scraper)
-        # Pobiera dane i zapisuje csv i json w pamięci podręcznej Actions
-        run: python superbet_scraper.py
+        run: python pobierz_superbet_dzis.py
         continue-on-error: true
 
       - name: 2. Silnik Analityczny (Modele, AKO, integracja kursów)
