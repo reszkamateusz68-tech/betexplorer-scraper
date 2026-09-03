@@ -695,13 +695,19 @@ if not league_tables.empty:
 all_generated_predictions = []
 
 superbet_baza = {}
-if os.path.exists("superbet_baza_dzis.json"):
-    try:
-        with open("superbet_baza_dzis.json", "r", encoding="utf-8") as f:
-            superbet_baza = json.load(f)
-        print(f"✅ Wczytano bazę Superbet: {len(superbet_baza)} spotkań.")
-    except Exception as e:
-        print(f"Błąd wczytywania bazy Superbet: {e}")
+json_files = ["superbet_baza_dzis.json", "superbet_baza_jutro.json", "superbet_baza_pojutrze.json"]
+
+for j_file in json_files:
+    if os.path.exists(j_file):
+        try:
+            with open(j_file, "r", encoding="utf-8") as f:
+                temp_baza = json.load(f)
+                superbet_baza.update(temp_baza)
+            print(f"✅ Wczytano bazę Superbet ({j_file}): {len(temp_baza)} spotkań.")
+        except Exception as e:
+            print(f"Błąd wczytywania bazy Superbet ({j_file}): {e}")
+            
+print(f"✅ Łącznie wczytano do bazy Superbet: {len(superbet_baza)} unikalnych spotkań (Dziś, Jutro, Pojutrze).")
 
 KOTWICE_KURSOWE = {
     'O0.5': 1.03, 'U3.5': 1.31, 'U4.5': 1.10, 'U5.5': 1.015, 'U6.5': 1.01,
@@ -1679,6 +1685,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Przywrócono zaawansowaną argumentację z historią koszyków (1X/X2).")
-print("Przywrócono w 100% działający moduł SoccerStats z użyciem Cloudscraper.")
+print("Zintegrowano wielodniową bazę kursów Superbet z uwzględnieniem kalendarza.")
 print("=" * 60)
