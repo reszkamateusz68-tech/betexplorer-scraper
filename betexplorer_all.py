@@ -352,23 +352,23 @@ except: urls = []
 
 def scrape_be_worker(args):
     i, url_clean, total = args
-    time.sleep(random.uniform(0.1, 3.0)) 
+    time.sleep(random.uniform(0.1, 1.5)) 
     local_data, local_report = [], []
     print(f"[{i}/{total}] Pobieram BetExplorer (Wątek): {url_clean}")
     
     scraper_be = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True})
-    max_retries = 3
+    max_retries = 2  # Zmniejszone, by uniknąć długich zawieszeń
     response, bypass_used, success = None, False, False
 
     for attempt in range(max_retries):
-        if attempt > 0: time.sleep(random.uniform(5, 10) * attempt)
+        if attempt > 0: time.sleep(random.uniform(1.0, 3.0)) # Drastycznie zmniejszone uśpienie!
         try:
-            response = scraper_be.get(url_clean, timeout=30)
+            response = scraper_be.get(url_clean, timeout=15) # Skrócony timeout z 30s do 15s
             if response.status_code == 200: success = True; break
             elif response.status_code in [429, 403]: bypass_used = True
             else: break
         except Exception:
-            if attempt < max_retries - 1: time.sleep(3)
+            if attempt < max_retries - 1: time.sleep(2)
 
     if not success or response is None or response.status_code != 200:
         final_code = response.status_code if response else "Brak odpowiedzi"
@@ -464,7 +464,7 @@ def scrape_ss_worker(args):
     skaner_ss = cloudscraper.create_scraper(browser={'browser': 'chrome','platform': 'windows','desktop': True})
     
     try:
-        response_ss = skaner_ss.get(url_ss_clean, headers=headers, timeout=30)
+        response_ss = skaner_ss.get(url_ss_clean, headers=headers, timeout=15) # Skrócony timeout z 30s do 15s
         
         if response_ss.status_code != 200:
             local_report.append(["SoccerStats", url_ss_clean, f"BŁĄD HTTP: Kod {response_ss.status_code}"])
@@ -705,8 +705,21 @@ for j_file in json_files:
             print(f"✅ Wczytano bazę Superbet ({j_file}): {len(temp_baza)} spotkań.")
         except Exception as e:
             print(f"Błąd wczytywania bazy Superbet ({j_file}): {e}")
+            
+print(f"✅ Łącznie wczytano do bazy Superbet: {len(superbet_baza)} unikalnych spotkań.")
 
-print(f"✅ Łącznie wczytano do bazy Superbet: {len(superbet_baza)} unikalnych spotkań (Dziś, Jutro, Pojutrze).")
+# OPTYMALIZACJA CPU: Szybki słownik do wyszukiwania kursów (O(1) zamiast O(N))
+superbet_fast_lookup = {}
+for k, v in superbet_baza.items():
+    superbet_fast_lookup[k] = v
+    info = v.get('info', {})
+    gosp_be = str(info.get('gospodarz_be', '')).lower()
+    gosc_be = str(info.get('gosc_be', '')).lower()
+    gosp_sb = str(info.get('gospodarz_sb', '')).lower()
+    gosc_sb = str(info.get('gosc_sb', '')).lower()
+    
+    if gosp_be and gosc_be: superbet_fast_lookup[f"{gosp_be}___{gosc_be}"] = v
+    if gosp_sb and gosc_sb: superbet_fast_lookup[f"{gosp_sb}___{gosc_sb}"] = v
 
 KOTWICE_KURSOWE = {
     'O0.5': 1.03, 'U3.5': 1.31, 'U4.5': 1.10, 'U5.5': 1.015, 'U6.5': 1.01,
@@ -814,17 +827,15 @@ def get_dynamic_anchors(h_tier_str, a_tier_str, odd_1_val):
 
 def get_real_odd(home, away, typ_kod):
     h_low, a_low = str(home).lower(), str(away).lower()
-    match_data = None
-    
     key_exact = f"{h_low}___{a_low}"
-    if key_exact in superbet_baza:
-        match_data = superbet_baza[key_exact]
-    else:
+    
+    # 1. Błyskawiczne wyszukiwanie w słowniku O(1)
+    match_data = superbet_fast_lookup.get(key_exact)
+    
+    # 2. Awaryjne wyszukiwanie (tylko w skrajnych przypadkach)
+    if not match_data:
         for k, v in superbet_baza.items():
-            info = v.get('info', {})
-            if (info.get('gospodarz_be', '').lower() == h_low and info.get('gosc_be', '').lower() == a_low) or \
-               (info.get('gospodarz_sb', '').lower() == h_low and info.get('gosc_sb', '').lower() == a_low) or \
-               (h_low[:5] in k and a_low[:5] in k):
+            if len(h_low) > 4 and len(a_low) > 4 and h_low[:5] in k and a_low[:5] in k:
                 match_data = v
                 break
     
@@ -1467,7 +1478,7 @@ if not df_all_predictions.empty:
                 if klucz in map_szansa:
                     df_historia.at[idx, 'Szansa'] = str(map_szansa[klucz])
                     df_historia.at[idx, 'Kurs_Szac'] = str(map_kurs_szac[klucz])
-                    df_historia.at[idx, 'Kurs_Realny'] = str(map_kurs_real[klucz])
+                    df_historia.at[idx, 'Kurs_Realny'] = str(map_kurs_real.get(klucz, ""))
                     df_historia.at[idx, 'Argumentacja'] = str(map_arg[klucz])
                     df_historia.at[idx, 'Przedzial_Kursowy'] = str(map_przedzial.get(klucz, ""))
                     df_historia.at[idx, 'Consensus_Score'] = str(map_consensus.get(klucz, ""))
@@ -1509,7 +1520,7 @@ if not df_historia.empty and not results_clean.empty:
                     k_real_str = str(row.get("Kurs_Realny", "")).replace(',', '.').strip()
                     k_szac_str = str(row.get("Kurs_Szac", "")).replace(',', '.').strip()
                     
-                    if k_real_str and k_real_str != "Brak" and k_real_str != "nan":
+                    if k_real_str and k_real_str not in ["Brak", "nan"]:
                         kurs = float(k_real_str)
                     else:
                         kurs = float(k_szac_str) if k_szac_str else 1.0
@@ -1577,7 +1588,7 @@ if not df_historia.empty:
         kurs_ako = 1.0
         for _, r in group.iterrows():
             kr_str = str(r.get('Kurs_Realny', '')).replace(',', '.').strip()
-            if not kr_str or kr_str == "Brak" or kr_str == "nan":
+            if not kr_str or kr_str in ["Brak", "nan"]:
                 kr_str = str(r.get('Kurs_Szac', '')).replace(',', '.').strip()
             try: 
                 kr = float(kr_str)
@@ -1592,17 +1603,11 @@ if not df_historia.empty:
         else: status_ako = "ZWRÓCONY"
         
         stawka_str = str(user_stakes.get(k_id, "100")).replace(',', '.')
-        
-        if str(k_id).startswith("AKO_EXPERT"):
-            stawka_str = "1000"
-            jednostki_str = "10j"
-        else:
-            if stawka_str.strip() == "": stawka_str = "100"
-            jednostki_str = str(user_units.get(k_id, "1j"))
-            
+        if stawka_str.strip() == "": stawka_str = "100"
         try: stawka = float(stawka_str)
         except: stawka = 100.0
         
+        jednostki_str = str(user_units.get(k_id, "1j"))
         wyslij_pod = str(user_pods.get(k_id, ""))
         tel_status = str(user_tel_stat.get(k_id, ""))
         
@@ -1685,6 +1690,5 @@ spreadsheet.worksheet("Summary").update(summary_data)
 
 print("\n" + "=" * 60)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
-print("Zintegrowano wielodniową bazę kursów Superbet dla 3 dni w przód.")
-print("Naprawiono luki w formacie JSON i wyczyszczono formatowanie spacji.")
+print("Superbet zintegrowany z 3 dniami wprzód, błędy opóźnień usunięte.")
 print("=" * 60)
