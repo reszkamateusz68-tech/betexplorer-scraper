@@ -20,8 +20,16 @@ jobs:
       - name: Instalacja zależności
         run: pip install -r requirements.txt
 
-      - name: 1. Pobieranie bazy kursów (Superbet Scraper)
+      - name: 1a. Pobieranie bazy kursów (Superbet Dziś)
         run: python pobierz_superbet_dzis.py
+        continue-on-error: true
+
+      - name: 1b. Pobieranie bazy kursów (Superbet Jutro)
+        run: python pobierz_superbet_jutro.py
+        continue-on-error: true
+
+      - name: 1c. Pobieranie bazy kursów (Superbet Pojutrze)
+        run: python pobierz_superbet_pojutrze.py
         continue-on-error: true
 
       - name: 2. Silnik Analityczny (Modele, AKO, integracja kursów)
