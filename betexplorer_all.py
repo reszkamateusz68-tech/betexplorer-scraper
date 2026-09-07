@@ -571,26 +571,34 @@ golden_cols = {
 }
 
 if not results_df.empty:
-    results_df[['FTHG', 'FTAG']] = results_df['Score'].str.split(':', expand=True)
+    # 1. NAJPIERW GWARANTUJEMY OBECNOŚĆ WSZYSTKICH POTRZEBNYCH KOLUMN
+    wszystkie_wymagane = ['FTHG', 'FTAG', 'Score', 'HTHG', 'HTAG', 'Gole_Gosp_1H', 'Gole_Gosc_1H', 
+                          'HS', 'AS', 'HST', 'AST', 'HC', 'AC', 'Odd1', 'OddX', 'Odd2']
+    for col in wszystkie_wymagane:
+        if col not in results_df.columns:
+            results_df[col] = np.nan
+
+    # 2. BEZPIECZNE ROZBICIE WYNIKU
+    if 'Score' in results_df.columns:
+        wyniki_split = results_df['Score'].astype(str).str.split(':', expand=True)
+        if wyniki_split.shape[1] >= 2:
+            results_df['FTHG'] = pd.to_numeric(wyniki_split[0], errors='coerce')
+            results_df['FTAG'] = pd.to_numeric(wyniki_split[1], errors='coerce')
+    
     results_df['FTHG'] = pd.to_numeric(results_df['FTHG'], errors='coerce')
     results_df['FTAG'] = pd.to_numeric(results_df['FTAG'], errors='coerce')
     results_df['Total_Goals'] = results_df['FTHG'] + results_df['FTAG']
 
-    if 'HTHG' not in results_df.columns: results_df['HTHG'] = np.nan
-    if 'HTAG' not in results_df.columns: results_df['HTAG'] = np.nan
-    if 'Gole_Gosp_1H' in results_df.columns:
-        results_df['HTHG'] = results_df['HTHG'].combine_first(pd.to_numeric(results_df['Gole_Gosp_1H'], errors='coerce'))
-        results_df['HTAG'] = results_df['HTAG'].combine_first(pd.to_numeric(results_df['Gole_Gosc_1H'], errors='coerce'))
-
+    # 3. UZUPEŁNIENIE POŁÓWEK (SoccerStats)
+    results_df['HTHG'] = results_df['HTHG'].combine_first(pd.to_numeric(results_df['Gole_Gosp_1H'], errors='coerce'))
+    results_df['HTAG'] = results_df['HTAG'].combine_first(pd.to_numeric(results_df['Gole_Gosc_1H'], errors='coerce'))
     results_df['HT_Total'] = pd.to_numeric(results_df['HTHG'], errors='coerce') + pd.to_numeric(results_df['HTAG'], errors='coerce')
+    
+    # 4. ROŻNE I STRZAŁY SĄ TERAZ ZAWSZE OBECNE (W RAZIE BRAKU BĘDĄ PO PROSTU NaN)
     results_df['Total_Corners'] = pd.to_numeric(results_df['HC'], errors='coerce') + pd.to_numeric(results_df['AC'], errors='coerce')
 
-    fd_expected_cols = ['HS', 'AS', 'HST', 'AST', 'HC', 'AC']
-    for col in fd_expected_cols:
-        if col not in results_df.columns: results_df[col] = np.nan
-
     results_df['Date_str'] = pd.to_datetime(results_df['Date'], errors='coerce').dt.strftime('%Y%m%d').fillna('99999999')
-    results_df['Match_ID'] = results_df['Date_str'] + "_" + results_df['Home'].str[:3].str.upper() + "_" + results_df['Away'].str[:3].str.upper()
+    results_df['Match_ID'] = results_df['Date_str'] + "_" + results_df['Home'].astype(str).str[:3].str.upper() + "_" + results_df['Away'].astype(str).str[:3].str.upper()
 
     def get_margin_results(r):
         try:
@@ -601,11 +609,14 @@ if not results_df.empty:
 
 if not fixtures_df.empty:
     fixtures_df['Date_str'] = pd.to_datetime(fixtures_df['Date'], errors='coerce').dt.strftime('%Y%m%d').fillna('99999999')
-    fixtures_df['Match_ID'] = fixtures_df['Date_str'] + "_" + fixtures_df['Home'].str[:3].str.upper() + "_" + fixtures_df['Away'].str[:3].str.upper()
+    fixtures_df['Match_ID'] = fixtures_df['Date_str'] + "_" + fixtures_df['Home'].astype(str).str[:3].str.upper() + "_" + fixtures_df['Away'].astype(str).str[:3].str.upper()
     fixtures_df['Termin'] = fixtures_df['Date'].apply(categorize_date)
     
     dozwolone_terminy = ["Dziś", "Jutro", "Za 2 dni", "Za 3 dni", "Za 4 dni", "Za 5 dni", "Za 6 dni", "Za 7 dni"]
     fixtures_df = fixtures_df[fixtures_df['Termin'].isin(dozwolone_terminy)].copy()
+
+    for col in ['Odd1', 'OddX', 'Odd2']:
+        if col not in fixtures_df.columns: fixtures_df[col] = ""
 
     fixtures_df['Status_Kursów'] = np.where(fixtures_df['Odd1'].astype(str).str.strip().isin(["", "-", "nan"]), "Brak Kursów", "Są Kursy")
 
@@ -616,8 +627,12 @@ if not fixtures_df.empty:
         except: return ""
     fixtures_df['Marża'] = fixtures_df.apply(get_margin, axis=1)
 
-results_clean = results_df[list(golden_cols.keys()) + ['HT_Total', 'Total_Corners', 'Marża']].rename(columns=golden_cols) if not results_df.empty else pd.DataFrame(columns=list(golden_cols.values()) + ['HT_Total', 'Total_Corners', 'Marża'])
-fixtures_clean = fixtures_df[['Match_ID', 'Termin', 'Status_Kursów', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd1', 'OddX', 'Odd2', 'Marża']].rename(columns={'Odd1': 'Odd_1', 'OddX': 'Odd_X', 'Odd2': 'Odd_2'}) if not fixtures_df.empty else pd.DataFrame(columns=['Match_ID', 'Termin', 'Status_Kursów', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd_1', 'Odd_X', 'Odd_2', 'Marża'])
+# Bezpieczne pobranie kolumn
+cols_to_extract_res = [c for c in list(golden_cols.keys()) if c in results_df.columns]
+results_clean = results_df[cols_to_extract_res + ['HT_Total', 'Total_Corners', 'Marża']].rename(columns=golden_cols) if not results_df.empty else pd.DataFrame(columns=list(golden_cols.values()) + ['HT_Total', 'Total_Corners', 'Marża'])
+
+cols_fixtures = ['Match_ID', 'Termin', 'Status_Kursów', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd1', 'OddX', 'Odd2', 'Marża']
+fixtures_clean = fixtures_df[[c for c in cols_fixtures if c in fixtures_df.columns]].rename(columns={'Odd1': 'Odd_1', 'OddX': 'Odd_X', 'Odd2': 'Odd_2'}) if not fixtures_df.empty else pd.DataFrame(columns=['Match_ID', 'Termin', 'Status_Kursów', 'League', 'Date', 'Time', 'Home', 'Away', 'Odd_1', 'Odd_X', 'Odd_2', 'Marża'])
 
 # ==========================================================
 # 5. GENEROWANIE TABEL LIGOWYCH
