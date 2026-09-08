@@ -14,6 +14,7 @@ from google.oauth2.service_account import Credentials
 import math
 from collections import Counter
 import concurrent.futures
+from curl_cffi import requests as cffi_requests
 
 today = datetime.now()
 
@@ -460,24 +461,19 @@ results_df = df[df["Type"] == "Result"].copy()
 # ==========================================
 # 2. WIELOWĄTKOWE POBIERANIE Z SOCCERSTATS 
 # ==========================================
-SOCCERSTATS_COOKIE = """
-vpl=1; tz=60; usprivacy=1---; _gid=GA1.2.592421716.1786952949; FCCDCF=%5Bnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2C%5B%5B32%2C%22%5B%5C%228500bd73-6ac3-43ec-9d29-8f5a5d6be8c8%5C%22%2C%5B1786952949%2C332000000%5D%5D%22%5D%5D%5D;
-"""
-
 def scrape_ss_worker(args):
     url_ss_clean, base_headers = args
     time.sleep(random.uniform(0.1, 2.0))
     local_data, local_report = [], []
-    headers = base_headers.copy()
-    
-    if SOCCERSTATS_COOKIE:
-        czyste_cookie = SOCCERSTATS_COOKIE.replace('\n', '').replace('\r', '').strip()
-        headers["Cookie"] = czyste_cookie
 
-    skaner_ss = cloudscraper.create_scraper(browser={'browser': 'chrome','platform': 'windows','desktop': True})
-    
     try:
-        response_ss = skaner_ss.get(url_ss_clean, headers=headers, timeout=30)
+        # curl_cffi perfekcyjnie symuluje TLS Chrome, rozwiązując problem błędu 403
+        response_ss = cffi_requests.get(
+            url_ss_clean,
+            impersonate="chrome",
+            timeout=30
+        )
+        
         if response_ss.status_code != 200:
             local_report.append(["SoccerStats", url_ss_clean, f"BŁĄD HTTP: Kod {response_ss.status_code}"])
             return local_data, local_report
@@ -509,36 +505,15 @@ def scrape_ss_worker(args):
                             local_data.append([gospodarz, gosc, wynik_czysty, g_gosp_1h, g_gosc_1h])
                             ss_count += 1
                             
-        if ss_count > 0: local_report.append(["SoccerStats", url_ss_clean, f"OK (Pobrano: {ss_count} wierszy)"])
-        else: local_report.append(["SoccerStats", url_ss_clean, "OSTRZEŻENIE: Brak meczów na stronie (0)"])
-    except Exception as e: local_report.append(["SoccerStats", url_ss_clean, f"BŁĄD: {str(e)}"])
-    return local_data, local_report
-
-dane_soccerstats_baza = []
-print("Rozpoczynam pobieranie z SoccerStats (Autoryzacja Cookie)...")
-try:
-    if os.path.exists("ligi_soccerstats.xlsx"):
-        urls_ss = pd.read_excel("ligi_soccerstats.xlsx")["URL"].dropna().tolist()
-        base_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Referer": "https://www.soccerstats.com/"
-        }
-        ss_args = [(str(u).strip(), base_headers) for u in urls_ss]
-        
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-            for data_chunk, report_chunk in executor.map(scrape_ss_worker, ss_args):
-                dane_soccerstats_baza.extend(data_chunk)
-                scrape_report.extend(report_chunk)
-
-        if dane_soccerstats_baza: 
-            ss_df = pd.DataFrame(dane_soccerstats_baza, columns=["Home", "Away", "Score", "Gole_Gosp_1H", "Gole_Gosc_1H"]).drop_duplicates(subset=["Home", "Away", "Score"])
+        if ss_count > 0: 
+            local_report.append(["SoccerStats", url_ss_clean, f"OK (Pobrano: {ss_count} wierszy)"])
         else: 
-            ss_df = pd.DataFrame()
-except Exception as e: 
-    scrape_report.append(["SoccerStats", "Główny proces", f"BŁĄD: {e}"])
-    ss_df = pd.DataFrame()
+            local_report.append(["SoccerStats", url_ss_clean, "OSTRZEŻENIE: Brak meczów na stronie (0)"])
+            
+    except Exception as e: 
+        local_report.append(["SoccerStats", url_ss_clean, f"BŁĄD: {str(e)}"])
+        
+    return local_data, local_report
 
 # ==========================================
 # 3. MAPOWANIE I SCALANIE DANYCH 
