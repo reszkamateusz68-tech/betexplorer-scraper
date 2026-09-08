@@ -515,6 +515,25 @@ def scrape_ss_worker(args):
         
     return local_data, local_report
 
+dane_soccerstats_baza = []
+ss_df = pd.DataFrame()  # <-- TUTAJ DODANA INICJALIZACJA GLOBALNA
+print("Rozpoczynam pobieranie z SoccerStats (Wielowątkowo)...")
+try:
+    if os.path.exists("ligi_soccerstats.xlsx"):
+        urls_ss = pd.read_excel("ligi_soccerstats.xlsx")["URL"].dropna().tolist()
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"}
+        ss_args = [(str(u).strip(), headers) for u in urls_ss]
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            for data_chunk, report_chunk in executor.map(scrape_ss_worker, ss_args):
+                dane_soccerstats_baza.extend(data_chunk)
+                scrape_report.extend(report_chunk)
+
+        if dane_soccerstats_baza: 
+            ss_df = pd.DataFrame(dane_soccerstats_baza, columns=["Home", "Away", "Score", "Gole_Gosp_1H", "Gole_Gosc_1H"]).drop_duplicates(subset=["Home", "Away", "Score"])
+except Exception as e:
+    scrape_report.append(["SoccerStats", "Główny proces", f"BŁĄD: {e}"])
+
 # ==========================================
 # 3. MAPOWANIE I SCALANIE DANYCH 
 # ==========================================
