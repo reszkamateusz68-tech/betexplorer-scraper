@@ -32,6 +32,14 @@ jobs:
         run: python pobierz_superbet_pojutrze.py
         continue-on-error: true
 
+      - name: 1d. Pobieranie bazy kursów (Superbet za 3 dni)
+        run: python pobierz_superbet_za_3_dni.py
+        continue-on-error: true
+
+      - name: 1e. Pobieranie bazy kursów (Superbet za 4 dni)
+        run: python pobierz_superbet_za_4_dni.py
+        continue-on-error: true
+
       - name: 2. Silnik Analityczny (Modele, AKO, integracja kursów)
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
