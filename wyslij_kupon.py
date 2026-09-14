@@ -97,15 +97,32 @@ ws_pred = spreadsheet.worksheet("All_Predictions")
 ws_ako = spreadsheet.worksheet("Kupony_AKO")
 ws_hist = spreadsheet.worksheet("Historia_Typow")
 
+def sheet_to_df(worksheet):
+    """Bezpieczne ładowanie danych do DataFrame bez wywalania błędu o puste kolumny nagłówka."""
+    data = worksheet.get_all_values()
+    if not data or len(data) < 2:
+        return pd.DataFrame()
+    
+    headers = data[0]
+    valid_col_indices = [idx for idx, h in enumerate(headers) if str(h).strip() != ""]
+    clean_headers = [str(headers[idx]).strip() for idx in valid_col_indices]
+    
+    rows = []
+    for row in data[1:]:
+        padded_row = row + [""] * (len(headers) - len(row))
+        rows.append([padded_row[idx] for idx in valid_col_indices])
+        
+    return pd.DataFrame(rows, columns=clean_headers)
+
 try:
     ws_res = spreadsheet.worksheet("Results")
-    df_res = pd.DataFrame(ws_res.get_all_records())
+    df_res = sheet_to_df(ws_res)
 except Exception:
     df_res = pd.DataFrame()
 
-df_pred = pd.DataFrame(ws_pred.get_all_records())
-df_ako = pd.DataFrame(ws_ako.get_all_records())
-df_hist = pd.DataFrame(ws_hist.get_all_records())
+df_pred = sheet_to_df(ws_pred)
+df_ako = sheet_to_df(ws_ako)
+df_hist = sheet_to_df(ws_hist)
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
@@ -291,11 +308,15 @@ if 'Wyslij_AKO' in df_pred.columns:
                     idx_engine = headers.index("Engine")
                     idx_typ = headers.index("Typ")
                     for r_idx, row in enumerate(ws_pred_data[1:], start=2):
-                        key = (str(row[idx_match]), str(row[idx_engine]), str(row[idx_typ]))
+                        row_match = str(row[idx_match]) if len(row) > idx_match else ""
+                        row_engine = str(row[idx_engine]) if len(row) > idx_engine else ""
+                        row_typ = str(row[idx_typ]) if len(row) > idx_typ else ""
+                        key = (row_match, row_engine, row_typ)
                         if key in new_id_map:
                             cells_to_update_pred.append(gspread.Cell(row=r_idx, col=idx_kupon+1, value=new_id))
                     if cells_to_update_pred: ws_pred.update_cells(cells_to_update_pred)
-                except: pass
+                except Exception as e:
+                    print(f"Ostrzeżenie przy aktualizacji All_Predictions: {e}")
 
             cells_to_update_hist = []
             ws_hist_data = ws_hist.get_all_values()
@@ -307,18 +328,22 @@ if 'Wyslij_AKO' in df_pred.columns:
                     idx_engine_h = headers_hist.index("Engine")
                     idx_typ_h = headers_hist.index("Typ")
                     for r_idx, row in enumerate(ws_hist_data[1:], start=2):
-                        key = (str(row[idx_match_h]), str(row[idx_engine_h]), str(row[idx_typ_h]))
+                        row_match = str(row[idx_match_h]) if len(row) > idx_match_h else ""
+                        row_engine = str(row[idx_engine_h]) if len(row) > idx_engine_h else ""
+                        row_typ = str(row[idx_typ_h]) if len(row) > idx_typ_h else ""
+                        key = (row_match, row_engine, row_typ)
                         if key in new_id_map:
                             cells_to_update_hist.append(gspread.Cell(row=r_idx, col=idx_kupon_h+1, value=new_id))
                     if cells_to_update_hist: ws_hist.update_cells(cells_to_update_hist)
-                except: pass
+                except Exception as e:
+                    print(f"Ostrzeżenie przy aktualizacji Historia_Typow: {e}")
 
         wyslane_id = []
 
         for kupon_id in do_wysylki['Kupon_ID'].unique():
             if str(kupon_id).strip() == "": continue
             
-            kupon_data = df_ako[df_ako['Kupon_ID'] == kupon_id] if not df_ako.empty else pd.DataFrame()
+            kupon_data = df_ako[df_ako['Kupon_ID'] == kupon_id] if not df_ako.empty and 'Kupon_ID' in df_ako.columns else pd.DataFrame()
             mecze_df = do_wysylki[do_wysylki['Kupon_ID'] == kupon_id]
             
             lista_meczow_txt = ""
@@ -363,13 +388,18 @@ if 'Wyslij_AKO' in df_pred.columns:
             komorki_do_odznaczenia = []
             ws_pred_data = ws_pred.get_all_values()
             headers = ws_pred_data[0]
-            idx_wyslij = headers.index("Wyslij_AKO")
-            idx_kupon = headers.index("Kupon_ID")
-            
-            for r_idx, row in enumerate(ws_pred_data[1:], start=2):
-                if row[idx_wyslij].upper() in ['TRUE', 'TAK', '1'] and row[idx_kupon] in wyslane_id:
-                    komorki_do_odznaczenia.append(gspread.Cell(row=r_idx, col=idx_wyslij+1, value="FALSE"))
-            if komorki_do_odznaczenia: ws_pred.update_cells(komorki_do_odznaczenia)
+            try:
+                idx_wyslij = headers.index("Wyslij_AKO")
+                idx_kupon = headers.index("Kupon_ID")
+                
+                for r_idx, row in enumerate(ws_pred_data[1:], start=2):
+                    val_wyslij = row[idx_wyslij].upper() if len(row) > idx_wyslij else ""
+                    val_kupon = row[idx_kupon] if len(row) > idx_kupon else ""
+                    if val_wyslij in ['TRUE', 'TAK', '1'] and val_kupon in wyslane_id:
+                        komorki_do_odznaczenia.append(gspread.Cell(row=r_idx, col=idx_wyslij+1, value="FALSE"))
+                if komorki_do_odznaczenia: ws_pred.update_cells(komorki_do_odznaczenia)
+            except Exception as e:
+                print(f"Ostrzeżenie przy odznaczaniu Wyslij_AKO: {e}")
 
 # ==========================================
 # 2. WYSYŁKA PODSUMOWAŃ
@@ -388,108 +418,117 @@ if 'Wyslij_Podsumowanie' in df_ako.columns and 'Status_AKO' in df_ako.columns:
         komorki_ako_do_aktualizacji = []
         ws_ako_data = ws_ako.get_all_values()
         headers_ako = ws_ako_data[0]
-        idx_kupon = headers_ako.index("Kupon_ID")
-        idx_tel_status = headers_ako.index("Telegram_Status")
-        idx_wyslij_pod = headers_ako.index("Wyslij_Podsumowanie")
         
-        for _, rekord in do_podsumowania.iterrows():
-            kupon_id = str(rekord['Kupon_ID']).strip()
-            if not kupon_id: continue
+        try:
+            idx_kupon = headers_ako.index("Kupon_ID")
+            idx_tel_status = headers_ako.index("Telegram_Status")
+            idx_wyslij_pod = headers_ako.index("Wyslij_Podsumowanie")
+            idx_status_ako = headers_ako.index("Status_AKO")
+            idx_kurs_ako = headers_ako.index("Kurs_AKO")
             
-            is_manual = str(rekord.get('Wyslij_Podsumowanie', '')).upper() in ['TRUE', 'TAK', '1']
-            
-            mecze_hist = df_hist[df_hist['Kupon_ID'].astype(str).str.strip() == kupon_id] if not df_hist.empty and 'Kupon_ID' in df_hist.columns else pd.DataFrame()
-            mecze_pred = df_pred[df_pred['Kupon_ID'].astype(str).str.strip() == kupon_id] if not df_pred.empty and 'Kupon_ID' in df_pred.columns else pd.DataFrame()
-            
-            mecze_df = pd.concat([mecze_hist, mecze_pred])
-            if not mecze_df.empty:
-                mecze_df['Temp_Key'] = mecze_df['Match_ID'].astype(str) + "_" + mecze_df['Engine'].astype(str) + "_" + mecze_df['Typ'].astype(str)
-                mecze_df = mecze_df.drop_duplicates(subset=['Temp_Key'], keep='first')
-            
-            lista_meczow_txt = ""
-            dynamic_kurs = 1.0
-            statusy_zdarzen = []
-            
-            for _, m in mecze_df.iterrows():
-                status_meczu = str(m.get('Status', 'W OCZEKIWANIU')).upper()
-                statusy_zdarzen.append(status_meczu)
+            for _, rekord in do_podsumowania.iterrows():
+                kupon_id = str(rekord['Kupon_ID']).strip()
+                if not kupon_id: continue
                 
-                if status_meczu == "WYGRANA": emoji = "🟢"
-                elif status_meczu == "PRZEGRANA": emoji = "🔴"
-                else: emoji = "⏳" 
+                is_manual = str(rekord.get('Wyslij_Podsumowanie', '')).upper() in ['TRUE', 'TAK', '1']
                 
-                k_str = str(m.get('Kurs_Szac', '1.0')).replace(',', '.')
-                try: k_val = float(k_str)
-                except: k_val = 1.0
-                if k_val > 1.0: dynamic_kurs *= k_val
+                mecze_hist = df_hist[df_hist['Kupon_ID'].astype(str).str.strip() == kupon_id] if not df_hist.empty and 'Kupon_ID' in df_hist.columns else pd.DataFrame()
+                mecze_pred = df_pred[df_pred['Kupon_ID'].astype(str).str.strip() == kupon_id] if not df_pred.empty and 'Kupon_ID' in df_pred.columns else pd.DataFrame()
                 
-                data_m = str(m.get('Data', ''))
-                godz_m = str(m.get('Godzina', ''))
+                mecze_df = pd.concat([mecze_hist, mecze_pred])
+                if not mecze_df.empty:
+                    mecze_df['Temp_Key'] = mecze_df['Match_ID'].astype(str) + "_" + mecze_df['Engine'].astype(str) + "_" + mecze_df['Typ'].astype(str)
+                    mecze_df = mecze_df.drop_duplicates(subset=['Temp_Key'], keep='first')
+                
+                lista_meczow_txt = ""
+                dynamic_kurs = 1.0
+                statusy_zdarzen = []
+                
+                for _, m in mecze_df.iterrows():
+                    status_meczu = str(m.get('Status', 'W OCZEKIWANIU')).upper()
+                    statusy_zdarzen.append(status_meczu)
                     
-                lista_meczow_txt += f"{emoji} {m['Gospodarz']} vs {m['Gość']}\n📅 {data_m} ⏰ {godz_m} | 🎯 Typ: <b>{m['Typ']}</b> | 📈 {k_val:.2f}\n"
+                    if status_meczu == "WYGRANA": emoji = "🟢"
+                    elif status_meczu == "PRZEGRANA": emoji = "🔴"
+                    else: emoji = "⏳" 
+                    
+                    k_str = str(m.get('Kurs_Szac', '1.0')).replace(',', '.')
+                    try: k_val = float(k_str)
+                    except: k_val = 1.0
+                    if k_val > 1.0: dynamic_kurs *= k_val
+                    
+                    data_m = str(m.get('Data', ''))
+                    godz_m = str(m.get('Godzina', ''))
+                        
+                    lista_meczow_txt += f"{emoji} {m['Gospodarz']} vs {m['Gość']}\n📅 {data_m} ⏰ {godz_m} | 🎯 Typ: <b>{m['Typ']}</b> | 📈 {k_val:.2f}\n"
+                    
+                    detale_txt = format_match_details(m, df_res)
+                    if detale_txt:
+                        lista_meczow_txt += detale_txt
+                    else:
+                        lista_meczow_txt += "\n"
                 
-                detale_txt = format_match_details(m, df_res)
-                if detale_txt:
-                    lista_meczow_txt += detale_txt
+                kurs_ako = round(dynamic_kurs, 2)
+                if kurs_ako == 1.0:
+                    try: kurs_ako = float(str(rekord.get('Kurs_AKO', '1.0')).replace(',', '.'))
+                    except: kurs_ako = 1.0
+                
+                if "PRZEGRANA" in statusy_zdarzen:
+                    real_status_ako = "PRZEGRANA"
+                elif "W OCZEKIWANIU" in statusy_zdarzen or "DO RĘCZNEJ KONTROLI" in statusy_zdarzen:
+                    real_status_ako = "W OCZEKIWANIU"
+                elif len(statusy_zdarzen) > 0 and all(s == "WYGRANA" for s in statusy_zdarzen):
+                    real_status_ako = "WYGRANA"
                 else:
-                    lista_meczow_txt += "\n"
-            
-            kurs_ako = round(dynamic_kurs, 2)
-            if kurs_ako == 1.0:
-                try: kurs_ako = float(str(rekord.get('Kurs_AKO', '1.0')).replace(',', '.'))
-                except: kurs_ako = 1.0
-            
-            if "PRZEGRANA" in statusy_zdarzen:
-                real_status_ako = "PRZEGRANA"
-            elif "W OCZEKIWANIU" in statusy_zdarzen or "DO RĘCZNEJ KONTROLI" in statusy_zdarzen:
-                real_status_ako = "W OCZEKIWANIU"
-            elif len(statusy_zdarzen) > 0 and all(s == "WYGRANA" for s in statusy_zdarzen):
-                real_status_ako = "WYGRANA"
-            else:
-                real_status_ako = "ZWRÓCONY"
+                    real_status_ako = "ZWRÓCONY"
 
-            if not lista_meczow_txt:
-                lista_meczow_txt = f"⚽ Zdarzenia dla tego kuponu: <b>{rekord.get('Mecze_Skrot', 'Brak szczegółów w arkuszu')}</b>\n\n"
-            
-            try: stawka_pln = float(str(rekord.get('Stawka', '100')).replace(',', '.'))
-            except: stawka_pln = 100.0
-            
-            stawka_j = round(stawka_pln / WARTOSC_JEDNOSTKI_PLN, 2)
-            wygrana_pln = round(kurs_ako * stawka_pln * PODATEK_BUKMACHERSKI, 2)
-            wygrana_j = round(wygrana_pln / WARTOSC_JEDNOSTKI_PLN, 2)
-            
-            if real_status_ako == 'WYGRANA':
-                wiadomosc = SZABLON_WYGRANA.format(
-                    id_kuponu=kupon_id, mecze=lista_meczow_txt, 
-                    kurs=f"{kurs_ako:.2f}", wygrana_j=wygrana_j, wygrana_pln=wygrana_pln
-                )
-            elif real_status_ako == 'PRZEGRANA':
-                wiadomosc = SZABLON_PRZEGRANA.format(
-                    id_kuponu=kupon_id, mecze=lista_meczow_txt, 
-                    kurs=f"{kurs_ako:.2f}", stawka_j=f"-{stawka_j}", stawka_pln=f"-{stawka_pln}"
-                )
-            else:
-                wiadomosc = SZABLON_OCZEKUJE.format(
-                    id_kuponu=kupon_id, mecze=lista_meczow_txt, 
-                    kurs=f"{kurs_ako:.2f}", stawka_j=stawka_j, stawka_pln=stawka_pln, 
-                    wygrana_j=wygrana_j, wygrana_pln=wygrana_pln
-                )
+                if not lista_meczow_txt:
+                    lista_meczow_txt = f"⚽ Zdarzenia dla tego kuponu: <b>{rekord.get('Mecze_Skrot', 'Brak szczegółów w arkuszu')}</b>\n\n"
                 
-            if send_telegram(wiadomosc, reply_markup=DASHBOARD_KEYBOARD):
-                for r_idx, row in enumerate(ws_ako_data):
-                    if row[idx_kupon] == kupon_id:
-                        if is_manual: 
-                            komorki_ako_do_aktualizacji.append(gspread.Cell(row=r_idx+1, col=idx_wyslij_pod+1, value="FALSE"))
-                        
-                        if str(row[headers_ako.index("Status_AKO")]) != real_status_ako:
-                            komorki_ako_do_aktualizacji.append(gspread.Cell(row=r_idx+1, col=headers_ako.index("Status_AKO")+1, value=real_status_ako))
-                        if str(row[headers_ako.index("Kurs_AKO")]) != str(kurs_ako):
-                             komorki_ako_do_aktualizacji.append(gspread.Cell(row=r_idx+1, col=headers_ako.index("Kurs_AKO")+1, value=kurs_ako))
-                        
-                        if real_status_ako in ['WYGRANA', 'PRZEGRANA']:
-                            komorki_ako_do_aktualizacji.append(gspread.Cell(row=r_idx+1, col=idx_tel_status+1, value="WYSŁANO"))
-                        break
+                try: stawka_pln = float(str(rekord.get('Stawka', '100')).replace(',', '.'))
+                except: stawka_pln = 100.0
+                
+                stawka_j = round(stawka_pln / WARTOSC_JEDNOSTKI_PLN, 2)
+                wygrana_pln = round(kurs_ako * stawka_pln * PODATEK_BUKMACHERSKI, 2)
+                wygrana_j = round(wygrana_pln / WARTOSC_JEDNOSTKI_PLN, 2)
+                
+                if real_status_ako == 'WYGRANA':
+                    wiadomosc = SZABLON_WYGRANA.format(
+                        id_kuponu=kupon_id, mecze=lista_meczow_txt, 
+                        kurs=f"{kurs_ako:.2f}", wygrana_j=wygrana_j, wygrana_pln=wygrana_pln
+                    )
+                elif real_status_ako == 'PRZEGRANA':
+                    wiadomosc = SZABLON_PRZEGRANA.format(
+                        id_kuponu=kupon_id, mecze=lista_meczow_txt, 
+                        kurs=f"{kurs_ako:.2f}", stawka_j=f"-{stawka_j}", stawka_pln=f"-{stawka_pln}"
+                    )
+                else:
+                    wiadomosc = SZABLON_OCZEKUJE.format(
+                        id_kuponu=kupon_id, mecze=lista_meczow_txt, 
+                        kurs=f"{kurs_ako:.2f}", stawka_j=stawka_j, stawka_pln=stawka_pln, 
+                        wygrana_j=wygrana_j, wygrana_pln=wygrana_pln
+                    )
+                    
+                if send_telegram(wiadomosc, reply_markup=DASHBOARD_KEYBOARD):
+                    for r_idx, row in enumerate(ws_ako_data):
+                        if len(row) > idx_kupon and row[idx_kupon] == kupon_id:
+                            if is_manual: 
+                                komorki_ako_do_aktualizacji.append(gspread.Cell(row=r_idx+1, col=idx_wyslij_pod+1, value="FALSE"))
+                            
+                            current_status = row[idx_status_ako] if len(row) > idx_status_ako else ""
+                            if str(current_status) != real_status_ako:
+                                komorki_ako_do_aktualizacji.append(gspread.Cell(row=r_idx+1, col=idx_status_ako+1, value=real_status_ako))
+                                
+                            current_kurs = row[idx_kurs_ako] if len(row) > idx_kurs_ako else ""
+                            if str(current_kurs) != str(kurs_ako):
+                                komorki_ako_do_aktualizacji.append(gspread.Cell(row=r_idx+1, col=idx_kurs_ako+1, value=kurs_ako))
+                            
+                            if real_status_ako in ['WYGRANA', 'PRZEGRANA']:
+                                komorki_ako_do_aktualizacji.append(gspread.Cell(row=r_idx+1, col=idx_tel_status+1, value="WYSŁANO"))
+                            break
 
-        if komorki_ako_do_aktualizacji:
-            ws_ako.update_cells(komorki_ako_do_aktualizacji)
-            print("Pomyślnie wysłano podsumowania i zaktualizowano arkusz.")
+            if komorki_ako_do_aktualizacji:
+                ws_ako.update_cells(komorki_ako_do_aktualizacji)
+                print("Pomyślnie wysłano podsumowania i zaktualizowano arkusz.")
+        except Exception as e:
+            print(f"Błąd podczas przetwarzania podsumowań: {e}")
