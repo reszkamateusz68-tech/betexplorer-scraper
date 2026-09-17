@@ -20,29 +20,17 @@ jobs:
       - name: Instalacja zależności
         run: pip install -r requirements.txt
 
-      - name: 1a. Pobieranie bazy kursów (Superbet Dziś)
-        run: python pobierz_superbet_dzis.py
-        continue-on-error: true
+      - name: Pobierz aktualną ofertę Superbet i Fortuna
+        run: |
+        python superbet_pobieracz_5dni.py || true
+        python fortuna_pobieracz_5dni.py || true
 
-      - name: 1b. Pobieranie bazy kursów (Superbet Jutro)
-        run: python pobierz_superbet_jutro.py
-        continue-on-error: true
-
-      - name: 1c. Pobieranie bazy kursów (Superbet Pojutrze)
-        run: python pobierz_superbet_pojutrze.py
-        continue-on-error: true
-
-      - name: 1d. Pobieranie bazy kursów (Superbet za 3 dni)
-        run: python pobierz_superbet_za_3_dni.py
-        continue-on-error: true
-
-      - name: 1e. Pobieranie bazy kursów (Superbet za 4 dni)
-        run: python pobierz_superbet_za_4_dni.py
-        continue-on-error: true
-
-      - name: 2. Silnik Analityczny (Modele, AKO, integracja kursów)
+      - name: Uruchom Master Engine StatLab
         env:
-          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        SKIP_BOOKMAKERS: "false"
+        SKIP_SUPERBET: "false"
+        TEST_MODE: "false"
         run: python betexplorer_all.py
 
       - name: 3. Wysyłka gotowych AKO na Telegram
