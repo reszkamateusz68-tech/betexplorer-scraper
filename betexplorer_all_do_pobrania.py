@@ -484,6 +484,16 @@ def evaluate_bet(bet_type, r):
         if bet.startswith("AC_U"): return "WYGRANA" if ac < float(bet[4:]) else "PRZEGRANA"
         if bet.startswith("HC_O"): return "WYGRANA" if hc > float(bet[4:]) else "PRZEGRANA"
         if bet.startswith("AC_O"): return "WYGRANA" if ac > float(bet[4:]) else "PRZEGRANA"
+        if bet.startswith("C_H_AH+"):
+            try:
+                line = float(bet.replace("C_H_AH+", ""))
+                return "WYGRANA" if (hc + line) > ac else "PRZEGRANA"
+            except Exception: pass
+        if bet.startswith("C_A_AH+"):
+            try:
+                line = float(bet.replace("C_A_AH+", ""))
+                return "WYGRANA" if (ac + line) > hc else "PRZEGRANA"
+            except Exception: pass
 
     sh, sa = get_num('Shots_H'), get_num('Shots_A')
     if sh is not None and sa is not None:
@@ -537,7 +547,9 @@ KOTWICE_KURSOWE = {
     'A_ST_O2.5': 1.40, 'A_ST_O3.5': 1.80, 'A_ST_U4.5': 1.35, 'A_ST_U5.5': 1.20,
     'H_AH+1.5': 1.28, 'H_AH+2.5': 1.12, 'A_AH+1.5': 1.32, 'A_AH+2.5': 1.14,
     'HT_H_AH+0.5': 1.24, 'HT_H_AH+1.5': 1.06, 'HT_A_AH+0.5': 1.30, 'HT_A_AH+1.5': 1.08,
-    '2H_H_AH+0.5': 1.25, '2H_H_AH+1.5': 1.06, '2H_A_AH+0.5': 1.30, '2H_A_AH+1.5': 1.08
+    '2H_H_AH+0.5': 1.25, '2H_H_AH+1.5': 1.06, '2H_A_AH+0.5': 1.30, '2H_A_AH+1.5': 1.08,
+    'C_H_AH+1.5': 1.40, 'C_H_AH+2.5': 1.25, 'C_H_AH+3.5': 1.10,
+    'C_A_AH+1.5': 1.40, 'C_A_AH+2.5': 1.25, 'C_A_AH+3.5': 1.10,
 }
 
 SZABLONY_PREMIUM = [
@@ -1035,6 +1047,7 @@ def is_odd_sane(typ_kod, odd_val):
     if k == "O0.5" and odd_val > 1.15: return False
     if k.startswith("MG_") and odd_val > 1.60: return False
     if (k.startswith("HC_") or k.startswith("AC_")) and odd_val > 8.0: return False
+    if k.startswith(("C_H_AH+", "C_A_AH+")) and odd_val > 5.0: return False
     return True
 
 def parsuj_pojedynczy_kurs(match_data, typ_kod, home, away):
@@ -1054,11 +1067,12 @@ def parsuj_pojedynczy_kurs(match_data, typ_kod, home, away):
     is_shots = typ_k.startswith(("S_", "ST_", "H_S_", "A_S_", "H_ST_", "A_ST_"))
     is_corners = typ_k.startswith(("C_", "HC_", "AC_"))
     is_handicap = "_AH+" in typ_k or typ_k.startswith(("H_AH", "A_AH"))
+    is_corner_handicap = typ_k.startswith(("C_H_AH+", "C_A_AH+"))
     is_multigol = typ_k.startswith("MG_") or typ_k in ["1-5", "1-6", "1-4", "2-4", "2-5"]
-    is_under_over = (typ_k.startswith("U") or typ_k.startswith("O")) and not any([is_shots, is_corners, is_handicap, is_multigol, is_team_goal, is_half_goal])
+    is_under_over = (typ_k.startswith("U") or typ_k.startswith("O")) and not any([is_shots, is_corners, is_handicap, is_multigol, is_team_goal, is_half_goal, is_corner_handicap])
 
-    # 1. HANDICAPY AZJATYCKIE I EUROPEJSKIE (FT, HT, 2H)
-    if is_handicap:
+    # 1. HANDICAPY AZJATYCKIE I EUROPEJSKIE (FT, HT, 2H) - wykluczamy rożne
+    if is_handicap and not is_corner_handicap:
         is_ht = "HT_" in typ_k
         is_2h = "2H_" in typ_k
         is_ft = not is_ht and not is_2h
@@ -1107,7 +1121,32 @@ def parsuj_pojedynczy_kurs(match_data, typ_kod, home, away):
                                 if is_odd_sane(typ_k, val): return val, f"[{str(r_name).replace(chr(10), ' ')}] -> {str(opt_k)}"
                             except Exception: pass
 
-    # 2. RZUTY ROŻNE
+    # 1.5 HANDICAPY NA RZUTY ROŻNE
+    if is_corner_handicap:
+        is_home_c = "C_H_AH+" in typ_k
+        line = typ_k.split("+")[1].strip()
+        target_tokens = home_tokens if is_home_c else away_tokens
+        
+        for r_name, r_opts in rynki.items():
+            r_norm = normalize_text(r_name)
+            if "rozn" not in r_norm or "handicap" not in r_norm: continue
+            
+            for opt_k, opt_v in r_opts.items():
+                opt_norm = normalize_text(opt_k)
+                combo_norm = f"{r_norm} {opt_norm}"
+                
+                if f"-{line}" in combo_norm and f"+{line}" not in combo_norm:
+                    continue
+                    
+                has_team = any(tok in clean_team_slug(opt_norm) for tok in target_tokens) or (str(opt_k).strip().startswith("1") if is_home_c else str(opt_k).strip().startswith("2"))
+                if has_team:
+                    if (f"+{line}" in combo_norm) or (f"({line})" in combo_norm) or (f" {line}" in str(opt_k) and "-" not in str(opt_k)) or (f"({line})" in str(opt_k)):
+                        try:
+                            val = float(str(opt_v).replace(',', '.'))
+                            if is_odd_sane(typ_k, val): return val, f"[{str(r_name).replace(chr(10), ' ')}] -> {str(opt_k)}"
+                        except Exception: pass
+
+    # 2. RZUTY ROŻNE U/O
     if is_corners:
         is_home_c = typ_k.startswith("HC_")
         is_away_c = typ_k.startswith("AC_")
@@ -1116,7 +1155,7 @@ def parsuj_pojedynczy_kurs(match_data, typ_kod, home, away):
         line = parts[1][1:]
         is_u = parts[1].startswith("U")
         kw_target = ["mniej", "ponizej", "-"] if is_u else ["wiecej", "powyzej", "+"]
-        forbidden_corners = ["wygra", "obie", "btts", "gol", "bramk", "kartk", "spalon", "faul", "kombin", "combo", "podwojna", "dwojtyp"]
+        forbidden_corners = ["wygra", "obie", "btts", "gol", "bramk", "kartk", "spalon", "faul", "kombin", "combo", "podwojna", "dwojtyp", "handicap"]
 
         for r_name, r_opts in rynki.items():
             r_norm = normalize_text(r_name)
@@ -1374,8 +1413,8 @@ def extract_alternative_lines_engine(typ_k, home, away, match_sb, match_ft, lam_
         if not m_data or not isinstance(m_data, dict): return avail
         rynki = m_data.get("rynki", {})
 
-        # A. HANDICAPY AZJATYCKIE I EUROPEJSKIE
-        if "_AH+" in target_type or target_type.startswith(("H_AH+", "A_AH+")):
+        # A. HANDICAPY AZJATYCKIE I EUROPEJSKIE (bez rożnych)
+        if ("_AH+" in target_type or target_type.startswith(("H_AH+", "A_AH+"))) and not target_type.startswith(("C_H_AH+", "C_A_AH+")):
             is_ht = "HT_" in target_type
             is_2h = "2H_" in target_type
             is_ft = not is_ht and not is_2h
@@ -1403,6 +1442,33 @@ def extract_alternative_lines_engine(typ_k, home, away, match_sb, match_ft, lam_
                     if nums and "-" not in raw_opt:
                         try:
                             # Filtrujemy liczby dziesiętne z wyników (żeby uniknąć np. "04" w Schalke 04)
+                            valid_nums = [float(n) for n in nums if '.' in n]
+                            if not valid_nums: valid_nums = [float(n) for n in nums]
+                            if valid_nums:
+                                l_val = valid_nums[-1]
+                                v_val = float(str(opt_v).replace(',', '.'))
+                                if 1.005 < v_val < 50.0: avail[l_val] = v_val
+                        except Exception: pass
+
+        # A2. HANDICAPY NA RZUTY ROŻNE
+        elif target_type.startswith(("C_H_AH+", "C_A_AH+")):
+            is_home_c = "C_H_AH+" in target_type
+            target_tokens = h_tokens if is_home_c else a_tokens
+            opp_tokens = a_tokens if is_home_c else h_tokens
+            
+            for r_name, r_opts in rynki.items():
+                r_norm = normalize_text(r_name)
+                if "rozn" not in r_norm or "handicap" not in r_norm: continue
+                
+                for opt_k, opt_v in r_opts.items():
+                    raw_opt = str(opt_k).strip()
+                    opt_norm = normalize_text(raw_opt)
+                    has_team = any(tok in clean_team_slug(opt_norm) for tok in target_tokens) or (raw_opt.startswith("1") if is_home_c else raw_opt.startswith("2"))
+                    if not has_team: continue
+                    
+                    nums = re.findall(r"(?:\(|\+|^|\s)(\d+(?:\.[05])?)(?:\)|\s|$)", str(r_name) + " " + raw_opt)
+                    if nums and "-" not in raw_opt:
+                        try:
                             valid_nums = [float(n) for n in nums if '.' in n]
                             if not valid_nums: valid_nums = [float(n) for n in nums]
                             if valid_nums:
@@ -1581,6 +1647,9 @@ def extract_alternative_lines_engine(typ_k, home, away, match_sb, match_ft, lam_
     # Obliczanie delty prawdopodobieństwa
     def calc_prob(l_val):
         if "_AH+" in typ_k or typ_k.startswith(("H_AH+", "A_AH+")):
+            if typ_k.startswith(("C_H_AH+", "C_A_AH+")):
+                is_home_h = "C_H_AH+" in typ_k
+                return get_handicap_prob(5.5, 4.5, l_val, is_home=is_home_h)
             is_home_h = "_H_AH+" in typ_k or typ_k.startswith("H_AH+")
             is_ht = "HT_" in typ_k
             is_2h = "2H_" in typ_k
@@ -1786,8 +1855,16 @@ def add_pred(match_id, termin, date, time, league, home, away, engine, typ, szan
     max_realny = max(realne_kursy) if realne_kursy else None
     kurs_do_oceny = max_realny if max_realny is not None else kurs_matematyczny
 
-    if kurs_do_oceny < 1.05: return
-    if termin == "Dziś" and (max_realny is None or status_globalny == "❌ Brak w ofercie"): return
+    # --- NOWE REGUŁY ODRZUCANIA ZBĘDNYCH TYPÓW ---
+    
+    if kurs_do_oceny < 1.05:
+        return
+
+    # Jeśli bukmacher nie wystawił głównej linii ("Brak w ofercie") ORAZ nie znaleziono absolutnie żadnej linii alternatywnej - ignorujemy ten typ
+    if status_globalny == "❌ Brak w ofercie" and str(alt_linia).strip() == "":
+        return
+        
+    # ----------------------------------------------
 
     prob_decimal = float(szansa) / 100.0
     ev = prob_decimal * max_realny if max_realny is not None else 0.0
@@ -1841,6 +1918,10 @@ for idx, row in fixtures_clean.iterrows():
     dyn_anchors = get_dynamic_anchors(h_tier, a_tier, o1_raw)
     delta_tier_val = get_tier_num(a_tier) - get_tier_num(h_tier)
     current_lam_ft = 2.6741 + (0.08 * delta_tier_val)
+
+    # Modyfikatory Siły - Game State
+    home_strength = max(0.5, 1.0 + (delta_tier_val * 0.1))
+    away_strength = max(0.5, 1.0 - (delta_tier_val * 0.1))
 
     m_hist = valid_matches[valid_matches['Match_ID'] != match_id] if OFFLINE_LOCAL else valid_matches
 
@@ -1930,12 +2011,13 @@ for idx, row in fixtures_clean.iterrows():
     # 2. GOAL LINE PRO
     if len(h_tot_all) >= 6 and len(a_tot_all) >= 6:
         h_dom_d, a_wyj_d = h_dom.to_dict('records'), a_wyj.to_dict('records')
+        # Skanowanie wszystkich dostępnych linii (bez ucinki!)
         for line in [2.5, 3.5, 4.5, 5.5, 6.5]:
             p_h_u, h_th, h_tl, h_sm = get_weighted_stats(h_dom_d, 'Total_Goals', lambda x, l=line: pd.notna(x) and x < l, prior_prob=0.75)
             p_a_u, a_th, a_tl, a_sm = get_weighted_stats(a_wyj_d, 'Total_Goals', lambda x, l=line: pd.notna(x) and x < l, prior_prob=0.75)
             avg_p_u = (p_h_u + p_a_u) / 2
             if avg_p_u >= 0.70:
-                arg = f"U{line} | {last3_str} | Szanse D/W: Gosp {round(p_h_u*100)}%, Gość {round(p_a_u*100)}%. Trafienia: {h_th}/{h_tl}, {a_th}/{a_tl}."
+                arg = f"U{line} (Skaner) | {last3_str} | Szanse D/W: Gosp {round(p_h_u*100)}%, Gość {round(p_a_u*100)}%. Trafienia: {h_th}/{h_tl}, {a_th}/{a_tl}."
                 if h_sm or a_sm: arg += " | ⚠️ Bayes"
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Line Pro", f"U{line}", round(avg_p_u*100, 1), dyn_anchors.get(f"U{line}", 1.10), arg, dyn_anchors, match_odds=(o1_raw, ox_raw, o2_raw), lam_ft=current_lam_ft)
 
@@ -1944,7 +2026,7 @@ for idx, row in fixtures_clean.iterrows():
             p_a_o, a_th, a_tl, a_sm = get_weighted_stats(a_wyj_d, 'Total_Goals', lambda x, l=line: pd.notna(x) and x > l, prior_prob=0.30)
             avg_p_o = (p_h_o + p_a_o) / 2
             if avg_p_o >= 0.70:
-                arg = f"O{line} | {last3_str} | Szanse D/W: Gosp {round(p_h_o*100)}%, Gość {round(p_a_o*100)}%. Trafienia: {h_th}/{h_tl}, {a_th}/{a_tl}."
+                arg = f"O{line} (Skaner) | {last3_str} | Szanse D/W: Gosp {round(p_h_o*100)}%, Gość {round(p_a_o*100)}%. Trafienia: {h_th}/{h_tl}, {a_th}/{a_tl}."
                 if h_sm or a_sm: arg += " | ⚠️ Bayes"
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Goal Line Pro", f"O{line}", round(avg_p_o*100, 1), dyn_anchors.get(f"O{line}", 1.10), arg, dyn_anchors, match_odds=(o1_raw, ox_raw, o2_raw), lam_ft=current_lam_ft)
 
@@ -2022,29 +2104,49 @@ for idx, row in fixtures_clean.iterrows():
                 arg = f"Regresja Multigol po anomalii ({last3_str}). Trafienia D/W: {hc_c}/{hc_l}, {ac_c}/{ac_l}."
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Multigol", t_kod, round(pewnosc*100, 1), round(1.0 + (((1/pewnosc)-1.0)/1.5), 2), arg, dyn_anchors, match_odds=(o1_raw, ox_raw, o2_raw), lam_ft=current_lam_ft)
 
-    # 6. CORNERS PRO
+    # 6. CORNERS PRO + HANDICAPY ROŻNYCH
     valid_c = m_hist.dropna(subset=['Corners_H', 'Corners_A']).copy()
     h_dom_c = valid_c[(valid_c['Base_League'] == fixture_base) & (valid_c['Home'] == home)]
     a_wyj_c = valid_c[(valid_c['Base_League'] == fixture_base) & (valid_c['Away'] == away)]
 
     if len(h_dom_c) >= 3 and len(a_wyj_c) >= 3:
         h_c_dict, a_c_dict = h_dom_c.to_dict('records'), a_wyj_c.to_dict('records')
-        for line in [10.5, 11.5, 12.5]:
+        
+        # Opcja 1: Rzuty Rożne Under Ogólny (wiele linii)
+        for line in [9.5, 10.5, 11.5, 12.5, 13.5]:
             p_hc, h_th, h_tl, _ = get_weighted_stats(h_c_dict, 'Total_Corners', lambda x, l=line: pd.notna(x) and x < l)
             p_ac, a_th, a_tl, _ = get_weighted_stats(a_c_dict, 'Total_Corners', lambda x, l=line: pd.notna(x) and x < l)
             avg_p = (p_hc + p_ac) / 2
             if avg_p >= 0.88:
-                arg = f"C_U{line} (D: {h_th}/{h_tl}, W: {a_th}/{a_tl})"
+                arg = f"C_U{line} (Skaner) (D: {h_th}/{h_tl}, W: {a_th}/{a_tl})"
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Corners Pro", f"C_U{line}", round(avg_p*100, 1), dyn_anchors.get(f"C_U{line}", 1.15), arg, dyn_anchors, match_odds=(o1_raw, ox_raw, o2_raw), lam_ft=current_lam_ft)
-                break
 
-        for line in [4.5, 5.5]:
+        # Opcja 2: Rzuty rożne drużyn - Gość Under (wiele linii)
+        for line in [4.5, 5.5, 6.5, 7.5]:
             p_ac, a_th, a_tl, _ = get_weighted_stats(a_c_dict, 'Corners_A', lambda x, l=line: pd.notna(x) and x < l)
             h_conceded_avg = h_dom_c['Corners_A'].mean() if len(h_dom_c) > 0 else 4.0
             if p_ac >= 0.90 and h_conceded_avg < (line + 0.3):
-                arg = f"AC_U{line} | Gość under w {a_th}/{a_tl} meczach, Gospodarz dopuszcza rywalom śr. {h_conceded_avg:.1f} rożnych."
+                arg = f"AC_U{line} (Skaner) | Gość under w {a_th}/{a_tl} meczach, Gosp pozwala na śr. {h_conceded_avg:.1f} rożnych."
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Corners Pro", f"AC_U{line}", round(p_ac*100, 1), dyn_anchors.get(f"AC_U{line}", 1.10), arg, dyn_anchors, match_odds=(o1_raw, ox_raw, o2_raw), lam_ft=current_lam_ft)
-                break
+                
+        # Opcja 3: NOWY SILNIK - Handicapy Dodatnie Rożnych (Modyfikator Game State)
+        h_corners_for = h_dom_c['Corners_H'].mean() if not h_dom_c.empty else 5.0
+        a_corners_for = a_wyj_c['Corners_A'].mean() if not a_wyj_c.empty else 5.0
+        
+        lam_hc = h_corners_for * home_strength
+        lam_ac = a_corners_for * away_strength
+        
+        for hc_line in [1.5, 2.5, 3.5]:
+            prob_h_ah = get_handicap_prob(lam_hc, lam_ac, hc_line, is_home=True)
+            if prob_h_ah >= 0.85:
+                arg = f"Handicap Rożnych Gosp +{hc_line} | Poisson. Śr rożne: Gosp {h_corners_for:.1f}, Gość {a_corners_for:.1f}. Siła Gosp: {home_strength:.2f}x"
+                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Corners Handicap Pro", f"C_H_AH+{hc_line}", round(prob_h_ah*100, 1), 1.25, arg, dyn_anchors, match_odds=(o1_raw, ox_raw, o2_raw), lam_ft=current_lam_ft)
+                
+        for ac_line in [1.5, 2.5, 3.5]:
+            prob_a_ah = get_handicap_prob(lam_hc, lam_ac, ac_line, is_home=False)
+            if prob_a_ah >= 0.85:
+                arg = f"Handicap Rożnych Gość +{ac_line} | Poisson. Śr rożne: Gosp {h_corners_for:.1f}, Gość {a_corners_for:.1f}. Siła Gościa: {away_strength:.2f}x"
+                add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Corners Handicap Pro", f"C_A_AH+{ac_line}", round(prob_a_ah*100, 1), 1.25, arg, dyn_anchors, match_odds=(o1_raw, ox_raw, o2_raw), lam_ft=current_lam_ft)
 
     # 7. SHOTS PRO
     valid_s = m_hist.dropna(subset=['Shots_H', 'Shots_A']).copy()
@@ -2062,14 +2164,15 @@ for idx, row in fixtures_clean.iterrows():
                 arg = f"Strzały 1X2 (S_1): Gosp wygrana dom {h_s_win}/{h_len}, Gość porażka wyjazd {a_s_lose}/{a_len}."
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Shots Pro", "S_1", round(prob_h_s*100, 1), dyn_anchors.get("S_1", 1.34), arg, dyn_anchors, match_odds=(o1_raw, ox_raw, o2_raw), lam_ft=current_lam_ft)
 
-            for s_line in [13.5, 14.5]:
-                p_a_u, ta_u, tal_u, _ = get_weighted_stats(a_wyj_s, 'Shots_A', lambda x, l=s_line: pd.notna(x) and x < l)
-                h_conceded_s = h_dom_s['Shots_A'].mean() if len(h_dom_s) > 0 else 12.0
-                a_scored_s = a_wyj_s['Shots_A'].mean() if len(a_wyj_s) > 0 else 11.0
-                if p_a_u >= 0.85 and h_conceded_s < (s_line + 0.5):
-                    arg = f"A_S_U{s_line} | Gość oddaje śr. {a_scored_s:.1f} strzałów, Gospodarz dopuszcza śr. {h_conceded_s:.1f} strzałów."
-                    add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Shots Pro", f"A_S_U{s_line}", round(p_a_u*100, 1), dyn_anchors.get(f"A_S_U{s_line}", 1.30), arg, dyn_anchors, match_odds=(o1_raw, ox_raw, o2_raw), lam_ft=current_lam_ft)
-                    break
+            h_conceded_s = h_dom_s['Shots_A'].mean() if len(h_dom_s) > 0 else 12.0
+            a_scored_s = a_wyj_s['Shots_A'].mean() if len(a_wyj_s) > 0 else 11.0
+            lam_a_s = ((a_scored_s + h_conceded_s) / 2.0) * away_strength
+            
+            for s_line in [10.5, 11.5, 12.5, 13.5, 14.5, 15.5]:
+                prob_a_s_u = get_poisson_prob(lam_a_s, int(s_line), "under")
+                if prob_a_s_u >= 0.85:
+                    arg = f"A_S_U{s_line} (Skaner) | Gość oddaje śr. {a_scored_s:.1f} strzałów, Gospodarz dopuszcza śr. {h_conceded_s:.1f}. Siła Gościa: {away_strength:.2f}x"
+                    add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Shots Pro", f"A_S_U{s_line}", round(prob_a_s_u*100, 1), dyn_anchors.get(f"A_S_U{s_line}", 1.30), arg, dyn_anchors, match_odds=(o1_raw, ox_raw, o2_raw), lam_ft=current_lam_ft)
 
     # 8. SHOTS ON TARGET PRO
     valid_st = m_hist.dropna(subset=['ShotsTarget_H', 'ShotsTarget_A']).copy()
@@ -2087,14 +2190,25 @@ for idx, row in fixtures_clean.iterrows():
                 arg = f"Strzały Celne 1X2 (ST_1): Gosp wygrana dom {h_st_win}/{h_len}, Gość porażka wyjazd {a_st_lose}/{a_len}."
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Shots On Target Pro", "ST_1", round(prob_h_st*100, 1), dyn_anchors.get("ST_1", 1.64), arg, dyn_anchors, match_odds=(o1_raw, ox_raw, o2_raw), lam_ft=current_lam_ft)
 
-            for st_line in [4.5, 5.5]:
-                p_a_st_u, ta_u, tal_u, _ = get_weighted_stats(a_wyj_st, 'ShotsTarget_A', lambda x, l=st_line: pd.notna(x) and x < l)
-                h_conceded_st = h_dom_st['ShotsTarget_A'].mean() if len(h_dom_st) > 0 else 4.0
-                a_scored_st = a_wyj_st['ShotsTarget_A'].mean() if len(a_wyj_s) > 0 else 3.5
-                if p_a_st_u >= 0.85 and h_conceded_st < (st_line + 0.3):
-                    arg = f"A_ST_U{st_line} | Gość śr. {a_scored_st:.1f} SOT, Gospodarz pozwala rywalom na śr. {h_conceded_st:.1f} SOT."
-                    add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Shots On Target Pro", f"A_ST_U{st_line}", round(p_a_st_u*100, 1), dyn_anchors.get(f"A_ST_U{st_line}", 1.30), arg, dyn_anchors, match_odds=(o1_raw, ox_raw, o2_raw), lam_ft=current_lam_ft)
-                    break
+            h_conceded_st = h_dom_st['ShotsTarget_A'].mean() if len(h_dom_st) > 0 else 4.0
+            a_scored_st = a_wyj_st['ShotsTarget_A'].mean() if len(a_wyj_st) > 0 else 3.5
+            lam_a_st = ((a_scored_st + h_conceded_st) / 2.0) * away_strength
+            
+            for st_line in [2.5, 3.5, 4.5, 5.5, 6.5, 7.5]:
+                prob_a_st_u = get_poisson_prob(lam_a_st, int(st_line), "under")
+                if prob_a_st_u >= 0.85:
+                    arg = f"A_ST_U{st_line} (Skaner) | Gość śr. {a_scored_st:.1f} SOT, Gospodarz traci śr. {h_conceded_st:.1f} SOT. Korekta o koszyk: {away_strength:.2f}x."
+                    add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Shots On Target Pro", f"A_ST_U{st_line}", round(prob_a_st_u*100, 1), dyn_anchors.get(f"A_ST_U{st_line}", 1.30), arg, dyn_anchors, match_odds=(o1_raw, ox_raw, o2_raw), lam_ft=current_lam_ft)
+
+            a_conceded_st = a_wyj_st['ShotsTarget_H'].mean() if len(a_wyj_st) > 0 else 4.0
+            h_scored_st = h_dom_st['ShotsTarget_H'].mean() if len(h_dom_st) > 0 else 4.0
+            lam_h_st = ((h_scored_st + a_conceded_st) / 2.0) * home_strength
+            
+            for st_line in [3.5, 4.5, 5.5, 6.5, 7.5]:
+                prob_h_st_u = get_poisson_prob(lam_h_st, int(st_line), "under")
+                if prob_h_st_u >= 0.85:
+                    arg = f"H_ST_U{st_line} (Skaner) | Gosp śr. {h_scored_st:.1f} SOT, Gość traci śr. {a_conceded_st:.1f} SOT. Korekta o koszyk: {home_strength:.2f}x."
+                    add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Shots On Target Pro", f"H_ST_U{st_line}", round(prob_h_st_u*100, 1), dyn_anchors.get(f"H_ST_U{st_line}", 1.30), arg, dyn_anchors, match_odds=(o1_raw, ox_raw, o2_raw), lam_ft=current_lam_ft)
 
     # 9. ZIMNY PRYSZNIC
     if h_tier in ['Koszyk 1', 'Koszyk 2'] and len(h_tot_all) > 0:
@@ -2466,7 +2580,40 @@ if not df_all_predictions.empty:
         top_wybory_df = top_wybory_df[[c for c in cols_wybory if c in top_wybory_df.columns]]
 
 # ==================================================================================================
-# 12. ZAPIS WYNIKÓW (GOOGLE SHEETS LUB LOKALNE CSV W TRYBIE OFFLINE)
+# 12. FRANKENSTEIN BUILDER - ZŁOTY KUPON AKO
+# ==================================================================================================
+
+if not df_all_predictions.empty:
+    safe_picks = df_all_predictions[(df_all_predictions['Szansa'] >= 92.0) & (df_all_predictions['Kurs_Realny_Superbet'] != 'Brak')].copy()
+    safe_picks['Kurs_Num'] = pd.to_numeric(safe_picks['Kurs_Realny_Superbet'], errors='coerce')
+    # Odrzucamy śmieciowe kursy poniżej 1.05 i za wysokie > 1.25 do podbicia AKO
+    safe_picks = safe_picks[(safe_picks['Kurs_Num'] >= 1.05) & (safe_picks['Kurs_Num'] <= 1.25)]
+    safe_picks = safe_picks.sort_values(by=['Szansa', 'Kurs_Num'], ascending=[False, False])
+    
+    frankenstein_ako = []
+    used_matches = set()
+    ako_kurs = 1.0
+    
+    for _, row in safe_picks.iterrows():
+        if row['Match_ID'] not in used_matches:
+            frankenstein_ako.append(row)
+            used_matches.add(row['Match_ID'])
+            ako_kurs *= row['Kurs_Num']
+        if len(frankenstein_ako) == 3: # Maksymalnie 3 zdarzenia na taśmie (optymalne AKO)
+            break
+            
+    if len(frankenstein_ako) >= 2:
+        print("\n" + "🏆" * 45)
+        print("🤖 FRANKENSTEIN BUILDER - ZŁOTY KUPON AKO (Algorytm)")
+        print("🏆" * 45)
+        for i, p in enumerate(frankenstein_ako, 1):
+            print(f"{i}. {p['Gospodarz']} vs {p['Gość']} | Typ: {p['Typ']} | Kurs SB: {p['Kurs_Num']:.2f} | Szansa: {p['Szansa']}%")
+        print("-" * 95)
+        print(f"🔥 CAŁKOWITY KURS AKO: {ako_kurs:.2f}")
+        print("🏆" * 45 + "\n")
+
+# ==================================================================================================
+# 13. ZAPIS WYNIKÓW (GOOGLE SHEETS LUB LOKALNE CSV W TRYBIE OFFLINE)
 # ==================================================================================================
 
 if not OFFLINE_LOCAL and spreadsheet is not None:
@@ -2511,8 +2658,8 @@ print("\n" + "=" * 95)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
 print(f"Wygenerowano predykcji: {len(df_all_predictions)}.")
 print(f"Wyselekcjonowano Top Wyborów: {len(top_wybory_df)}.")
-print("1. Odbudowano logikę linii alternatywnych - teraz bez problemu znajdzie i zrzuci najbliższą linię wyższą i niższą dla każdego O/U.")
-print("2. Prawidłowo zadeklarowano wszystkie słowniki i tablice, co wyeliminowało błędy przerywające skrypt.")
-print("3. Zachowano pełne rozbicie na kolumny źródłowe - dzięki temu arkusz jest idealnie czysty.")
-print("4. Algorytm w pełni estymuje Deltę Szans (% Prawdopodobieństwa) przy pomocy rynkowego Poissona i Skellama.")
+print("1. Odbudowano skaner - usunięto przedwczesne ucinanie pętli (odzyskano linie U5.5, U4.5).")
+print("2. Wdrożono Game State Multiplier - korygowanie statystyk strzałów/rożnych przez koszyk ligowy.")
+print("3. Uruchomiono parser + silnik Handicapy Rożnych (C_H_AH+, C_A_AH+).")
+print("4. DODANO FILTR: Od teraz typy całkowicie niegrywalne (brak kursów i brak alternatyw) nie lądują w bazie!")
 print("=" * 95)
