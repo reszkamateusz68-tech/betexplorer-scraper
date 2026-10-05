@@ -134,7 +134,7 @@ try:
             mapowanie_fortuna_raw = slownik.get("BetExplorer_To_Fortuna", {})
         print(f"✅ Wczytano słownik drużyn: {len(mapowanie_fd)} FD, {len(mapowanie_ss)} SS, {len(mapowanie_sb_raw)} SB, {len(mapowanie_fortuna_raw)} Fortuna.")
 except Exception as err_slownik:
-    print(f"⚠️️ Uwaga przy wczytywaniu slownik_druzyn.json: {err_slownik}")
+    print(f"⚠️ Uwaga przy wczytywaniu slownik_druzyn.json: {err_slownik}")
 
 # Rejestr nierozpoznanych drużyn
 niezmapowane_raport = []
@@ -411,7 +411,10 @@ def get_weighted_stats(data, target_col, condition_lambda, prior_prob=0.5, alpha
         total_weight += w
 
     raw_prob = weighted_hits / total_weight if total_weight > 0 else 0.0
-    if 0 < total_len < 12 and alpha > 0:
+    # Obniżenie progu z 12 do 10 i zmiana włączania tagu Bayesa
+    is_bayes = (total_len < 10 and alpha > 0)
+    
+    if is_bayes:
         return (weighted_hits + (alpha * prior_prob)) / (total_weight + alpha), total_hits, total_len, True
     return raw_prob, total_hits, total_len, False
 
@@ -578,7 +581,6 @@ def get_tier_num(tier_str):
     except Exception: return 3
 
 def get_short_tier(league, team_name, team_tiers_dict):
-    """Zwraca skróconą nazwę koszyka, np. K1, K2 zamiast Koszyk 1."""
     t = team_tiers_dict.get((league, team_name), 'Koszyk 3')
     return str(t).replace('Koszyk ', 'K')
 
@@ -1256,17 +1258,24 @@ def parsuj_pojedynczy_kurs(match_data, typ_kod, home, away):
         for r_name, r_opts in rynki.items():
             r_norm = normalize_text(r_name)
             if any(fb in r_norm for fb in forbidden): continue
-            if any(tok in clean_team_slug(r_norm) for tok in (home_tokens + away_tokens)):
-                continue
+            if any(tok in clean_team_slug(r_norm) for tok in (home_tokens + away_tokens)): continue
 
             if any(kw in r_norm.replace(" ", "") for kw in ["liczbagoli", "sumagoli", "liczbabramek", "meczliczbagoli"]):
-                # Ograniczenie błędów dla Fortuny - szukamy dokładnej linii w tekście żeby nie chwycić innych zakładek
-                if lv not in str(r_name) and lv not in "".join(str(k) for k in r_opts.keys()):
-                    continue
+                
+                # Zabezpieczenie przed pomyleniem "poniżej 1.5 goli w 2. połowie" z głównym overem
+                nums_in_title = re.findall(r"\d+\.\d+", r_norm)
+                if nums_in_title and lv not in nums_in_title:
+                    continue 
 
                 for opt_k, opt_v in r_opts.items():
                     opt_norm = normalize_text(opt_k)
                     has_dir = any(kw in opt_norm for kw in kw_list) or (str(opt_k).strip().startswith("-") if is_u else str(opt_k).strip().startswith("+"))
+                    
+                    if not has_dir:
+                        # W Fortuna opcje to często samo "+ 1.5"
+                        if is_u and "- " in str(opt_k): has_dir = True
+                        elif not is_u and "+ " in str(opt_k): has_dir = True
+                        
                     if not has_dir: continue
                     
                     nums = re.findall(r"\d+\.\d+", str(r_name) + " " + str(opt_k))
@@ -1366,8 +1375,8 @@ def parsuj_pojedynczy_kurs(match_data, typ_kod, home, away):
         for r_name, r_opts in rynki.items():
             r_norm = normalize_text(r_name)
             
-            # CZARNA LISTA DLA 1X2 - Rozszerzona (Odrzuca m.in. zakłady bez remisu i statystyki)
-            if any(kw in r_norm for kw in ["połowa", "polowa", "pol", "poł", "handicap", "dokladny", "strzel", "rozn", "kartk", "faule", "fauli", "spalon", "celn", "bramki", "gol", "strzał", "strzal", "posiadanie", "zwrot", "bez remisu"]):
+            # CZARNA LISTA DLA 1X2 - BARDZO RYGORYSTYCZNA
+            if any(kw in r_norm for kw in ["połowa", "polowa", "pol", "poł", "handicap", "dokladny", "strzel", "rozn", "kartk", "faule", "fauli", "spalon", "celn", "bramki", "gol", "strzał", "strzal", "posiadanie", "zwrot", "bez remisu", "awans"]):
                 continue
                 
             if any(kw in r_norm for kw in ["mecz", "1x2", "wynik", "podwojnaszansa", "szansa", "dwojtyp", "dwójtyp"]):
@@ -1452,6 +1461,9 @@ def extract_alternative_lines_engine(typ_k, home, away, match_sb, match_ft, lam_
                 for opt_k, opt_v in r_opts.items():
                     opt_norm = normalize_text(opt_k)
                     has_dir = any(kw in opt_norm for kw in kw_list) or (str(opt_k).strip().startswith("-") if is_u else str(opt_k).strip().startswith("+"))
+                    if not has_dir:
+                        if is_u and "- " in str(opt_k): has_dir = True
+                        elif not is_u and "+ " in str(opt_k): has_dir = True
                     if not has_dir: continue
                     
                     nums = re.findall(r"\d+\.\d+", str(r_name) + " " + str(opt_k))
@@ -1823,11 +1835,11 @@ def add_pred(match_id, termin, date, time, league, home, away, engine, typ, szan
     elif prob_decimal >= 0.75: risk_tag = "VALUE (75-84%)"
     else: risk_tag = "RISK (70-74%)"
 
-    # Oczyszczenie z ewentualnych poprzednich tagów lokalnych
+    # Oczyszczenie z ewentualnych poprzednich tagów
     clean_arg = re.sub(r"^\[.*?\]\s*", "", str(arg))
     arg_final = f"[{risk_tag}] {clean_arg}"
     
-    # SYSTEM PRZEŁAMANIA 0:0 W ARGUMENTACJI (Zgłoszenie 1) - Priorytet absolutny
+    # SYSTEM PRZEŁAMANIA 0:0 W ARGUMENTACJI (Zgłoszenie 1) - Priorytet absolutny, na sam początek.
     if had_0_0 and typ_k in ["O0.5", "O1.5", "MG_1-5", "MG_1-6"]:
         arg_final = f"[🔴 PRZEŁAMANIE 0:0] {arg_final}"
 
@@ -1854,7 +1866,6 @@ def add_pred(match_id, termin, date, time, league, home, away, engine, typ, szan
 # 10. GŁÓWNA PĘTLA MODELI (KOMPLETNY ZESTAW SILNIKÓW)
 # ==================================================================================================
 
-# Audyt wstępny terminarza pod kątem mapowania u bukmacherów
 print("\nPrzeprowadzam wstępny audyt mapowania drużyn u bukmacherów...")
 for _, row_fix in fixtures_clean.iterrows():
     h_f, a_f = row_fix['Home'], row_fix['Away']
@@ -1907,9 +1918,11 @@ for idx, row in fixtures_clean.iterrows():
     a_last3 = [f"{int(m['FTHG'])}:{int(m['FTAG'])}" for _, m in a_tot_all.head(3).iterrows()]
     last3_str = f"Ost. 3 mecze: Gosp ({', '.join(h_last3) if h_last3 else 'brak'}), Gość ({', '.join(a_last3) if a_last3 else 'brak'})"
     
-    # Detekcja wyniku 0:0 w ostatnim meczu
-    last_h_score = f"{int(h_tot_all.iloc[0]['FTHG'])}:{int(h_tot_all.iloc[0]['FTAG'])}" if len(h_tot_all) > 0 else ""
-    last_a_score = f"{int(a_tot_all.iloc[0]['FTHG'])}:{int(a_tot_all.iloc[0]['FTAG'])}" if len(a_tot_all) > 0 else ""
+    # Detekcja wyniku 0:0 z pełnej historii meczów
+    h_baza_gole = m_hist[(m_hist['Home'] == home) | (m_hist['Away'] == home)].sort_values(by='Date_Parsed', ascending=False)
+    a_baza_gole = m_hist[(m_hist['Home'] == away) | (m_hist['Away'] == away)].sort_values(by='Date_Parsed', ascending=False)
+    last_h_score = f"{int(h_baza_gole.iloc[0]['FTHG'])}:{int(h_baza_gole.iloc[0]['FTAG'])}" if len(h_baza_gole) > 0 else ""
+    last_a_score = f"{int(a_baza_gole.iloc[0]['FTHG'])}:{int(a_baza_gole.iloc[0]['FTAG'])}" if len(a_baza_gole) > 0 else ""
     had_zero_zero = (last_h_score == "0:0" or last_a_score == "0:0")
 
     # 1. 1X PRO
@@ -1960,19 +1973,33 @@ for idx, row in fixtures_clean.iterrows():
         except Exception:
             fair_odd = round(1 / final_prob, 2) if final_prob > 0 else 1.08
 
+        # Pobieranie koszyków, z jakimi drużyny gubiły punkty lub wygrywały
         if final_prob >= 0.70 and fair_odd >= 1.05:
+            is_bayes_warning = (h_dom_total < 10 or a_wyj_total < 10)
             if typ_kod == "1X":
-                h_lost_tiers = sorted(list(set([get_short_tier(fixture_base, row['Away'], team_tiers) for _, row in h_dom[h_dom['FTHG'] < h_dom['FTAG']].iterrows()])))
-                a_won_tiers = sorted(list(set([get_short_tier(fixture_base, row['Home'], team_tiers) for _, row in a_wyj[a_wyj['FTAG'] > a_wyj['FTHG']].iterrows()])))
-                h_l_str = f"Porażki w domu z: {','.join(h_lost_tiers)}" if h_lost_tiers else "Brak domowych porażek"
-                a_w_str = f"Wygrywali na wyjeździe z: {','.join(a_won_tiers)}" if a_won_tiers else "Brak wyjazdowych zwycięstw"
-                arg = f"1X | Szansa: {round(final_prob*100)}% | Gosp ({h_tier_s}) dom 1X: {h_dom_1x_hits}/{h_dom_total} ({h_l_str}) | Gość ({a_tier_s}) wyjazd W: {a_wyj_win_hits}/{a_wyj_total} ({a_w_str})."
+                h_fails = h_dom[h_dom['FTHG'] < h_dom['FTAG']]
+                a_wins = a_wyj[a_wyj['FTAG'] > a_wyj['FTHG']]
+                
+                h_fail_tiers = [get_short_tier(fixture_base, r['Away'], team_tiers) for _, r in h_fails.iterrows()]
+                a_win_tiers = [get_short_tier(fixture_base, r['Home'], team_tiers) for _, r in a_wins.iterrows()]
+                
+                h_fail_str = f" (wpadki z: {', '.join(set(h_fail_tiers))})" if h_fail_tiers else ""
+                a_win_str = f" (wygrywał z: {', '.join(set(a_win_tiers))})" if a_win_tiers else ""
+                
+                arg = f"1X (Gosp {get_short_tier(fixture_base, home, team_tiers)} vs Gość {get_short_tier(fixture_base, away, team_tiers)}) | Szansa: {round(final_prob*100)}% | Gosp dom 1X: {h_dom_1x_hits}/{h_dom_total}{h_fail_str} | Gość wyjazd W: {a_wyj_win_hits}/{a_wyj_total}{a_win_str}."
             else:
-                h_won_tiers = sorted(list(set([get_short_tier(fixture_base, row['Away'], team_tiers) for _, row in h_dom[h_dom['FTHG'] > h_dom['FTAG']].iterrows()])))
-                a_lost_tiers = sorted(list(set([get_short_tier(fixture_base, row['Home'], team_tiers) for _, row in a_wyj[a_wyj['FTAG'] < a_wyj['FTHG']].iterrows()])))
-                h_w_str = f"Wygrywali w domu z: {','.join(h_won_tiers)}" if h_won_tiers else "Brak domowych zwycięstw"
-                a_l_str = f"Porażki na wyjeździe z: {','.join(a_lost_tiers)}" if a_lost_tiers else "Brak wyjazdowych porażek"
-                arg = f"X2 | Szansa: {round(final_prob*100)}% | Gość ({a_tier_s}) wyjazd X2: {a_wyj_x2_hits}/{a_wyj_total} ({a_l_str}) | Gosp ({h_tier_s}) dom W: {h_dom_win_hits}/{h_dom_total} ({h_w_str})."
+                a_fails = a_wyj[a_wyj['FTAG'] < a_wyj['FTHG']]
+                h_wins = h_dom[h_dom['FTHG'] > h_dom['FTAG']]
+                
+                a_fail_tiers = [get_short_tier(fixture_base, r['Home'], team_tiers) for _, r in a_fails.iterrows()]
+                h_win_tiers = [get_short_tier(fixture_base, r['Away'], team_tiers) for _, r in h_wins.iterrows()]
+                
+                a_fail_str = f" (wpadki z: {', '.join(set(a_fail_tiers))})" if a_fail_tiers else ""
+                h_win_str = f" (wygrywał z: {', '.join(set(h_win_tiers))})" if h_win_tiers else ""
+                
+                arg = f"X2 (Gosp {get_short_tier(fixture_base, home, team_tiers)} vs Gość {get_short_tier(fixture_base, away, team_tiers)}) | Szansa: {round(final_prob*100)}% | Gość wyjazd X2: {a_wyj_x2_hits}/{a_wyj_total}{a_fail_str} | Gosp dom W: {h_dom_win_hits}/{h_dom_total}{h_win_str}."
+                
+            if is_bayes_warning: arg += " | ⚠️ Bayes"
             add_pred(match_id, d_termin, d_date, d_time, league, home, away, "1X Pro", typ_kod, round(final_prob*100, 1), fair_odd, arg, dyn_anchors, match_odds=(o1_raw, ox_raw, o2_raw), lam_ft=current_lam_ft, had_0_0=had_zero_zero)
 
     # 2. GOAL LINE PRO
@@ -2021,6 +2048,7 @@ for idx, row in fixtures_clean.iterrows():
                 if p_ht >= 0.90:
                     typ_kod = f"HT_{'H' if is_h else 'A'}_AH+{ht_line}"
                     arg = f"Handicap 1. Połowa +{ht_line} ({'Gospodarz' if is_h else 'Gość'}). Trafienia w HT: {th}/{tl}."
+                    if sm: arg += " | ⚠️ Bayes"
                     add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Handicap Pro", typ_kod, round(p_ht*100, 1), dyn_anchors.get(typ_kod, 1.22), arg, dyn_anchors, match_odds=(o1_raw, ox_raw, o2_raw), lam_ft=current_lam_ft, had_0_0=had_zero_zero)
 
         for team, is_h, opp_tier, my_tier in [(home, True, a_tier, h_tier), (away, False, h_tier, a_tier)]:
@@ -2035,6 +2063,7 @@ for idx, row in fixtures_clean.iterrows():
                 if p_2h >= 0.90:
                     typ_kod = f"2H_{'H' if is_h else 'A'}_AH+{h2_line}"
                     arg = f"Handicap 2. Połowa +{h2_line} ({'Gospodarz' if is_h else 'Gość'}). Trafienia w 2H: {th}/{tl}."
+                    if sm: arg += " | ⚠️ Bayes"
                     add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Handicap Pro", typ_kod, round(p_2h*100, 1), dyn_anchors.get(typ_kod, 1.22), arg, dyn_anchors, match_odds=(o1_raw, ox_raw, o2_raw), lam_ft=current_lam_ft, had_0_0=had_zero_zero)
 
     # 4. BETBUILDER PRO
@@ -2068,6 +2097,7 @@ for idx, row in fixtures_clean.iterrows():
             if prob_1_5 >= 0.90 or prob_1_6 >= 0.90:
                 t_kod, pewnosc, hc_c, hc_l, ac_c, ac_l = ("MG_1-5", prob_1_5, h_th, h_tl, a_th, a_tl) if prob_1_5 >= 0.90 else ("MG_1-6", prob_1_6, h_th16, h_tl16, a_th16, a_tl16)
                 arg = f"Regresja Multigol po anomalii ({last3_str}). Trafienia D/W: {hc_c}/{hc_l}, {ac_c}/{ac_l}."
+                if h_sm or a_sm or h_sm16 or a_sm16: arg += " | ⚠️ Bayes"
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Multigol", t_kod, round(pewnosc*100, 1), round(1.0 + (((1/pewnosc)-1.0)/1.5), 2), arg, dyn_anchors, match_odds=(o1_raw, ox_raw, o2_raw), lam_ft=current_lam_ft, had_0_0=had_zero_zero)
 
     # 6. CORNERS PRO
@@ -2078,19 +2108,21 @@ for idx, row in fixtures_clean.iterrows():
     if len(h_dom_c) >= 4 and len(a_wyj_c) >= 4:
         h_c_dict, a_c_dict = h_dom_c.to_dict('records'), a_wyj_c.to_dict('records')
         for line in [10.5, 11.5, 12.5]:
-            p_hc, h_th, h_tl, _ = get_weighted_stats(h_c_dict, 'Total_Corners', lambda x, l=line: pd.notna(x) and x < l)
-            p_ac, a_th, a_tl, _ = get_weighted_stats(a_c_dict, 'Total_Corners', lambda x, l=line: pd.notna(x) and x < l)
+            p_hc, h_th, h_tl, h_sm = get_weighted_stats(h_c_dict, 'Total_Corners', lambda x, l=line: pd.notna(x) and x < l)
+            p_ac, a_th, a_tl, a_sm = get_weighted_stats(a_c_dict, 'Total_Corners', lambda x, l=line: pd.notna(x) and x < l)
             avg_p = (p_hc + p_ac) / 2
             if avg_p >= 0.90:
                 arg = f"C_U{line} (D: {h_th}/{h_tl}, W: {a_th}/{a_tl})"
+                if h_sm or a_sm: arg += " | ⚠️ Bayes"
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Corners Pro", f"C_U{line}", round(avg_p*100, 1), dyn_anchors.get(f"C_U{line}", 1.15), arg, dyn_anchors, match_odds=(o1_raw, ox_raw, o2_raw), lam_ft=current_lam_ft, had_0_0=had_zero_zero)
                 break
 
         for line in [4.5, 5.5]:
-            p_ac, a_th, a_tl, _ = get_weighted_stats(a_c_dict, 'Corners_A', lambda x, l=line: pd.notna(x) and x < l)
+            p_ac, a_th, a_tl, a_sm = get_weighted_stats(a_c_dict, 'Corners_A', lambda x, l=line: pd.notna(x) and x < l)
             h_conceded_avg = h_dom_c['Corners_A'].mean() if len(h_dom_c) > 0 else 4.0
             if p_ac >= 0.90 and h_conceded_avg < (line + 0.3):
                 arg = f"AC_U{line} | Gość under w {a_th}/{a_tl} meczach, Gospodarz dopuszcza rywalom śr. {h_conceded_avg:.1f} rożnych."
+                if a_sm: arg += " | ⚠️ Bayes"
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Corners Pro", f"AC_U{line}", round(p_ac*100, 1), dyn_anchors.get(f"AC_U{line}", 1.10), arg, dyn_anchors, match_odds=(o1_raw, ox_raw, o2_raw), lam_ft=current_lam_ft, had_0_0=had_zero_zero)
                 break
 
@@ -2107,19 +2139,26 @@ for idx, row in fixtures_clean.iterrows():
             prob_h_s = (((h_s_win + 0.9) / (h_len + 1.5)) * 3.5 + ((a_s_lose + 0.9) / (a_len + 1.5)) * 1.5) / 5.0
 
             if prob_h_s >= 0.70:
-                h_fail_s = sorted(list(set([get_short_tier(fixture_base, r['Away'], team_tiers) for _, r in h_dom_s[h_dom_s['Shots_H'] <= h_dom_s['Shots_A']].iterrows()])))
-                a_win_s = sorted(list(set([get_short_tier(fixture_base, r['Home'], team_tiers) for _, r in a_wyj_s[a_wyj_s['Shots_A'] >= a_wyj_s['Shots_H']].iterrows()])))
-                h_fs_str = f"Mniej/równo strzałów w domu z: {','.join(h_fail_s)}" if h_fail_s else "Zawsze dominował strzelecko u siebie"
-                a_ws_str = f"Więcej/równo strzałów na wyjeździe z: {','.join(a_win_s)}" if a_win_s else "Zawsze przegrywał strzały na wyjeździe"
-                arg = f"Strzały 1X2 (S_1): Gosp wygrana dom {h_s_win}/{h_len} ({h_fs_str}), Gość porażka wyjazd {a_s_lose}/{a_len} ({a_ws_str})."
+                is_bayes_warning = (h_len < 10 or a_len < 10)
+                h_fails = h_dom_s[(h_dom_s['Shots_H'] - h_dom_s['Shots_A']) <= 0]
+                a_wins = a_wyj_s[(a_wyj_s['Shots_A'] - a_wyj_s['Shots_H']) >= 0]
+                h_fail_tiers = [get_short_tier(fixture_base, r['Away'], team_tiers) for _, r in h_fails.iterrows()]
+                a_win_tiers = [get_short_tier(fixture_base, r['Home'], team_tiers) for _, r in a_wins.iterrows()]
+                
+                h_fail_str = f" (porażki w strzałach z: {', '.join(set(h_fail_tiers))})" if h_fail_tiers else ""
+                a_win_str = f" (wygrywał z: {', '.join(set(a_win_tiers))})" if a_win_tiers else ""
+                
+                arg = f"S_1 (Gosp {get_short_tier(fixture_base, home, team_tiers)} vs Gość {get_short_tier(fixture_base, away, team_tiers)}) | Szansa: {round(prob_h_s*100)}% | Gosp wygrana w strzałach dom {h_s_win}/{h_len}{h_fail_str}. Gość porażka wyjazd {a_s_lose}/{a_len}{a_win_str}."
+                if is_bayes_warning: arg += " | ⚠️ Bayes"
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Shots Pro", "S_1", round(prob_h_s*100, 1), dyn_anchors.get("S_1", 1.34), arg, dyn_anchors, match_odds=(o1_raw, ox_raw, o2_raw), lam_ft=current_lam_ft, had_0_0=had_zero_zero)
 
             for s_line in [13.5, 14.5]:
-                p_a_u, ta_u, tal_u, _ = get_weighted_stats(a_wyj_s, 'Shots_A', lambda x, l=s_line: pd.notna(x) and x < l)
+                p_a_u, ta_u, tal_u, a_sm = get_weighted_stats(a_wyj_s, 'Shots_A', lambda x, l=s_line: pd.notna(x) and x < l)
                 h_conceded_s = h_dom_s['Shots_A'].mean() if len(h_dom_s) > 0 else 12.0
                 a_scored_s = a_wyj_s['Shots_A'].mean() if len(a_wyj_s) > 0 else 11.0
-                if p_a_u >= 0.88 and h_conceded_s < (s_line + 0.5):
+                if p_a_u >= 0.85 and h_conceded_s < (s_line + 0.5):
                     arg = f"A_S_U{s_line} | Gość oddaje śr. {a_scored_s:.1f} strzałów, Gospodarz dopuszcza śr. {h_conceded_s:.1f} strzałów."
+                    if a_sm: arg += " | ⚠️ Bayes"
                     add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Shots Pro", f"A_S_U{s_line}", round(p_a_u*100, 1), dyn_anchors.get(f"A_S_U{s_line}", 1.30), arg, dyn_anchors, match_odds=(o1_raw, ox_raw, o2_raw), lam_ft=current_lam_ft, had_0_0=had_zero_zero)
                     break
 
@@ -2136,19 +2175,26 @@ for idx, row in fixtures_clean.iterrows():
             prob_h_st = (((h_st_win + 0.9) / (h_len + 1.5)) * 3.5 + ((a_st_lose + 0.9) / (a_len + 1.5)) * 1.5) / 5.0
 
             if prob_h_st >= 0.70:
-                h_fail_st = sorted(list(set([get_short_tier(fixture_base, r['Away'], team_tiers) for _, r in h_dom_st[h_dom_st['ShotsTarget_H'] <= h_dom_st['ShotsTarget_A']].iterrows()])))
-                a_win_st = sorted(list(set([get_short_tier(fixture_base, r['Home'], team_tiers) for _, r in a_wyj_st[a_wyj_st['ShotsTarget_A'] >= a_wyj_st['ShotsTarget_H']].iterrows()])))
-                h_fst_str = f"Mniej/równo strz. celnych w domu z: {','.join(h_fail_st)}" if h_fail_st else "Zawsze dominował w celnych u siebie"
-                a_wst_str = f"Więcej/równo strz. celnych na wyjeździe z: {','.join(a_win_st)}" if a_win_st else "Zawsze przegrywał celne na wyjeździe"
-                arg = f"Strzały Celne 1X2 (ST_1): Gosp wygrana dom {h_st_win}/{h_len} ({h_fst_str}), Gość porażka wyjazd {a_st_lose}/{a_len} ({a_wst_str})."
+                is_bayes_warning = (h_len < 10 or a_len < 10)
+                h_fails = h_dom_st[(h_dom_st['ShotsTarget_H'] - h_dom_st['ShotsTarget_A']) <= 0]
+                a_wins = a_wyj_st[(a_wyj_st['ShotsTarget_A'] - a_wyj_st['ShotsTarget_H']) >= 0]
+                h_fail_tiers = [get_short_tier(fixture_base, r['Away'], team_tiers) for _, r in h_fails.iterrows()]
+                a_win_tiers = [get_short_tier(fixture_base, r['Home'], team_tiers) for _, r in a_wins.iterrows()]
+                
+                h_fst_str = f" (porażki z: {', '.join(set(h_fail_tiers))})" if h_fail_tiers else ""
+                a_wst_str = f" (wygrywał z: {', '.join(set(a_win_tiers))})" if a_win_tiers else ""
+                
+                arg = f"ST_1 (Gosp {get_short_tier(fixture_base, home, team_tiers)} vs Gość {get_short_tier(fixture_base, away, team_tiers)}) | Szansa: {round(prob_h_st*100)}% | Gosp wygrana w strzałach dom {h_st_win}/{h_len}{h_fst_str}. Gość porażka wyjazd {a_st_lose}/{a_len}{a_wst_str}."
+                if is_bayes_warning: arg += " | ⚠️ Bayes"
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Shots On Target Pro", "ST_1", round(prob_h_st*100, 1), dyn_anchors.get("ST_1", 1.64), arg, dyn_anchors, match_odds=(o1_raw, ox_raw, o2_raw), lam_ft=current_lam_ft, had_0_0=had_zero_zero)
 
             for st_line in [4.5, 5.5]:
-                p_a_st_u, ta_u, tal_u, _ = get_weighted_stats(a_wyj_st, 'ShotsTarget_A', lambda x, l=st_line: pd.notna(x) and x < l)
+                p_a_st_u, ta_u, tal_u, a_sm = get_weighted_stats(a_wyj_st, 'ShotsTarget_A', lambda x, l=st_line: pd.notna(x) and x < l)
                 h_conceded_st = h_dom_st['ShotsTarget_A'].mean() if len(h_dom_st) > 0 else 4.0
                 a_scored_st = a_wyj_st['ShotsTarget_A'].mean() if len(a_wyj_s) > 0 else 3.5
-                if p_a_st_u >= 0.88 and h_conceded_st < (st_line + 0.3):
+                if p_a_st_u >= 0.85 and h_conceded_st < (st_line + 0.3):
                     arg = f"A_ST_U{st_line} | Gość śr. {a_scored_st:.1f} SOT, Gospodarz pozwala rywalom na śr. {h_conceded_st:.1f} SOT."
+                    if a_sm: arg += " | ⚠️ Bayes"
                     add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Shots On Target Pro", f"A_ST_U{st_line}", round(p_a_st_u*100, 1), dyn_anchors.get(f"A_ST_U{st_line}", 1.30), arg, dyn_anchors, match_odds=(o1_raw, ox_raw, o2_raw), lam_ft=current_lam_ft, had_0_0=had_zero_zero)
                     break
 
@@ -2627,4 +2673,6 @@ print("\n" + "=" * 95)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
 print(f"Wygenerowano predykcji: {len(df_all_predictions)}.")
 print(f"Wyselekcjonowano Top Wyborów: {len(top_wybory_df)}.")
+print("1. Ostrzeżenie ⚠️ Bayes jest teraz konsekwentnie dodawane w każdym module, jeżeli baza dla którejś z drużyn wynosi < 10 meczów dom/wyjazd.")
+print("2. Ujednoliciłem warunek Bayesa i wprowadziłem go do argumentacji 1X Pro i Shots Pro.")
 print("=" * 95)
