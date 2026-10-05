@@ -134,7 +134,7 @@ try:
             mapowanie_fortuna_raw = slownik.get("BetExplorer_To_Fortuna", {})
         print(f"✅ Wczytano słownik drużyn: {len(mapowanie_fd)} FD, {len(mapowanie_ss)} SS, {len(mapowanie_sb_raw)} SB, {len(mapowanie_fortuna_raw)} Fortuna.")
 except Exception as err_slownik:
-    print(f"⚠️ Uwaga przy wczytywaniu slownik_druzyn.json: {err_slownik}")
+    print(f"⚠️️ Uwaga przy wczytywaniu slownik_druzyn.json: {err_slownik}")
 
 # Rejestr nierozpoznanych drużyn
 niezmapowane_raport = []
@@ -576,6 +576,11 @@ SZABLONY_PREMIUM = [
 def get_tier_num(tier_str):
     try: return int(str(tier_str).replace("Koszyk", "").replace("K", "").strip())
     except Exception: return 3
+
+def get_short_tier(league, team_name, team_tiers_dict):
+    """Zwraca skróconą nazwę koszyka, np. K1, K2 zamiast Koszyk 1."""
+    t = team_tiers_dict.get((league, team_name), 'Koszyk 3')
+    return str(t).replace('Koszyk ', 'K')
 
 def get_dynamic_anchors(h_tier_str, a_tier_str, odd_1_val):
     t_h, t_a = get_tier_num(h_tier_str), get_tier_num(a_tier_str)
@@ -1255,11 +1260,9 @@ def parsuj_pojedynczy_kurs(match_data, typ_kod, home, away):
                 continue
 
             if any(kw in r_norm.replace(" ", "") for kw in ["liczbagoli", "sumagoli", "liczbabramek", "meczliczbagoli"]):
-                # SPRAWDZENIE BEZPOŚREDNIEJ LINII (Naprawa błędnych kursów z Fortuny - 5.80 dla U1.5)
-                # Szukamy czy linia docelowa jest już w nazwie rynku, by uniknąć złych rynków np. 2.5 i opcji +1.5
-                nums_in_title = re.findall(r"\d+\.\d+", r_norm)
-                if nums_in_title and lv not in nums_in_title:
-                    continue # To jest inny rynek bramkowy (np. chcemy 1.5, a to jest rynek "liczba goli 2.5")
+                # Ograniczenie błędów dla Fortuny - szukamy dokładnej linii w tekście żeby nie chwycić innych zakładek
+                if lv not in str(r_name) and lv not in "".join(str(k) for k in r_opts.keys()):
+                    continue
 
                 for opt_k, opt_v in r_opts.items():
                     opt_norm = normalize_text(opt_k)
@@ -1363,7 +1366,7 @@ def parsuj_pojedynczy_kurs(match_data, typ_kod, home, away):
         for r_name, r_opts in rynki.items():
             r_norm = normalize_text(r_name)
             
-            # CZARNA LISTA DLA 1X2 - Rozszerzona (Odrzuca m m.in. zakłady bez remisu i statystyki)
+            # CZARNA LISTA DLA 1X2 - Rozszerzona (Odrzuca m.in. zakłady bez remisu i statystyki)
             if any(kw in r_norm for kw in ["połowa", "polowa", "pol", "poł", "handicap", "dokladny", "strzel", "rozn", "kartk", "faule", "fauli", "spalon", "celn", "bramki", "gol", "strzał", "strzal", "posiadanie", "zwrot", "bez remisu"]):
                 continue
                 
@@ -1820,14 +1823,13 @@ def add_pred(match_id, termin, date, time, league, home, away, engine, typ, szan
     elif prob_decimal >= 0.75: risk_tag = "VALUE (75-84%)"
     else: risk_tag = "RISK (70-74%)"
 
-    clean_arg = str(arg)
+    # Oczyszczenie z ewentualnych poprzednich tagów lokalnych
+    clean_arg = re.sub(r"^\[.*?\]\s*", "", str(arg))
+    arg_final = f"[{risk_tag}] {clean_arg}"
     
-    # SYSTEM PRZEŁAMANIA 0:0 W ARGUMENTACJI (Zgłoszenie 3)
+    # SYSTEM PRZEŁAMANIA 0:0 W ARGUMENTACJI (Zgłoszenie 1) - Priorytet absolutny
     if had_0_0 and typ_k in ["O0.5", "O1.5", "MG_1-5", "MG_1-6"]:
-        if "[🔴 PRZEŁAMANIE 0:0]" not in clean_arg:
-            clean_arg = "[🔴 PRZEŁAMANIE 0:0] " + clean_arg
-
-    arg_final = re.sub(r"^\[.*?\]\s*", f"[{risk_tag}] ", clean_arg) if clean_arg.startswith("[") else f"[{risk_tag}] {clean_arg}"
+        arg_final = f"[🔴 PRZEŁAMANIE 0:0] {arg_final}"
 
     all_generated_predictions.append({
         "Match_ID": match_id, "Termin": termin, "Data": date, "Godzina": time, "Liga": league,
@@ -1905,8 +1907,7 @@ for idx, row in fixtures_clean.iterrows():
     a_last3 = [f"{int(m['FTHG'])}:{int(m['FTAG'])}" for _, m in a_tot_all.head(3).iterrows()]
     last3_str = f"Ost. 3 mecze: Gosp ({', '.join(h_last3) if h_last3 else 'brak'}), Gość ({', '.join(a_last3) if a_last3 else 'brak'})"
     
-    # Detekcja wyniku 0:0 w ostatnim meczu (do powiadomień)
-    # Zabezpieczenie przed błędem ucięcia w offline, teraz szukamy po wszystkich dostępnych historycznych
+    # Detekcja wyniku 0:0 w ostatnim meczu
     last_h_score = f"{int(h_tot_all.iloc[0]['FTHG'])}:{int(h_tot_all.iloc[0]['FTAG'])}" if len(h_tot_all) > 0 else ""
     last_a_score = f"{int(a_tot_all.iloc[0]['FTHG'])}:{int(a_tot_all.iloc[0]['FTAG'])}" if len(a_tot_all) > 0 else ""
     had_zero_zero = (last_h_score == "0:0" or last_a_score == "0:0")
@@ -1959,11 +1960,19 @@ for idx, row in fixtures_clean.iterrows():
         except Exception:
             fair_odd = round(1 / final_prob, 2) if final_prob > 0 else 1.08
 
-        if final_prob >= 0.80 and fair_odd >= 1.05:
+        if final_prob >= 0.70 and fair_odd >= 1.05:
             if typ_kod == "1X":
-                arg = f"1X | Szansa: {round(final_prob*100)}% | Gosp ({h_tier_s}) dom 1X: {h_dom_1x_hits}/{h_dom_total} ({round(h_1x_pct*100)}%) | Gość ({a_tier_s}) wyjazd W: {a_wyj_win_hits}/{a_wyj_total}."
+                h_lost_tiers = sorted(list(set([get_short_tier(fixture_base, row['Away'], team_tiers) for _, row in h_dom[h_dom['FTHG'] < h_dom['FTAG']].iterrows()])))
+                a_won_tiers = sorted(list(set([get_short_tier(fixture_base, row['Home'], team_tiers) for _, row in a_wyj[a_wyj['FTAG'] > a_wyj['FTHG']].iterrows()])))
+                h_l_str = f"Porażki w domu z: {','.join(h_lost_tiers)}" if h_lost_tiers else "Brak domowych porażek"
+                a_w_str = f"Wygrywali na wyjeździe z: {','.join(a_won_tiers)}" if a_won_tiers else "Brak wyjazdowych zwycięstw"
+                arg = f"1X | Szansa: {round(final_prob*100)}% | Gosp ({h_tier_s}) dom 1X: {h_dom_1x_hits}/{h_dom_total} ({h_l_str}) | Gość ({a_tier_s}) wyjazd W: {a_wyj_win_hits}/{a_wyj_total} ({a_w_str})."
             else:
-                arg = f"X2 | Szansa: {round(final_prob*100)}% | Gość ({a_tier_s}) wyjazd X2: {a_wyj_x2_hits}/{a_wyj_total} ({round(a_x2_pct*100)}%) | Gosp ({h_tier_s}) dom W: {h_dom_win_hits}/{h_dom_total}."
+                h_won_tiers = sorted(list(set([get_short_tier(fixture_base, row['Away'], team_tiers) for _, row in h_dom[h_dom['FTHG'] > h_dom['FTAG']].iterrows()])))
+                a_lost_tiers = sorted(list(set([get_short_tier(fixture_base, row['Home'], team_tiers) for _, row in a_wyj[a_wyj['FTAG'] < a_wyj['FTHG']].iterrows()])))
+                h_w_str = f"Wygrywali w domu z: {','.join(h_won_tiers)}" if h_won_tiers else "Brak domowych zwycięstw"
+                a_l_str = f"Porażki na wyjeździe z: {','.join(a_lost_tiers)}" if a_lost_tiers else "Brak wyjazdowych porażek"
+                arg = f"X2 | Szansa: {round(final_prob*100)}% | Gość ({a_tier_s}) wyjazd X2: {a_wyj_x2_hits}/{a_wyj_total} ({a_l_str}) | Gosp ({h_tier_s}) dom W: {h_dom_win_hits}/{h_dom_total} ({h_w_str})."
             add_pred(match_id, d_termin, d_date, d_time, league, home, away, "1X Pro", typ_kod, round(final_prob*100, 1), fair_odd, arg, dyn_anchors, match_odds=(o1_raw, ox_raw, o2_raw), lam_ft=current_lam_ft, had_0_0=had_zero_zero)
 
     # 2. GOAL LINE PRO
@@ -2097,8 +2106,12 @@ for idx, row in fixtures_clean.iterrows():
             a_s_lose = sum((a_wyj_s['Shots_A'] - a_wyj_s['Shots_H']) < 0)
             prob_h_s = (((h_s_win + 0.9) / (h_len + 1.5)) * 3.5 + ((a_s_lose + 0.9) / (a_len + 1.5)) * 1.5) / 5.0
 
-            if prob_h_s >= 0.80:
-                arg = f"Strzały 1X2 (S_1): Gosp wygrana dom {h_s_win}/{h_len}, Gość porażka wyjazd {a_s_lose}/{a_len}."
+            if prob_h_s >= 0.70:
+                h_fail_s = sorted(list(set([get_short_tier(fixture_base, r['Away'], team_tiers) for _, r in h_dom_s[h_dom_s['Shots_H'] <= h_dom_s['Shots_A']].iterrows()])))
+                a_win_s = sorted(list(set([get_short_tier(fixture_base, r['Home'], team_tiers) for _, r in a_wyj_s[a_wyj_s['Shots_A'] >= a_wyj_s['Shots_H']].iterrows()])))
+                h_fs_str = f"Mniej/równo strzałów w domu z: {','.join(h_fail_s)}" if h_fail_s else "Zawsze dominował strzelecko u siebie"
+                a_ws_str = f"Więcej/równo strzałów na wyjeździe z: {','.join(a_win_s)}" if a_win_s else "Zawsze przegrywał strzały na wyjeździe"
+                arg = f"Strzały 1X2 (S_1): Gosp wygrana dom {h_s_win}/{h_len} ({h_fs_str}), Gość porażka wyjazd {a_s_lose}/{a_len} ({a_ws_str})."
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Shots Pro", "S_1", round(prob_h_s*100, 1), dyn_anchors.get("S_1", 1.34), arg, dyn_anchors, match_odds=(o1_raw, ox_raw, o2_raw), lam_ft=current_lam_ft, had_0_0=had_zero_zero)
 
             for s_line in [13.5, 14.5]:
@@ -2122,8 +2135,12 @@ for idx, row in fixtures_clean.iterrows():
             a_st_lose = sum((a_wyj_st['ShotsTarget_A'] - a_wyj_st['ShotsTarget_H']) < 0)
             prob_h_st = (((h_st_win + 0.9) / (h_len + 1.5)) * 3.5 + ((a_st_lose + 0.9) / (a_len + 1.5)) * 1.5) / 5.0
 
-            if prob_h_st >= 0.80:
-                arg = f"Strzały Celne 1X2 (ST_1): Gosp wygrana dom {h_st_win}/{h_len}, Gość porażka wyjazd {a_st_lose}/{a_len}."
+            if prob_h_st >= 0.70:
+                h_fail_st = sorted(list(set([get_short_tier(fixture_base, r['Away'], team_tiers) for _, r in h_dom_st[h_dom_st['ShotsTarget_H'] <= h_dom_st['ShotsTarget_A']].iterrows()])))
+                a_win_st = sorted(list(set([get_short_tier(fixture_base, r['Home'], team_tiers) for _, r in a_wyj_st[a_wyj_st['ShotsTarget_A'] >= a_wyj_st['ShotsTarget_H']].iterrows()])))
+                h_fst_str = f"Mniej/równo strz. celnych w domu z: {','.join(h_fail_st)}" if h_fail_st else "Zawsze dominował w celnych u siebie"
+                a_wst_str = f"Więcej/równo strz. celnych na wyjeździe z: {','.join(a_win_st)}" if a_win_st else "Zawsze przegrywał celne na wyjeździe"
+                arg = f"Strzały Celne 1X2 (ST_1): Gosp wygrana dom {h_st_win}/{h_len} ({h_fst_str}), Gość porażka wyjazd {a_st_lose}/{a_len} ({a_wst_str})."
                 add_pred(match_id, d_termin, d_date, d_time, league, home, away, "Shots On Target Pro", "ST_1", round(prob_h_st*100, 1), dyn_anchors.get("ST_1", 1.64), arg, dyn_anchors, match_odds=(o1_raw, ox_raw, o2_raw), lam_ft=current_lam_ft, had_0_0=had_zero_zero)
 
             for st_line in [4.5, 5.5]:
@@ -2610,7 +2627,4 @@ print("\n" + "=" * 95)
 print("PROCES ZAKOŃCZONY PEŁNYM SUKCESEM!")
 print(f"Wygenerowano predykcji: {len(df_all_predictions)}.")
 print(f"Wyselekcjonowano Top Wyborów: {len(top_wybory_df)}.")
-print("1. [🔴 PRZEŁAMANIE 0:0] pojawia się teraz przed wszystkim na głównym wykazie w Argumentacji.")
-print("2. Prawidłowy odczyt U/O. Ograniczyłem błędne rozbieżności 20% przez dokładniejsze filtrowanie zagnieżdżonych linii w JSON Fortuny.")
-print("3. Usunięto całkowicie w 1X2 zakłady 'zakład bez remisu' i 'zwrot', by skupić się na czystym rynku z 3 opcjami.")
 print("=" * 95)
